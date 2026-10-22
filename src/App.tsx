@@ -52,6 +52,7 @@ export default function App() {
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [authSession, setAuthSession] = useState<string | null>(null);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
+  const [authProvider, setAuthProvider] = useState<string | null>(null);
   const [logsOpen, setLogsOpen] = useState(true);
   const toastSeq = useRef(0);
 
@@ -172,10 +173,11 @@ export default function App() {
     }
   };
 
-  const startQoderAuth = async () => {
+  const startDeviceAuth = async (providerId: string) => {
     try {
-      const challenge = await api.beginQoderAuth();
+      const challenge = await api.beginDeviceAuth(providerId);
       setAuthSession(challenge.sessionId);
+      setAuthProvider(providerId);
       setAuthUrl(challenge.authUrl);
       await api.openExternal(challenge.authUrl);
       pushToast("warn", "请在浏览器里确认授权");
@@ -189,7 +191,7 @@ export default function App() {
     if (!authSession) return;
     const timer = setInterval(async () => {
       try {
-        const account = await api.pollQoderAuth(authSession);
+        const account = await api.pollDeviceAuth(authProvider ?? "qoder", authSession);
         if (account) {
           setAuthSession(null);
           pushToast("ok", `已添加账号：${account.label}`);
@@ -212,6 +214,7 @@ export default function App() {
         if (!cancelled && pending.length > 0) {
           setAuthSession(pending[0].sessionId);
           setAuthUrl(pending[0].authUrl);
+          setAuthProvider("qoder");
         }
       } catch {
         /* 忽略 */
@@ -322,7 +325,7 @@ export default function App() {
                 用要登录的账号点「确认授权」。
               </span>
             </div>
-            <button className="btn small" onClick={() => setAuthSession(null)}>
+            <button className="btn small" onClick={() => { setAuthSession(null); setAuthProvider(null); }}>
               取消
             </button>
           </div>
@@ -362,8 +365,8 @@ export default function App() {
             onSetActive={setActive}
             onLaunch={launch}
             onRemove={removeAccount}
-            onDiscover={() => discover(current.provider.id)}
-            onAddAccount={startQoderAuth}
+            onDiscover={(id) => discover(id)}
+            onAddAccount={(id: string) => { void startDeviceAuth(id); }}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
           />
         ) : (

@@ -23,10 +23,11 @@ export const api = {
   discoverAccounts: () => invoke<DiscoveredAccount[]>("discover_accounts"),
   addDiscoveredAccount: (providerId: string) =>
     invoke<Account[]>("add_discovered_account", { providerId }),
-  beginQoderAuth: () => invoke<AuthChallenge>("begin_qoder_auth"),
+  beginDeviceAuth: (providerId: string) =>
+    invoke<AuthChallenge>("begin_device_auth", { providerId }),
   pendingAuth: () => invoke<AuthChallenge[]>("pending_auth"),
-  pollQoderAuth: (sessionId: string) =>
-    invoke<Account | null>("poll_qoder_auth", { sessionId }),
+  pollDeviceAuth: (providerId: string, sessionId: string) =>
+    invoke<Account | null>("poll_device_auth", { providerId, sessionId }),
   removeAccount: (providerId: string, accountId: string) =>
     invoke<Account[]>("remove_account", { providerId, accountId }),
   getConfig: () => invoke<AppConfig>("get_config"),

@@ -67,6 +67,53 @@ pub fn run() {
             Err(e) => println!("    发现失败：{e}"),
         }
 
+        // ---- 3b. 妙手（美团 CatPaw）----
+        println!("\n[3b] 妙手 CatPaw");
+        {
+            let provider = crate::providers::miaoshou::MiaoshouProvider::new();
+            match provider.discover().await {
+                Ok(found) => {
+                    println!("    发现本机账号 {} 个", found.len());
+                    for (account, cred) in &found {
+                        println!("      - {}（{}）", account.label, account.id);
+                        match provider.status(account, cred).await {
+                            Ok(st) => println!("        状态={:?} {}", st.state, st.message),
+                            Err(e) => println!("        状态读取失败：{e}"),
+                        }
+                        match provider.quota(account, cred).await {
+                            Ok(q) => println!("        积分: 剩余={:.0} | {}", q.total_remaining, q.message),
+                            Err(e) => println!("        积分读取失败：{e}"),
+                        }
+                    }
+                }
+                Err(e) => println!("    发现失败：{e}"),
+            }
+        }
+
+        // ---- 3c. 千问办公 ----
+        println!("\n[3c] 千问办公 QwenWorkCN");
+        {
+            let provider = crate::providers::qwenwork::QwenWorkProvider::new();
+            let store = crate::core::store::AccountStore::load().unwrap_or_default();
+            if let Some(account) = store.list_of("qwenwork").first().cloned() {
+                match store.credential("qwenwork", &account.id) {
+                    Ok(cred) => {
+                        match provider.status(&account, &cred).await {
+                            Ok(st) => println!("     状态={:?} {}", st.state, st.message),
+                            Err(e) => println!("     状态读取失败：{e}"),
+                        }
+                        match provider.quota(&account, &cred).await {
+                            Ok(q) => println!("     积分: 剩余={:.0} 已用={:.0} 发放={:.0}", q.total_remaining, q.total_consumed, q.total_granted),
+                            Err(e) => println!("     积分读取失败：{e}"),
+                        }
+                    }
+                    Err(e) => println!("     取凭据失败：{e}"),
+                }
+            } else {
+                println!("     账号池里没有千问办公账号（点界面「添加账号」走一次设备授权）");
+            }
+        }
+
         // ---- 4. Qoder 本机环境 ----
         println!("\n[4] Qoder CN 本机环境");
         let umid = crate::providers::qoder::umid_identity();
@@ -80,7 +127,7 @@ pub fn run() {
         }
         println!("    machine_id = {}", crate::providers::qoder::local_machine_id());
         let qoder = QoderProvider::new();
-        let session = qoder.begin_authorization();
+        let session = qoder.begin_authorization("qoder");
         match session {
             Ok(s) => println!(
                 "    设备授权地址已生成 ✓（长度 {}，含 challenge/machine_id/nonce）",

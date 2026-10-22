@@ -43,6 +43,8 @@ const SASH_USER_AGENT: &str = "Qoder";
 #[serde(rename_all = "camelCase")]
 pub struct AuthSession {
     pub id: String,
+    /// 发起授权的 provider（qoder / qwenwork 共用同一套设备授权 URL）
+    pub provider: String,
     /// 让用户在浏览器里打开的授权地址
     pub auth_url: String,
     pub verifier: String,
@@ -66,7 +68,7 @@ impl QoderProvider {
     }
 
     /// 构造一次设备授权会话。
-    pub fn begin_authorization(&self) -> Result<AuthSession> {
+    pub fn begin_authorization(&self, provider: &str) -> Result<AuthSession> {
         let machine_id = local_machine_id();
         let verifier = b64url(&random_bytes(32)?);
         let challenge = b64url(&Sha256::digest(verifier.as_bytes()));
@@ -81,6 +83,7 @@ impl QoderProvider {
 
         Ok(AuthSession {
             id: uuid::Uuid::new_v4().to_string(),
+            provider: provider.to_string(),
             auth_url,
             verifier,
             nonce,

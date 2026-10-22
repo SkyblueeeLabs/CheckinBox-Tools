@@ -12,12 +12,13 @@ interface Props {
   onSetActive: (providerId: string, accountId: string) => void;
   onLaunch: (providerId: string, accountId: string) => void;
   onRemove: (providerId: string, accountId: string, label: string) => void;
-  onDiscover: () => void;
-  onAddAccount: () => void;
+  onDiscover: (providerId: string) => void;
   onScheduleChange: (
     providerId: string,
     patch: { enabled?: boolean; startMinute?: number; endMinute?: number }
   ) => void;
+  /** 发起设备授权（qoder / qwenwork 共用同一套 URL，只是账号不同） */
+  onAddAccount: (providerId: string) => void;
 }
 
 /**
@@ -64,15 +65,23 @@ export default function AgentGroupPanel({
             </button>
           )}
           {provider.supportsDiscovery && (
-            <button className="btn small" onClick={onDiscover} disabled={busy}>
+            <button
+              className="btn small"
+              onClick={() => onDiscover(provider.id)}
+              disabled={busy}
+            >
               从本机导入
             </button>
           )}
-          {provider.id === "qoder" && (
-            <button className="btn small" onClick={onAddAccount} disabled={busy || authPending}>
+          {provider.id === "qoder" || provider.id === "qwenwork" ? (
+            <button
+              className="btn small"
+              onClick={() => onAddAccount(provider.id)}
+              disabled={busy || authPending}
+            >
               {authPending ? "等待授权…" : "添加账号"}
             </button>
-          )}
+          ) : null}
         </div>
       </header>
 

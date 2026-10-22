@@ -30,6 +30,8 @@ impl AppState {
         let list: Vec<Arc<dyn Provider>> = vec![
             Arc::new(crate::providers::minimax::MiniMaxProvider::new()),
             qoder.clone(),
+            Arc::new(crate::providers::qwenwork::QwenWorkProvider::new()),
+            Arc::new(crate::providers::miaoshou::MiaoshouProvider::new()),
         ];
         Self {
             store: Mutex::new(AccountStore::load().unwrap_or_default()),
@@ -191,9 +193,11 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             Some(p) => p,
             None => continue,
         };
-        let cred = store
-            .credential(&account.provider, &account.id)
-            .map_err(|e| e.to_string())?;
+        let cred = match store.credential(&account.provider, &account.id) {
+            Ok(c) => c,
+            // 单个账号凭据损坏不应让整个界面空白：跳过它，其余照常展示
+            Err(_) => continue,
+        };
 
         let (status, error) = match provider.status(&account, &cred).await {
             Ok(s) => {
@@ -451,15 +455,22 @@ pub async fn add_discovered_account(
     Ok(store.list())
 }
 
-/// 发起 Qoder 设备授权：返回一个需要在浏览器里确认的地址。
+/// 发起设备授权：返回一个需要在浏览器里确认的地址。
+///
+/// Qoder CN 与千问办公共用同一套设备授权 URL，只是各自账号不同，
+/// 所以这里按 provider 分发到同一个流程。
 #[tauri::command]
-pub async fn begin_qoder_auth(state: State<'_, AppState>) -> Result<AuthChallenge, String> {
-    let Some(provider) = state.provider("qoder") else {
-        return Err("未注册 Qoder 适配器".into());
-    };
-    let _ = provider;
+pub async fn begin_device_auth(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<AuthChallenge, String> {
+    if provider_id != "qoder" && provider_id != "qwenwork" {
+        return Err(format!("{provider_id} 不支持设备授权"));
+    }
     let qoder = state.qoder.clone();
-    let session = qoder.begin_authorization().map_err(|e| e.to_string())?;
+    let session = qoder
+        .begin_authorization(&provider_id)
+        .map_err(|e| e.to_string())?;
     let challenge = AuthChallenge {
         session_id: session.id.clone(),
         auth_url: session.auth_url.clone(),
@@ -485,10 +496,11 @@ pub async fn pending_auth(state: State<'_, AppState>) -> Result<Vec<AuthChalleng
         .collect())
 }
 
-/// 轮询 Qoder 设备授权结果；`None` 表示用户还没确认。
+/// 轮询设备授权结果；`None` 表示用户还没确认。
 #[tauri::command]
-pub async fn poll_qoder_auth(
+pub async fn poll_device_auth(
     state: State<'_, AppState>,
+    provider_id: String,
     session_id: String,
 ) -> Result<Option<Account>, String> {
     let session = {
@@ -498,14 +510,12 @@ pub async fn poll_qoder_auth(
     let Some(session) = session else {
         return Err("授权会话已过期，请重新发起".into());
     };
-    let Some(provider) = state.provider("qoder") else {
-        return Err("未注册 Qoder 适配器".into());
-    };
-    let _ = provider;
     let qoder = state.qoder.clone();
 
     match qoder.poll_authorization(&session).await {
-        Ok(Some((account, cred))) => {
+        Ok(Some((mut account, cred))) => {
+            // 账号归属以发起时的 provider 为准（同一台机器可能同时授权多个平台）
+            account.provider = provider_id;
             let mut store = state.store.lock().unwrap();
             store.upsert(account.clone(), &cred).map_err(|e| e.to_string())?;
             {
@@ -776,6 +786,11 @@ pub async fn scheduler_loop(app: AppHandle) {
             }
         }
 
+        let keys: Vec<String> = accounts
+            .iter()
+            .map(|a| AccountStore::key(&a.provider, &a.id))
+            .collect();
+
         // 跨天重排计划（各 agent 用自己的时间窗）
         {
             let mut sched = state.scheduler.lock().unwrap();
@@ -787,22 +802,8 @@ pub async fn scheduler_loop(app: AppHandle) {
                     .collect();
                 sched.roll_over(&today, &provider_keys, *start, *end);
             }
-            // 清掉已不属于任何 agent 的残留计划
-            let live: std::collections::HashSet<&String> = window_by_provider.keys().collect();
-            let stale: Vec<String> = sched
-                .accounts
-                .keys()
-                .filter(|k| {
-                    k.split(':')
-                        .next()
-                        .map(|p| !live.contains(&p.to_string()))
-                        .unwrap_or(true)
-                })
-                .cloned()
-                .collect();
-            for key in stale {
-                sched.accounts.remove(&key);
-            }
+            // 统一清理：只保留仍然存在的账号
+            sched.prune(&keys);
             let _ = sched.save();
         }
 

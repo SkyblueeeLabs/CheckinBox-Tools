@@ -51,6 +51,32 @@ fn candidates(provider: &str) -> Vec<PathBuf> {
                     .join("Qoder CN Launcher.exe"),
             );
         }
+        "qwenwork" => {
+            // 千问办公带版本目录，取版本号最大的那个
+            let root = PathBuf::from(r"D:\Program Files\QwenWorkCN");
+            let mut found: Vec<(u64, u64, u64, PathBuf)> = Vec::new();
+            if let Ok(entries) = std::fs::read_dir(&root) {
+                for entry in entries.flatten() {
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if !name.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false) {
+                        continue;
+                    }
+                    let mut parts = name.split('-').next().unwrap_or("").split('.');
+                    let a = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                    let b = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                    let c = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+                    found.push((a, b, c, entry.path()));
+                }
+            }
+            if let Some((_, _, _, dir)) = found.into_iter().max() {
+                out.push(dir.join("QwenWorkCN.exe"));
+            }
+            out.push(root.join("Launcher.exe"));
+        }
+        "miaoshou" => {
+            out.push(PathBuf::from(r"D:\meituan\妙手\妙手.exe"));
+            out.push(PathBuf::from(r"C:\Program Files\妙手\妙手.exe"));
+        }
         _ => {}
     }
     out
@@ -69,6 +95,8 @@ pub fn data_dir(provider: &str) -> Option<PathBuf> {
     let dir = match provider {
         "minimax" => home.join(".minimax"),
         "qoder" => home.join(".qoder-cn"),
+        "qwenwork" => home.join(".qwenworkcn"),
+        "miaoshou" => home.join(".meituan-catpaw"),
         _ => return None,
     };
     if dir.is_dir() {
@@ -103,8 +131,29 @@ pub fn account_stats(provider: &str) -> Option<(usize, usize)> {
             let sessions = home.join(".qoder-cn").join("logs").join("sessions");
             Some((count_dirs(&projects), count_dirs(&sessions)))
         }
+        "qwenwork" => {
+            let projects = home.join(".qwenworkcn").join("projects");
+            let sessions = home.join(".qwenworkcn").join("logs").join("sessions");
+            Some((count_dirs(&projects), count_dirs(&sessions)))
+        }
+        // 妙手的工作区在用户 id 目录下，结构因版本而异，只数一层
+        "miaoshou" => {
+            let root = home.join(".meituan-catpaw");
+            Some((count_dirs(&root), count_files(&root, "auth.json")))
+        }
         _ => None,
     }
+}
+
+fn count_files(dir: &std::path::Path, name: &str) -> usize {
+    std::fs::read_dir(dir)
+        .map(|entries| {
+            entries
+                .flatten()
+                .filter(|e| e.path().file_name().and_then(|n| n.to_str()) == Some(name))
+                .count()
+        })
+        .unwrap_or(0)
 }
 
 fn count_dirs(dir: &std::path::Path) -> usize {

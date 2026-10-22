@@ -106,57 +106,76 @@ impl MiniMaxProvider {
     /// MiniMax 的 token 约 1 小时过期，客户端续期有几分钟空窗；
     /// 空窗内请求会失败，等 2 秒重读本机登录态再试一次就能恢复。
     async fn get_json(&self, url: &str, cred: &Value) -> Result<Value> {
-        let mut last_err: Option<anyhow::Error> = None;
-        for attempt in 0..2 {
-            let token = current_token(cred)?;
-            match self
-                .http
-                .get(url)
-                .bearer_auth(&token)
-                .header("accept", "application/json")
-                .header("accept-language", "zh-CN,zh;q=0.9")
-                .send()
-                .await
-            {
-                Ok(resp) if resp.status().is_success() => {
-                    return resp.json().await.map_err(|e| anyhow!("解析响应失败：{e}"));
-                }
-                Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status().as_u16())),
-                Err(e) => last_err = Some(anyhow!("{e}")),
-            }
-            if attempt == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-            }
-        }
-        Err(last_err.unwrap_or_else(|| anyhow!("请求失败")))
+        self.request_with_retry(url, cred, false).await
     }
 
-    /// 带一次重试的 POST（领取用）。
+    /// 带重试的 POST（领取用）。
     async fn post_json(&self, url: &str, cred: &Value) -> Result<Value> {
-        let mut last_err: Option<anyhow::Error> = None;
-        for attempt in 0..2 {
+        self.request_with_retry(url, cred, true).await
+    }
+
+    /// 统一的请求 + 重试。
+    ///
+    /// MiniMax 的 token 约 1 小时过期，客户端会在到期前后续期，中间有几十秒空窗。
+    /// 空窗内请求会拿到 401，所以 **401/403 时多重试几次**（间隔递增），
+    /// 其他错误只重试一次。
+    async fn request_with_retry(&self, url: &str, cred: &Value, is_post: bool) -> Result<Value> {
+        // 鉴权类错误的退避：2s / 5s / 10s；其他错误只试两次
+        let backoff = [2000u64, 5000, 10000];
+        let mut last_err = anyhow!("请求失败");
+        let mut attempt = 0usize;
+
+        loop {
             let token = current_token(cred)?;
-            match self
-                .http
-                .post(url)
-                .bearer_auth(&token)
-                .header("accept", "application/json")
-                .header("content-type", "application/json")
-                .json(&json!({}))
-                .send()
-                .await
-            {
+            let result = if is_post {
+                self.http
+                    .post(url)
+                    .bearer_auth(&token)
+                    .header("accept", "application/json")
+                    .header("content-type", "application/json")
+                    .json(&json!({}))
+                    .send()
+                    .await
+            } else {
+                self.http
+                    .get(url)
+                    .bearer_auth(&token)
+                    .header("accept", "application/json")
+                    .header("accept-language", "zh-CN,zh;q=0.9")
+                    .send()
+                    .await
+            };
+
+            match result {
                 Ok(resp) if resp.status().is_success() => {
                     return resp.json().await.map_err(|e| anyhow!("解析响应失败：{e}"));
                 }
-                Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status().as_u16())),
-                Err(e) => last_err = Some(anyhow!("{e}")),
+                Ok(resp) => {
+                    let code = resp.status().as_u16();
+                    last_err = anyhow!("HTTP {code}");
+                    // 鉴权失败才继续重试；其它错误重试一次就够
+                    let auth_error = code == 401 || code == 403;
+                    if !auth_error && attempt >= 1 {
+                        break;
+                    }
+                    if auth_error && attempt >= backoff.len() {
+                        break;
+                    }
+                }
+                Err(e) => {
+                    last_err = anyhow!("{e}");
+                    if attempt >= 1 {
+                        break;
+                    }
+                }
             }
-            if attempt == 0 {
-                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
-            }
+
+            let delay = backoff.get(attempt).copied().unwrap_or(10000);
+            attempt += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
-        Err(last_err.unwrap_or_else(|| anyhow!("请求失败")))
+
+        Err(last_err)
     }
 }
 

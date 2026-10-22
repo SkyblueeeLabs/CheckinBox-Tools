@@ -73,7 +73,11 @@ impl SchedulerState {
         atomic_write(&path, text.as_bytes())
     }
 
-    /// 跨天重排：给不在计划里的账号补上当天偏移，保留「已签」标记以便 UI 展示。
+    /// 跨天重排：给传入的账号补上当天偏移，保留「已签」标记以便 UI 展示。
+    ///
+    /// **注意**：本方法**不做**清理。调用方可能按 agent 分批调用（每个 agent
+    /// 有自己的时间窗），如果在这里清掉不在 `keys` 里的条目，后一批就会把
+    /// 前一批的计划删掉。清理统一由 `prune` 做。
     pub fn roll_over(&mut self, date: &str, keys: &[String], start: u32, end: u32) {
         if self.date != date {
             self.date = date.to_string();
@@ -85,11 +89,14 @@ impl SchedulerState {
                 entry.scheduled_minute = pick_minute(key, date, start, end);
             }
         }
-        // 清理已删除账号的残留计划
+    }
+
+    /// 清掉不在 `live_keys` 里的残留计划（账号被移除时）。
+    pub fn prune(&mut self, live_keys: &[String]) {
         let stale: Vec<String> = self
             .accounts
             .keys()
-            .filter(|k| !keys.contains(k))
+            .filter(|k| !live_keys.contains(k))
             .cloned()
             .collect();
         for key in stale {
