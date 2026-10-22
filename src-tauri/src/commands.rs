@@ -8,7 +8,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::config::AppConfig;
 use crate::core::logging::{self, LogEntry};
-use crate::core::provider::{Account, CheckinStatus, ClaimState, Provider};
+use crate::core::provider::{Account, CheckinStatus, ClaimState, Provider, Quota};
 use crate::core::scheduler::{self, SchedulerState};
 use crate::core::store::AccountStore;
 use crate::providers::qoder::AuthSession;
@@ -70,6 +70,8 @@ pub struct AccountView {
     pub provider_name: String,
     pub accent: String,
     pub status: Option<CheckinStatus>,
+    pub quota: Option<Quota>,
+    pub quota_error: Option<String>,
     pub error: Option<String>,
     pub today_log: Option<LogEntry>,
 }
@@ -144,17 +146,24 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             Some(p) => p,
             None => continue,
         };
-        let (status, error) = match store.credential(&account.provider, &account.id) {
-            Ok(cred) => match provider.status(&account, &cred).await {
-                Ok(s) => {
-                    if s.state == ClaimState::Claimed {
-                        claimed_count += 1;
-                    }
-                    today_points += if s.state == ClaimState::Claimed { s.points } else { 0 };
-                    (Some(s), None)
+        let cred = store
+            .credential(&account.provider, &account.id)
+            .map_err(|e| e.to_string())?;
+
+        let (status, error) = match provider.status(&account, &cred).await {
+            Ok(s) => {
+                if s.state == ClaimState::Claimed {
+                    claimed_count += 1;
                 }
-                Err(e) => (None, Some(e.to_string())),
-            },
+                today_points += if s.state == ClaimState::Claimed { s.points } else { 0 };
+                (Some(s), None)
+            }
+            Err(e) => (None, Some(e.to_string())),
+        };
+
+        // 积分与签到是两个独立请求：积分失败不影响签到状态展示
+        let (quota, quota_error) = match provider.quota(&account, &cred).await {
+            Ok(q) => (Some(q), None),
             Err(e) => (None, Some(e.to_string())),
         };
 
@@ -168,6 +177,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             accent: provider.accent().to_string(),
             account,
             status,
+            quota,
+            quota_error,
             error,
             today_log,
         });
@@ -273,6 +284,47 @@ pub async fn checkin_all_inner(app: AppHandle, state: &AppState) -> Vec<AccountR
         out.push(run_checkin(&app, provider.as_ref(), &account, &cred).await);
     }
     out
+}
+
+/// 刷新单个账号的积分（不碰签到状态）。
+#[tauri::command]
+pub async fn refresh_quota(
+    state: State<'_, AppState>,
+    provider_id: String,
+    account_id: String,
+) -> Result<Quota, String> {
+    let provider = state
+        .provider(&provider_id)
+        .ok_or_else(|| format!("未知平台：{provider_id}"))?;
+    let store = state.store.lock().unwrap().clone();
+    let cred = store
+        .credential(&provider_id, &account_id)
+        .map_err(|e| e.to_string())?;
+    let account = store
+        .list_of(&provider_id)
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| format!("账号不存在：{account_id}"))?;
+    provider.quota(&account, &cred).await.map_err(|e| e.to_string())
+}
+
+/// 刷新全部账号的积分。
+#[tauri::command]
+pub async fn refresh_all_quotas(state: State<'_, AppState>) -> Result<Vec<(String, String, Quota)>, String> {
+    let store = state.store.lock().unwrap().clone();
+    let mut out = Vec::new();
+    for account in store.list() {
+        let Some(provider) = state.provider(&account.provider) else {
+            continue;
+        };
+        let Ok(cred) = store.credential(&account.provider, &account.id) else {
+            continue;
+        };
+        if let Ok(q) = provider.quota(&account, &cred).await {
+            out.push((account.provider.clone(), account.id.clone(), q));
+        }
+    }
+    Ok(out)
 }
 
 /// 从本机客户端自动发现已登录账号（不写盘）。

@@ -16,7 +16,9 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::path::PathBuf;
 
-use crate::core::provider::{Account, CheckinStatus, ClaimOutcome, ClaimState, Provider};
+use crate::core::provider::{
+    Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+};
 use crate::core::tz;
 
 const BASE: &str = "https://agent.minimax.cn";
@@ -96,6 +98,34 @@ fn local_label() -> String {
                 .map(|s| s.to_string())
         })
         .unwrap_or_else(|| "本机账号".to_string())
+}
+
+/// 取当前可用的 access token。
+///
+/// MiniMax 的 token 生命周期很短（实测约 1 小时），而本机客户端会自动续期
+/// 并把新 token 写回 `auth.json`。所以每次请求前都去读一遍本机登录态，
+/// 读不到再回退到账号池里存的 token。
+fn current_token(cred: &Value) -> Result<String> {
+    if let Some(path) = cred.get("auth_file").and_then(|v| v.as_str()) {
+        if let Ok(raw) = std::fs::read_to_string(path) {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&raw) {
+                if let Some(records) = parsed["records"].as_object() {
+                    for rec in records.values() {
+                        if let Some(t) = rec["accessToken"].as_str() {
+                            if !t.is_empty() {
+                                return Ok(t.to_string());
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    cred["access_token"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .ok_or_else(|| anyhow!("缺少 access token"))
 }
 
 /// 从记录键里取出稳定的账号 id。
@@ -221,10 +251,7 @@ impl Provider for MiniMaxProvider {
     }
 
     async fn status(&self, _account: &Account, cred: &Value) -> Result<CheckinStatus> {
-        let token = cred["access_token"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("缺少 access token"))?;
+        let token = &current_token(cred)?;
 
         let tz = urlenc(&tz::iana_timezone());
         let url = format!("{BASE}{STATUS_PATH}?timezone_id={tz}");
@@ -279,10 +306,7 @@ impl Provider for MiniMaxProvider {
     }
 
     async fn claim(&self, _account: &Account, cred: &Value) -> Result<ClaimOutcome> {
-        let token = cred["access_token"]
-            .as_str()
-            .filter(|s| !s.is_empty())
-            .ok_or_else(|| anyhow!("缺少 access token"))?;
+        let token = &current_token(cred)?;
 
         let tz = urlenc(&tz::iana_timezone());
         let url = format!("{BASE}{CLAIM_PATH}?timezone_id={tz}");
@@ -312,5 +336,77 @@ impl Provider for MiniMaxProvider {
                 data["claim_id"].as_str().unwrap_or("上游未返回领取结果"),
             )),
         }
+    }
+
+    async fn quota(&self, _account: &Account, cred: &Value) -> Result<Quota> {
+        let token = &current_token(cred)?;
+
+        let tz = urlenc(&tz::iana_timezone());
+        let url = format!("{BASE}/minimax-cloud/api/v1/credit/details?timezone_id={tz}");
+
+        let body: Value = self
+            .http
+            .get(url)
+            .bearer_auth(token)
+            .header("accept", "application/json")
+            .header("accept-language", "zh-CN,zh;q=0.9")
+            .send()
+            .await?
+            .json()
+            .await?;
+
+        check_base_resp(&body)?;
+
+        // credit_type: 1 = 购买, 2 = 签到赠送
+        let type_name = |t: i64| -> &'static str {
+            match t {
+                1 => "purchased",
+                _ => "free",
+            }
+        };
+        let amount = |v: &Value| -> f64 {
+            let n = v
+                .as_str()
+                .and_then(|s| s.replace(',', "").trim().parse::<f64>().ok())
+                .or_else(|| v.as_f64())
+                .unwrap_or(0.0);
+            // 上游会返回 "-0.00" 这种形式，归一成 0 避免界面显示 -0
+            if n == 0.0 { 0.0 } else { n }
+        };
+
+        let empty = Vec::new();
+        let details = body["details"].as_array().unwrap_or(&empty);
+
+        let mut items = Vec::new();
+        for d in details {
+            items.push(CreditItem {
+                credit_type: type_name(d["credit_type"].as_i64().unwrap_or(0)).to_string(),
+                granted: amount(&d["granted_amount"]),
+                consumed: amount(&d["consumed_amount"]),
+                remaining: amount(&d["remaining_amount"]),
+                granted_at_ms: d["granted_at_ms"].as_i64().unwrap_or(0),
+                expire_at_ms: d["expire_at_ms"].as_i64().unwrap_or(0),
+            });
+        }
+
+        let total_granted: f64 = items.iter().map(|i| i.granted).sum();
+        let total_consumed: f64 = items.iter().map(|i| i.consumed).sum();
+        let total_remaining: f64 = items.iter().map(|i| i.remaining).sum();
+
+        let soonest = items.iter().map(|i| i.expire_at_ms).min().unwrap_or(0);
+        let message = if soonest > 0 && total_remaining > 0.0 {
+            let days = ((soonest - chrono::Utc::now().timestamp_millis()) / 86_400_000).max(0);
+            format!("剩余 {total_remaining:.0} 积分，最近一批 {days} 天后到期")
+        } else {
+            "当前无剩余积分".to_string()
+        };
+
+        Ok(Quota {
+            total_granted,
+            total_consumed,
+            total_remaining,
+            items,
+            message,
+        })
     }
 }

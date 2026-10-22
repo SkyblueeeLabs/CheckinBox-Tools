@@ -26,7 +26,9 @@ use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
-use crate::core::provider::{Account, CheckinStatus, ClaimOutcome, ClaimState, Provider};
+use crate::core::provider::{
+    Account, CheckinStatus, ClaimOutcome, ClaimState, Provider, Quota,
+};
 
 const WEB_BASE: &str = "https://qoder.com.cn";
 const OPENAPI_BASE: &str = "https://openapi.qoder.com.cn";
@@ -454,6 +456,91 @@ impl Provider for QoderProvider {
             message.push_str(&format!("，{days} 天有效"));
         }
         Ok(ClaimOutcome::claimed(amount, message))
+    }
+
+    async fn quota(&self, _account: &Account, cred: &Value) -> Result<Quota> {
+        // 客户端自己用的就是 /sash/api/v2/me/usage（见其 main.log）。
+        // 响应结构未在文档中公布，这里做防御式解析：能认出多少算多少，
+        // 认不出就如实说明，不猜数。
+        let url = format!("{OPENAPI_BASE}/sash/api/v2/me/usage");
+        let resp = self
+            .http
+            .get(url)
+            .headers(self.sash_headers(cred))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+
+        if !status.is_success() {
+            let msg = body
+                .get("message")
+                .or_else(|| body.get("errorMessage"))
+                .or_else(|| body.get("msg"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            return Err(anyhow!("积分查询失败 HTTP {} {msg}", status.as_u16()));
+        }
+
+        let num = |v: &Value| -> Option<f64> {
+            v.as_f64()
+                .or_else(|| v.as_i64().map(|i| i as f64))
+                .or_else(|| {
+                    v.as_str()
+                        .and_then(|s| s.replace(',', "").trim().parse::<f64>().ok())
+                })
+        };
+
+        // 常见字段名（不同版本可能不同）
+        let candidates: [(&str, &str, &str); 3] = [
+            ("total_credits", "used_credits", "remaining_credits"),
+            ("total", "used", "remaining"),
+            ("granted_amount", "consumed_amount", "remaining_amount"),
+        ];
+
+        for (tg, uc, rm) in candidates {
+            if let (Some(t), Some(u), Some(r)) = (
+                body.get(tg).and_then(num),
+                body.get(uc).and_then(num),
+                body.get(rm).and_then(num),
+            ) {
+                return Ok(Quota {
+                    total_granted: t,
+                    total_consumed: u,
+                    total_remaining: r,
+                    items: Vec::new(),
+                    message: format!("剩余 {r:.0} / 共 {t:.0} Credits"),
+                });
+            }
+        }
+
+        // 也可能挂在 data / summary / resource_packages 之类的子对象里
+        for key in ["data", "summary", "usage", "result"] {
+            if let Some(sub) = body.get(key) {
+                if let Some(sub) = sub.as_object() {
+                    for (tg, uc, rm) in candidates {
+                        if let (Some(t), Some(u), Some(r)) = (
+                            sub.get(tg).and_then(num),
+                            sub.get(uc).and_then(num),
+                            sub.get(rm).and_then(num),
+                        ) {
+                            return Ok(Quota {
+                                total_granted: t,
+                                total_consumed: u,
+                                total_remaining: r,
+                                items: Vec::new(),
+                                message: format!("剩余 {r:.0} / 共 {t:.0} Credits"),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+
+        Ok(Quota::empty(
+            "积分接口返回了数据，但字段名与预期不符（上游结构可能已变更）",
+        ))
     }
 }
 

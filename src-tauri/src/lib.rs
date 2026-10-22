@@ -12,6 +12,8 @@ pub fn run() {
         .manage(commands::AppState::new())
         .invoke_handler(tauri::generate_handler![
             commands::overview,
+            commands::refresh_quota,
+            commands::refresh_all_quotas,
             commands::checkin_account,
             commands::checkin_all,
             commands::discover_accounts,

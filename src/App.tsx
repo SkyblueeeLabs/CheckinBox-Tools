@@ -1,14 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, formatMinute, onCheckinProgress, parseMinute } from "./lib/api";
+import {
+  api,
+  fmtPoints,
+  formatMinute,
+  onCheckinProgress,
+  parseMinute,
+} from "./lib/api";
 import type {
   AccountResult,
+  AgentGroup,
   AppConfig,
   LogEntry,
   Overview,
-  ProviderView,
 } from "./lib/types";
+import Sidebar from "./components/Sidebar";
+import AgentGroupPanel from "./components/AgentGroupPanel";
 import LogPanel from "./components/LogPanel";
-import ProviderPanel from "./components/ProviderPanel";
 
 interface Toast {
   id: number;
@@ -16,13 +23,43 @@ interface Toast {
   text: string;
 }
 
+/** 把 overview 折成侧边栏要用的分组摘要 */
+function buildGroups(overview: Overview): AgentGroup[] {
+  return overview.providers.map((provider) => {
+    const accounts = overview.accounts.filter(
+      (a) => a.account.provider === provider.id
+    );
+    return {
+      provider,
+      accounts,
+      totalRemaining: accounts.reduce(
+        (sum, a) => sum + (a.quota?.totalRemaining ?? 0),
+        0
+      ),
+      totalGranted: accounts.reduce(
+        (sum, a) => sum + (a.quota?.totalGranted ?? 0),
+        0
+      ),
+      claimableCount: accounts.filter(
+        (a) => a.status?.state === "claimable"
+      ).length,
+      claimedToday: accounts.filter(
+        (a) => a.status?.state === "claimed"
+      ).length,
+    };
+  });
+}
+
 export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [selected, setSelected] = useState<string>("");
   const [busy, setBusy] = useState(false);
+  const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [authSession, setAuthSession] = useState<string | null>(null);
+  const [logsOpen, setLogsOpen] = useState(true);
   const toastSeq = useRef(0);
 
   const pushToast = useCallback((kind: Toast["kind"], text: string) => {
@@ -41,6 +78,9 @@ export default function App() {
       setOverview(ov);
       setLogs(lg);
       setConfig(cfg);
+      setSelected((prev) =>
+        prev && ov.providers.some((p) => p.id === prev) ? prev : ov.providers[0]?.id ?? ""
+      );
     } catch (e) {
       pushToast("err", `加载失败：${e}`);
     }
@@ -60,9 +100,9 @@ export default function App() {
     };
   }, [refresh, pushToast]);
 
-  // 有账号在签到时定时刷新状态
+  // 后台定时刷新（积分和签到状态都会变）
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), 30_000);
+    const timer = setInterval(() => void refresh(), 45_000);
     return () => clearInterval(timer);
   }, [refresh]);
 
@@ -110,17 +150,29 @@ export default function App() {
     }
   };
 
-  const discover = async (provider: ProviderView) => {
+  const refreshOneQuota = async (providerId: string, accountId: string) => {
+    setQuotaLoadingId(`${providerId}:${accountId}`);
+    try {
+      await api.refreshQuota(providerId, accountId);
+      await refresh();
+    } catch (e) {
+      pushToast("err", `积分刷新失败：${e}`);
+    } finally {
+      setQuotaLoadingId(null);
+    }
+  };
+
+  const discover = async (providerId: string) => {
     setBusy(true);
     try {
       const found = await api.discoverAccounts();
-      const hit = found.find((f) => f.provider === provider.id);
+      const hit = found.find((f) => f.provider === providerId);
       if (!hit) {
-        pushToast("warn", `没有在 ${provider.name} 客户端找到登录态`);
+        pushToast("warn", "没有找到本机客户端登录态");
         return;
       }
-      await api.addDiscoveredAccount(provider.id);
-      pushToast("ok", `已从本机 ${provider.name} 导入账号：${hit.account.label}`);
+      await api.addDiscoveredAccount(providerId);
+      pushToast("ok", `已导入账号：${hit.account.label}`);
     } catch (e) {
       pushToast("err", `导入失败：${e}`);
     } finally {
@@ -179,39 +231,69 @@ export default function App() {
     }
   };
 
-  const groups = (overview?.providers ?? []).map((provider) => ({
-    provider,
-    accounts: (overview?.accounts ?? []).filter(
-      (a) => a.account.provider === provider.id
-    ),
-  }));
+  if (!overview || !config) {
+    return (
+      <div className="loading">
+        <div className="loading-logo" />
+        <p>加载中…</p>
+      </div>
+    );
+  }
+
+  const groups = buildGroups(overview);
+  const current = groups.find((g) => g.provider.id === selected) ?? groups[0];
+  const totalRemaining = groups.reduce((s, g) => s + g.totalRemaining, 0);
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <div className="brand">
-          <div className="logo" />
-          <div>
+    <div className="shell">
+      <Sidebar
+        groups={groups}
+        selected={current?.provider.id ?? ""}
+        activeCount={overview.totalCount}
+        onSelect={setSelected}
+      />
+
+      <div className="main">
+        <header className="topbar">
+          <div className="topbar-left">
             <h1>聚合签到</h1>
-            <p className="sub">
-              {overview
-                ? `今日已签 ${overview.claimedCount}/${overview.totalCount} 个账号`
-                : "加载中…"}
+            <p className="topbar-sub">
+              今日已签 {overview.claimedCount}/{overview.totalCount} 个账号 · 累计发放 +
+              {fmtPoints(
+                groups.reduce((s, g) => s + g.totalGranted, 0)
+              )}
             </p>
           </div>
-        </div>
-        <div className="topbar-right">
-          <div className="today-points">
-            <span className="label">今日到账</span>
-            <span className="value">+{overview?.todayPoints ?? 0}</span>
-          </div>
-          <button className="primary" onClick={runAll} disabled={busy}>
-            {busy ? "签到中…" : "一键全部签到"}
-          </button>
-        </div>
-      </header>
 
-      {config && overview && (
+          <div className="topbar-right">
+            <div className="topbar-quota">
+              <span className="topbar-quota-num">{fmtPoints(totalRemaining)}</span>
+              <span className="topbar-quota-key">总剩余积分</span>
+            </div>
+            <button className="primary" onClick={runAll} disabled={busy}>
+              {busy ? "签到中…" : "一键全部签到"}
+            </button>
+          </div>
+        </header>
+
+        {current ? (
+          <AgentGroupPanel
+            group={current}
+            busy={busy}
+            quotaLoadingId={quotaLoadingId}
+            authPending={authSession !== null}
+            onCheckin={runOne}
+            onRefreshQuota={refreshOneQuota}
+            onDiscover={() => discover(current.provider.id)}
+            onAddAccount={startQoderAuth}
+            onRemove={removeAccount}
+          />
+        ) : (
+          <div className="group-empty">
+            <p>还没有任何 agent 分组。先在左侧选择一个平台添加账号。</p>
+          </div>
+        )}
+
         <section className="scheduler">
           <label className="switch">
             <input
@@ -228,7 +310,7 @@ export default function App() {
           </label>
 
           <div className="window">
-            <span className="label">时间窗</span>
+            <span className="window-label">时间窗</span>
             <input
               className="time"
               value={formatMinute(config.scheduler.startMinute)}
@@ -242,7 +324,7 @@ export default function App() {
                 }
               }}
             />
-            <span className="dash">→</span>
+            <span className="window-dash">→</span>
             <input
               className="time"
               value={formatMinute(config.scheduler.endMinute)}
@@ -256,7 +338,7 @@ export default function App() {
                 }
               }}
             />
-            <span className="hint">窗内每账号随机错峰执行</span>
+            <span className="window-hint">窗内每账号随机错峰执行</span>
           </div>
 
           <div className="provider-toggles">
@@ -264,10 +346,8 @@ export default function App() {
               <label key={p.id} className="chip">
                 <input
                   type="checkbox"
-                  checked={
-                    config.scheduler.providers[p.id] ?? true
-                  }
-                  onChange={(e) => {
+                  checked={config.scheduler.providers[p.id] ?? true}
+                  onChange={(e) =>
                     updateConfig({
                       ...config,
                       scheduler: {
@@ -277,41 +357,25 @@ export default function App() {
                           [p.id]: e.target.checked,
                         },
                       },
-                    });
-                  }}
+                    })
+                  }
                 />
-                <span className="dot" style={{ background: p.accent }} />
+                <span className="chip-dot" style={{ background: p.accent }} />
                 {p.name}
               </label>
             ))}
           </div>
         </section>
-      )}
 
-      <main className="panels">
-        {groups.map((group) => (
-          <ProviderPanel
-            key={group.provider.id}
-            provider={group.provider}
-            accounts={group.accounts}
-            busy={busy}
-            authPending={authSession !== null}
-            onCheckin={runOne}
-            onDiscover={() => discover(group.provider)}
-            onAddAccount={startQoderAuth}
-            onRemove={removeAccount}
-          />
-        ))}
-      </main>
+        <LogPanel logs={logs} visible={logsOpen} onToggle={() => setLogsOpen((v) => !v)} />
 
-      <LogPanel logs={logs} />
-
-      <div className="toasts">
-        {toasts.map((t) => (
-          <div key={t.id} className={`toast ${t.kind}`}>
-            {t.text}
-          </div>
-        ))}
+        <div className="toasts">
+          {toasts.map((t) => (
+            <div key={t.id} className={`toast ${t.kind}`}>
+              {t.text}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   );

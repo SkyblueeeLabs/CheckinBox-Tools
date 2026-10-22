@@ -69,6 +69,45 @@ impl Default for CheckinStatus {
     }
 }
 
+/// 单个积分发放批次。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditItem {
+    /// "purchased"（购买）/ "free"（签到赠送）
+    pub credit_type: String,
+    pub granted: f64,
+    pub consumed: f64,
+    pub remaining: f64,
+    pub granted_at_ms: i64,
+    pub expire_at_ms: i64,
+}
+
+/// 积分总览：发放 / 已用 / 剩余。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Quota {
+    pub total_granted: f64,
+    pub total_consumed: f64,
+    pub total_remaining: f64,
+    #[serde(default)]
+    pub items: Vec<CreditItem>,
+    /// 面向用户的一句话说明（例如"30 天内到期 400"）
+    #[serde(default)]
+    pub message: String,
+}
+
+impl Quota {
+    pub fn empty(message: impl Into<String>) -> Self {
+        Self {
+            total_granted: 0.0,
+            total_consumed: 0.0,
+            total_remaining: 0.0,
+            items: Vec::new(),
+            message: message.into(),
+        }
+    }
+}
+
 /// 领取结果。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -132,6 +171,13 @@ pub trait Provider: Send + Sync {
 
     /// 执行领取。
     async fn claim(&self, account: &Account, cred: &Value) -> Result<ClaimOutcome>;
+
+    /// 查询积分总览（发放 / 已用 / 剩余）。
+    ///
+    /// 默认返回空并给出说明；平台支持时覆盖实现。
+    async fn quota(&self, _account: &Account, _cred: &Value) -> Result<Quota> {
+        Ok(Quota::empty("该平台暂未提供积分查询"))
+    }
 
     /// 凭据过期时尝试刷新，返回新的凭据；无法刷新返回 `Ok(None)`。
 #[allow(dead_code)] // 预留给「凭据自动刷新」的扩展点，第一版未接线

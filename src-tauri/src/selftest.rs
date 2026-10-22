@@ -55,6 +55,13 @@ pub fn run() {
                         ),
                         Err(e) => println!("        状态读取失败：{e}"),
                     }
+                    match provider.quota(account, cred).await {
+                        Ok(q) => println!(
+                            "        积分: 发放={:.0} 已用={:.0} 剩余={:.0} | {}",
+                            q.total_granted, q.total_consumed, q.total_remaining, q.message
+                        ),
+                        Err(e) => println!("        积分读取失败：{e}"),
+                    }
                 }
             }
             Err(e) => println!("    发现失败：{e}"),

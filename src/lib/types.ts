@@ -9,6 +9,25 @@ export interface CheckinStatus {
   bonusPoints: number;
 }
 
+/** 单个积分发放批次 */
+export interface CreditItem {
+  creditType: string;
+  granted: number;
+  consumed: number;
+  remaining: number;
+  grantedAtMs: number;
+  expireAtMs: number;
+}
+
+/** 积分总览：发放 / 已用 / 剩余 */
+export interface Quota {
+  totalGranted: number;
+  totalConsumed: number;
+  totalRemaining: number;
+  items: CreditItem[];
+  message: string;
+}
+
 export interface Account {
   id: string;
   provider: string;
@@ -23,6 +42,8 @@ export interface AccountView {
   providerName: string;
   accent: string;
   status?: CheckinStatus | null;
+  quota?: Quota | null;
+  quotaError?: string | null;
   error?: string | null;
   todayLog?: LogEntry | null;
 }
@@ -51,6 +72,16 @@ export interface Overview {
   claimedCount: number;
   totalCount: number;
   scheduler: SchedulerView;
+}
+
+/** 侧边栏用的分组摘要 */
+export interface AgentGroup {
+  provider: ProviderView;
+  accounts: AccountView[];
+  totalRemaining: number;
+  totalGranted: number;
+  claimableCount: number;
+  claimedToday: number;
 }
 
 export interface AccountResult {

@@ -8,6 +8,7 @@ import type {
   DiscoveredAccount,
   LogEntry,
   Overview,
+  Quota,
 } from "./types";
 
 export const api = {
@@ -15,6 +16,10 @@ export const api = {
   checkinAll: () => invoke<AccountResult[]>("checkin_all"),
   checkinAccount: (providerId: string, accountId: string) =>
     invoke<AccountResult>("checkin_account", { providerId, accountId }),
+  refreshQuota: (providerId: string, accountId: string) =>
+    invoke<Quota>("refresh_quota", { providerId, accountId }),
+  refreshAllQuotas: () =>
+    invoke<Array<[string, string, Quota]>>("refresh_all_quotas"),
   discoverAccounts: () => invoke<DiscoveredAccount[]>("discover_accounts"),
   addDiscoveredAccount: (providerId: string) =>
     invoke<Account[]>("add_discovered_account", { providerId }),
@@ -49,4 +54,21 @@ export function parseMinute(text: string): number | null {
   const m = Number(match[2]);
   if (h > 23 || m > 59) return null;
   return h * 60 + m;
+}
+
+/** 积分数取整显示，去掉无意义的小数；顺带把 -0 归一成 0 */
+export function fmtPoints(n: number): string {
+  if (!Number.isFinite(n)) return "0";
+  const rounded = Math.round(n);
+  const norm = rounded === 0 ? 0 : rounded;
+  return norm.toLocaleString("zh-CN");
+}
+
+/** 毫秒时间戳 -> YYYY-MM-DD */
+export function fmtDate(ms: number): string {
+  if (!ms) return "";
+  const d = new Date(ms);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
 }
