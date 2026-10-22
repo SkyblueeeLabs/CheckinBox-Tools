@@ -15,46 +15,89 @@
 
 > 上游接口随时可能变。本工具失败时**如实报错**，不会谎报「已签到」。
 
+## 界面
+
+参考 Cockpit Tools 的布局：**左侧 agent 分组栏 + 右侧账号面板**。
+
+- 左侧每个 agent 一行：名称、账号数、剩余积分汇总、可签/已签角标
+- 右侧顶部是该 agent 的积分汇总条（剩余 / 累计发放 / 待签到）
+- 账号卡：积分（**剩余**大字 + 已用/发放进度条 + 批次明细）、签到状态、操作按钮
+- 底部：调度配置 + 签到记录
+
 ## 快速开始
 
 ```bash
-npm install          # 前端依赖
-cd src-tauri && cargo build   # Rust 后端
-npm run tauri:dev   # 开发模式运行
+npm install                              # 前端依赖
+cd src-tauri && cargo build              # Rust 后端
+npm run tauri:dev                        # 开发模式运行
 ```
 
 需要 Rust stable（`rustup`）与 VS Build Tools（C++ 工具链）。本项目第一版**不做 exe 打包**，
 稳定后再补 `npm run tauri build`。
 
+命令行自检（不启 GUI）：
+
+```bash
+.\src-tauri\target\debug\agent-checkin-tools.exe --selftest
+```
+
 ## 用法
 
-1. **MiniMax Code**：点「从本机客户端导入」——直接读取
-   `~/.minimax/auth/<region>/mcode-public/auth.json` 的登录态（明文，无需解密）。
+1. **MiniMax Code**：点「从本机客户端导入」——读取
+   `~/.minimax/auth/<env>/<region>/<clientId>/auth.json` 的登录态（明文）。
+   客户端会自动续期 token，本工具每次请求前重读该文件，所以**不用手动刷新**。
 2. **Qoder CN**：点「添加账号」——浏览器里用目标账号确认一次授权（设备授权，无验证码）。
 3. **一键全部签到**：遍历所有账号，先查状态，需要才领取。
-4. **自动签到**：顶部调度条开关 + 时间窗（默认 06:00–08:00）。窗内每个账号有一个
+4. **自动签到**：底部调度条开关 + 时间窗（默认 06:00–08:00）。窗内每个账号有一个
    确定性随机分钟偏移，避免多账号同时打同一个上游。
 
 ## 实现要点
 
-- **MiniMax 签到接口**：`GET/POST https://agent.minimax.cn/minimax-cloud/api/v1/signin/{status,claim}`，
-  必须带 `?timezone_id=Asia/Shanghai`（否则报 `1406010011 invalid timezone_id`）。
-- **Qoder 签到接口**：`GET /sash/api/v1/me/campaigns` 拉活动 →
-  `POST /sash/api/v1/me/campaigns/{campaignId}/claim` 领取；必须带 `Cosy-Machine*` 设备风控头。
-  官方活动窗口每天 10:00（UTC+8）开启。
-- **凭据保护**：Windows DPAPI（`CryptProtectData`）加密后落盘，换用户/换机器读不到；
-  日志和界面里不出现任何 token。
-- **调度模型**：借鉴 Cockpit Tools 的「时间窗 + 每账号随机分钟偏移」。
+### MiniMax Code
+
+```
+读  ~/.minimax/auth/<env>/<region>/<clientId>/auth.json   ← 明文，客户端自动续期
+签到 GET/POST  agent.minimax.cn/minimax-cloud/api/v1/signin/{status,claim}
+积分 GET       agent.minimax.cn/minimax-cloud/api/v1/credit/details
+```
+
+两个签到接口都**必须带 `?timezone_id=Asia/Shanghai`**，否则报 `1406010011 invalid timezone_id`。
+token 生命周期很短（实测约 1 小时），因此每次请求前重读本机 `auth.json`。
+
+### Qoder CN
+
+```
+设备授权（无验证码）
+  GET qoder.com.cn/device/selectAccounts?challenge=S256&machine_id&nonce
+  轮询 openapi.qoder.com.cn/api/v1/deviceToken/poll
+签到 GET  openapi.qoder.com.cn/sash/api/v1/me/campaigns?forceRefresh=true
+     POST openapi.qoder.com.cn/sash/api/v1/me/campaigns/{campaignId}/claim
+积分 GET  openapi.qoder.com.cn/sash/api/v2/me/usage
+头必须带 Cosy-MachineToken/Code/Type（本机 umid-cache.json 已有）
+```
+
+官方活动窗口每天 **10:00（UTC+8）** 开启。
+
+### 凭据保护
+
+Windows DPAPI（`CryptProtectData`）加密后落盘，换用户/换机器读不到；
+日志和界面里不出现任何 token。
+
+### 调度模型
+
+借鉴 Cockpit Tools 的「时间窗 + 每账号随机分钟偏移」。
 
 ## 目录
 
 ```
 src/                    React 前端
+  components/           Sidebar / AgentGroupPanel / AccountCard / QuotaCard / LogPanel
 src-tauri/src/
 ├── core/               provider 抽象 / 账号池 / 调度 / 日志 / DPAPI / 时区
 ├── providers/          minimax.rs、qoder.rs
 ├── commands.rs         Tauri 命令层
-└── tray.rs             系统托盘
+├── tray.rs             系统托盘
+└── selftest.rs         --selftest 自检
 docs/superpowers/specs/ 设计规格
 ```
 
@@ -63,3 +106,4 @@ docs/superpowers/specs/ 设计规格
 调用的是各客户端的**非公开内部接口**，归各厂商所有，可能随时变更或下线。
 本项目与各厂商无任何隶属、授权或合作关系，仅供个人学习自用，禁止商业用途。
 使用前请自行评估并遵守相关服务条款与法律法规，风险由使用者承担。
+
