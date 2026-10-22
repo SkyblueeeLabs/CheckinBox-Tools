@@ -27,6 +27,7 @@ pub fn run() {
             commands::set_agent_schedule,
             commands::set_scheduler_enabled,
             commands::set_active_account,
+            commands::set_alert_threshold,
             commands::launch_client,
             commands::get_logs,
             commands::open_external,

@@ -11,6 +11,7 @@ pub mod config;
 pub mod dpapi;
 pub mod launcher;
 pub mod logging;
+pub mod quota_history;
 pub mod paths;
 pub mod provider;
 pub mod scheduler;

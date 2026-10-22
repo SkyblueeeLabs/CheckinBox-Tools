@@ -54,6 +54,9 @@ export default function AccountCard({
         error={view.quotaError}
         loading={quotaLoading}
         onRefresh={onRefreshQuota}
+        alertThreshold={view.alertThreshold}
+        isLow={view.isLow}
+        trend={view.trend}
       />
 
       <div className="acct-signin">

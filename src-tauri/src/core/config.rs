@@ -89,6 +89,10 @@ pub struct AppConfig {
     /// 「多账号切换」就是改这个值。
     #[serde(default)]
     pub active_accounts: BTreeMap<String, String>,
+    /// 积分预警阈值（剩余低于该值就在界面上标红）。
+    /// 借鉴 Cockpit Tools 的 `*_quota_alert_threshold`。
+    #[serde(default)]
+    pub alert_thresholds: BTreeMap<String, u32>,
 }
 
 impl AppConfig {
@@ -121,5 +125,17 @@ impl AppConfig {
     pub fn set_active(&mut self, provider: &str, account_id: &str) {
         self.active_accounts
             .insert(provider.to_string(), account_id.to_string());
+    }
+
+    /// 某 agent 的积分预警阈值（默认 200）。
+    pub fn alert_threshold_of(&self, provider: &str) -> u32 {
+        self.alert_thresholds
+            .get(provider)
+            .copied()
+            .unwrap_or(200)
+    }
+
+    pub fn set_alert_threshold(&mut self, provider: &str, value: u32) {
+        self.alert_thresholds.insert(provider.to_string(), value);
     }
 }

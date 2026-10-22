@@ -19,6 +19,7 @@ interface Props {
   ) => void;
   /** 发起设备授权（qoder / qwenwork 共用同一套 URL，只是账号不同） */
   onAddAccount: (providerId: string) => void;
+  onAlertChange: (providerId: string, value: number) => void;
 }
 
 /**
@@ -39,6 +40,7 @@ export default function AgentGroupPanel({
   onRemove,
   onDiscover,
   onAddAccount,
+  onAlertChange,
   onScheduleChange,
 }: Props) {
   const { provider, accounts, schedule } = group;
@@ -115,6 +117,21 @@ export default function AgentGroupPanel({
           />
         </span>
         <span className="sched-hint">窗内每账号随机错峰执行</span>
+
+        <span className="sched-label">预警</span>
+        <span className="sched-win">
+          <input
+            className="sched-threshold"
+            type="number"
+            min={0}
+            value={schedule.alertThreshold ?? 200}
+            onChange={(e) => {
+              const v = Number(e.target.value);
+              if (Number.isFinite(v) && v >= 0) onAlertChange(provider.id, Math.round(v));
+            }}
+          />
+          <span className="sched-hint">剩余低于此值标红</span>
+        </span>
       </div>
 
       {accounts.length === 0 ? (

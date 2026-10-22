@@ -48,6 +48,8 @@ export const api = {
     invoke<AppConfig>("set_scheduler_enabled", { enabled }),
   setActiveAccount: (providerId: string, accountId: string) =>
     invoke<AppConfig>("set_active_account", { providerId, accountId }),
+  setAlertThreshold: (providerId: string, value: number) =>
+    invoke<AppConfig>("set_alert_threshold", { providerId, value }),
   launchClient: (providerId: string) =>
     invoke<string>("launch_client", { providerId }),
   getLogs: (days = 7) => invoke<LogEntry[]>("get_logs", { days }),

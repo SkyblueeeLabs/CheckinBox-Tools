@@ -50,6 +50,17 @@ export interface AccountView {
   dataDir?: string | null;
   projectCount: number;
   sessionCount: number;
+  /** 积分是否低于预警阈值 */
+  isLow: boolean;
+  /** 积分预警阈值 */
+  alertThreshold: number;
+  /** 最近 7 天积分快照（升序） */
+  trend: QuotaPoint[];
+}
+
+export interface QuotaPoint {
+  timestamp: string;
+  remaining: number;
 }
 
 export interface ProviderView {
@@ -71,6 +82,7 @@ export interface AgentScheduleView {
   accountCount: number;
   todayClaimed: number;
   todayClaimable: number;
+  alertThreshold?: number;
 }
 
 export interface Overview {
@@ -133,6 +145,7 @@ export interface AppConfig {
   scheduler: SchedulerConfig;
   /** 每个 agent 当前激活的账号 id */
   activeAccounts: Record<string, string>;
+  alertThresholds: Record<string, number>;
 }
 
 export interface DiscoveredAccount {

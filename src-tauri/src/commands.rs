@@ -9,6 +9,7 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::core::config::AppConfig;
 use crate::core::logging::{self, LogEntry};
 use crate::core::provider::{Account, CheckinStatus, ClaimState, Provider, Quota};
+use crate::core::quota_history;
 use crate::core::scheduler::{self, SchedulerState};
 use crate::core::store::AccountStore;
 use crate::providers::qoder::AuthSession;
@@ -115,6 +116,20 @@ pub struct AccountView {
     pub project_count: usize,
     /// 本地会话数
     pub session_count: usize,
+    /// 积分是否低于预警阈值
+    pub is_low: bool,
+    /// 积分预警阈值
+    pub alert_threshold: u32,
+    /// 最近 7 天的积分快照（升序），用于画趋势
+    pub trend: Vec<QuotaPoint>,
+}
+
+/// 趋势上的一个点。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuotaPoint {
+    pub timestamp: String,
+    pub remaining: f64,
 }
 
 /// 单个 agent 的调度配置（前端用来渲染它自己的自动签到开关）。
@@ -212,7 +227,18 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
 
         // 积分与签到是两个独立请求：积分失败不影响签到状态展示
         let (quota, quota_error) = match provider.quota(&account, &cred).await {
-            Ok(q) => (Some(q), None),
+            Ok(q) => {
+                // 落一条积分快照（趋势图用）。失败不致命。
+                let _ = quota_history::append(&quota_history::QuotaSnapshot::new(
+                    &account.provider,
+                    &account.id,
+                    &account.label,
+                    q.total_remaining,
+                    q.total_granted,
+                    q.total_consumed,
+                ));
+                (Some(q), None)
+            }
             Err(e) => (None, Some(e.to_string())),
         };
 
@@ -231,6 +257,20 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             ),
             None => (None, 0, 0),
         };
+        let threshold = config.alert_threshold_of(&account.provider);
+        let trend = quota_history::recent_of(&account.provider, &account.id, 7)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|s| QuotaPoint {
+                timestamp: s.timestamp,
+                remaining: s.remaining,
+            })
+            .collect();
+        // 积分是否低于预警阈值
+        let is_low = quota
+            .as_ref()
+            .map(|q| q.total_remaining < threshold as f64)
+            .unwrap_or(false);
 
         accounts.push(AccountView {
             provider_name: provider.display_name().to_string(),
@@ -245,6 +285,9 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             data_dir,
             project_count,
             session_count,
+            is_low,
+            alert_threshold: threshold,
+            trend,
         });
     }
 
@@ -586,6 +629,19 @@ pub async fn set_agent_schedule(
         return Err("时间窗不合法（起必须早于止）".into());
     }
     guard.scheduler.set_agent(&provider_id, cfg);
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 设置某个 agent 的积分预警阈值。
+#[tauri::command]
+pub async fn set_alert_threshold(
+    state: State<'_, AppState>,
+    provider_id: String,
+    value: u32,
+) -> Result<AppConfig, String> {
+    let mut guard = state.config.lock().unwrap();
+    guard.set_alert_threshold(&provider_id, value);
     guard.save().map_err(|e| e.to_string())?;
     Ok(guard.clone())
 }

@@ -39,6 +39,10 @@ pub fn auth_pending_file() -> PathBuf {
     data_dir().join("auth_pending.json")
 }
 
+pub fn quota_history_file() -> PathBuf {
+    data_dir().join("quota_history.jsonl")
+}
+
 pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }

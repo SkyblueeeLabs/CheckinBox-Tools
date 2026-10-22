@@ -30,13 +30,18 @@ function buildGroups(overview: Overview): AgentGroup[] {
       totalGranted: accounts.reduce((s, a) => s + (a.quota?.totalGranted ?? 0), 0),
       claimableCount: accounts.filter((a) => a.status?.state === "claimable").length,
       claimedToday: accounts.filter((a) => a.status?.state === "claimed").length,
-      schedule: overview.agents[provider.id] ?? {
-        enabled: true,
-        startMinute: 6 * 60,
-        endMinute: 8 * 60,
-        accountCount: accounts.length,
-        todayClaimed: 0,
-        todayClaimable: 0,
+      schedule: {
+        ...(overview.agents[provider.id] ?? {
+          enabled: true,
+          startMinute: 6 * 60,
+          endMinute: 8 * 60,
+          accountCount: accounts.length,
+          todayClaimed: 0,
+          todayClaimable: 0,
+        }),
+        alertThreshold: overview.accounts
+          .find((a) => a.account.provider === provider.id)
+          ?.alertThreshold,
       },
     };
   });
@@ -255,6 +260,23 @@ export default function App() {
     }
   };
 
+  /** 改某个 agent 的积分预警阈值 */
+  const patchAlert = useCallback((providerId: string, value: number) => {
+    setOverview((prev) => {
+      if (!prev) return prev;
+      return {
+        ...prev,
+        accounts: prev.accounts.map((a) =>
+          a.account.provider === providerId ? { ...a, isLow: (a.quota?.totalRemaining ?? 0) < value, alertThreshold: value } : a
+        ),
+      };
+    });
+    void api
+      .setAlertThreshold(providerId, value)
+      .then((cfg) => setConfig(cfg))
+      .catch((e) => pushToast("err", `保存失败：${e}`));
+  }, [pushToast]);
+
   /** 改某个 agent 自己的自动签到配置（前端乐观更新 + 后端落盘） */
   const patchSchedule = useCallback(
     (providerId: string, patch: { enabled?: boolean; startMinute?: number; endMinute?: number }) => {
@@ -368,6 +390,7 @@ export default function App() {
             onDiscover={(id) => discover(id)}
             onAddAccount={(id: string) => { void startDeviceAuth(id); }}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
+            onAlertChange={patchAlert}
           />
         ) : (
           <div className="empty">

@@ -1,17 +1,32 @@
-import type { Quota } from "../lib/types";
+import type { Quota, QuotaPoint } from "../lib/types";
 import { fmtDate, fmtPoints } from "../lib/api";
+import TrendLine from "./TrendLine";
 
 interface Props {
   quota?: Quota | null;
   error?: string | null;
   loading?: boolean;
   onRefresh?: () => void;
+  /** 积分预警阈值 */
+  alertThreshold?: number;
+  /** 积分是否已低于阈值 */
+  isLow?: boolean;
+  /** 最近 7 天趋势 */
+  trend?: QuotaPoint[];
 }
 
 /**
  * 积分块：剩余（大字） + 已用/发放（等宽数字） + 用量条 + 批次明细。
  */
-export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
+export default function QuotaCard({
+  quota,
+  error,
+  loading,
+  onRefresh,
+  alertThreshold,
+  isLow,
+  trend,
+}: Props) {
   if (error) {
     return (
       <div className="quota quota-error">
@@ -55,7 +70,9 @@ export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
       <div className="quota-top">
         <div className="quota-remaining">
           <span className="q-label">剩余</span>
-          <span className="q-value">{fmtPoints(totalRemaining)}</span>
+          <span className="q-value" style={isLow ? { color: "var(--err)" } : undefined}>
+            {fmtPoints(totalRemaining)}
+          </span>
         </div>
 
         <div className="quota-stats">
@@ -81,6 +98,12 @@ export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
       </div>
 
       {message && <p className="quota-msg">{message}</p>}
+
+      {isLow && (
+        <p className="quota-alert">积分低于预警线（{alertThreshold}）</p>
+      )}
+
+      <TrendLine points={trend ?? []} threshold={alertThreshold} />
 
       {items.length > 0 && (
         <details className="quota-details">
