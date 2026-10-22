@@ -134,6 +134,7 @@ pub trait Provider: Send + Sync {
     async fn claim(&self, account: &Account, cred: &Value) -> Result<ClaimOutcome>;
 
     /// 凭据过期时尝试刷新，返回新的凭据；无法刷新返回 `Ok(None)`。
+#[allow(dead_code)] // 预留给「凭据自动刷新」的扩展点，第一版未接线
     async fn refresh(&self, _account: &Account, _cred: &Value) -> Result<Option<Value>> {
         Ok(None)
     }

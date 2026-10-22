@@ -1,5 +1,4 @@
 import type { AccountView, ProviderView } from "../lib/types";
-import { formatMinute } from "../lib/api";
 import AccountCard from "./AccountCard";
 
 interface Props {

@@ -39,7 +39,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
                     let Some(state) = handle.try_state::<commands::AppState>() else {
                         return;
                     };
-                    let _ = commands::checkin_all_inner(handle, &state).await;
+                    let _ = commands::checkin_all_inner(handle.clone(), &state).await;
                 });
             }
             "quit" => app.exit(0),

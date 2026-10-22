@@ -43,36 +43,36 @@ impl MiniMaxProvider {
     }
 }
 
-/// 找本机 MiniMax Code 的登录态文件。
+/// 递归收集本机 MiniMax Code 的登录态文件。
 ///
-/// 结构是 `~/.minimax/auth/<region>/<clientId>/auth.json`，这里扫两层目录。
+/// 实际布局是 `~/.minimax/auth/<buildEnv>/<region>/<clientId>/auth.json`
+/// （例如 `auth/prod/cn/mcode-public/auth.json`），层级随版本会变，
+/// 所以按目录深度递归找，而不是写死层数。
 fn auth_files() -> Vec<PathBuf> {
     let mut out = Vec::new();
     let Some(home) = dirs::home_dir() else {
         return out;
     };
     let root = home.join(".minimax").join("auth");
-    let Ok(regions) = std::fs::read_dir(&root) else {
-        return out;
+    collect_auth_files(&root, &mut out, 0);
+    out
+}
+
+fn collect_auth_files(dir: &PathBuf, out: &mut Vec<PathBuf>, depth: usize) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
     };
-    for region in regions.flatten() {
-        if !region.path().is_dir() {
-            continue;
-        }
-        let Ok(clients) = std::fs::read_dir(region.path()) else {
-            continue;
-        };
-        for client in clients.flatten() {
-            if !client.path().is_dir() {
-                continue;
-            }
-            let candidate = client.path().join("auth.json");
-            if candidate.is_file() {
-                out.push(candidate);
-            }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_auth_files(&path, out, depth + 1);
+        } else if path.file_name().and_then(|n| n.to_str()) == Some("auth.json") {
+            out.push(path);
         }
     }
-    out
 }
 
 /// 读本机客户端的用户信息，用于给账号起个看得懂的名字。

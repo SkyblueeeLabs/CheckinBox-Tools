@@ -3,9 +3,8 @@
 mod commands;
 mod core;
 mod providers;
+pub mod selftest;
 mod tray;
-
-use tauri::Manager;
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {

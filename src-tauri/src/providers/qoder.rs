@@ -187,25 +187,56 @@ impl QoderProvider {
         }
         headers.insert(
             "cosy-clienttype",
-            SASH_CLIENT_TYPE.parse().unwrap(),
+            SASH_CLIENT_TYPE.parse::<reqwest::header::HeaderValue>().unwrap(),
         );
-        headers.insert("accept", "application/json".parse().unwrap());
-        headers.insert("accept-language", "zh-CN".parse().unwrap());
-        headers.insert("user-agent", SASH_USER_AGENT.parse().unwrap());
-        headers.insert("Cosy-Version", client_version().parse().unwrap());
-        headers.insert("Cosy-MachineOS", machine_os().parse().unwrap());
+        headers.insert(
+            "accept",
+            "application/json".parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
+        headers.insert(
+            "accept-language",
+            "zh-CN".parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
+        headers.insert(
+            "user-agent",
+            SASH_USER_AGENT.parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
+        headers.insert(
+            "Cosy-Version",
+            client_version().parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
+        headers.insert(
+            "Cosy-MachineOS",
+            machine_os().parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
         headers.insert(
             "Cosy-MachineId",
-            cred["machine_id"].as_str().unwrap_or("").parse().unwrap(),
+            cred["machine_id"]
+                .as_str()
+                .unwrap_or("")
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         let hostname = machine_hostname();
         if !hostname.is_empty() {
-            headers.insert("Cosy-MachineHostname", hostname.parse().unwrap());
+            headers.insert(
+                "Cosy-MachineHostname",
+                hostname.parse::<reqwest::header::HeaderValue>().unwrap(),
+            );
         }
         if let Some(risk) = umid_identity() {
-            headers.insert("Cosy-MachineToken", risk.token.parse().unwrap());
-            headers.insert("Cosy-MachineCode", risk.code.parse().unwrap());
-            headers.insert("Cosy-MachineType", risk.r#type.parse().unwrap());
+            headers.insert(
+                "Cosy-MachineToken",
+                risk.token.parse::<reqwest::header::HeaderValue>().unwrap(),
+            );
+            headers.insert(
+                "Cosy-MachineCode",
+                risk.code.parse::<reqwest::header::HeaderValue>().unwrap(),
+            );
+            headers.insert(
+                "Cosy-MachineType",
+                risk.r#type.parse::<reqwest::header::HeaderValue>().unwrap(),
+            );
         }
         headers
     }
@@ -368,8 +399,14 @@ impl Provider for QoderProvider {
 
         let url = format!("{OPENAPI_BASE}{CAMPAIGNS_PATH}/{campaign_id}/claim");
         let mut headers = self.sash_headers(cred);
-        headers.insert("content-type", "application/json".parse().unwrap());
-        headers.insert("origin", OPENAPI_BASE.parse().unwrap());
+        headers.insert(
+            "content-type",
+            "application/json".parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
+        headers.insert(
+            "origin",
+            OPENAPI_BASE.parse::<reqwest::header::HeaderValue>().unwrap(),
+        );
 
         let resp = self
             .http

@@ -3,15 +3,14 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::core::config::{AppConfig, SchedulerConfig};
+use crate::core::config::AppConfig;
 use crate::core::logging::{self, LogEntry};
 use crate::core::provider::{Account, CheckinStatus, ClaimState, Provider};
 use crate::core::scheduler::{self, SchedulerState};
 use crate::core::store::AccountStore;
-use crate::providers;
 use crate::providers::qoder::AuthSession;
 
 /// 全局应用状态。
@@ -145,8 +144,6 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             Some(p) => p,
             None => continue,
         };
-        let key = AccountStore::key(&account.provider, &account.id);
-
         let (status, error) = match store.credential(&account.provider, &account.id) {
             Ok(cred) => match provider.status(&account, &cred).await {
                 Ok(s) => {
@@ -343,7 +340,7 @@ pub async fn poll_qoder_auth(
     session_id: String,
 ) -> Result<Option<Account>, String> {
     let session = {
-        let mut sessions = state.auth_sessions.lock().unwrap();
+        let sessions = state.auth_sessions.lock().unwrap();
         sessions.get(&session_id).cloned()
     };
     let Some(session) = session else {

@@ -10,6 +10,7 @@ use std::sync::Arc;
 
 use crate::core::provider::Provider;
 
+#[allow(dead_code)] // 调度器/命令层可按 id 动态取适配器
 /// 全部已注册的平台。
 pub fn all() -> Vec<Arc<dyn Provider>> {
     vec![
@@ -18,6 +19,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
     ]
 }
 
+#[allow(dead_code)] // 按 id 动态取适配器
 /// 按 id 取平台。
 pub fn find(id: &str) -> Option<Arc<dyn Provider>> {
     all().into_iter().find(|p| p.id() == id)

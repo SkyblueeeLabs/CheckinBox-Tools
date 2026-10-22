@@ -7,7 +7,6 @@ import type {
   Overview,
   ProviderView,
 } from "./lib/types";
-import AccountCard from "./components/AccountCard";
 import LogPanel from "./components/LogPanel";
 import ProviderPanel from "./components/ProviderPanel";
 

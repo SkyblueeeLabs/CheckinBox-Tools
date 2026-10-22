@@ -58,7 +58,10 @@ impl AppConfig {
     pub fn load() -> Result<Self> {
         let path = config_file();
         if !path.exists() {
-            return Ok(Self::default());
+            // 首次运行：把默认配置写盘，方便用户直接打开文件调整
+            let defaults = Self::default();
+            let _ = defaults.save();
+            return Ok(defaults);
         }
         let raw = std::fs::read_to_string(&path)?;
         if raw.trim().is_empty() {
