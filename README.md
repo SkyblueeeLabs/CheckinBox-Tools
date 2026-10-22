@@ -32,19 +32,32 @@
 
 ## 快速开始
 
+### 开发模式
+
 ```bash
 npm install                              # 前端依赖
 cd src-tauri && cargo build              # Rust 后端
 npm run tauri:dev                        # 开发模式运行
 ```
 
-需要 Rust stable（`rustup`）与 VS Build Tools（C++ 工具链）。本项目第一版**不做 exe 打包**，
-稳定后再补 `npm run tauri build`。
+> 端口用 5173：本机 1420/1421/1425/1500 落在 Windows 保留端口段（vite 会报 EACCES）。
+
+### 打包独立 exe（免装环境，4 MB）
+
+```bash
+npm run tauri build -- --no-bundle
+```
+
+产物：`src-tauri/target/release/agent-checkin-tools.exe`。
+
+> `--no-bundle` 是跳过 NSIS 安装包（本机没装 NSIS）。装了 NSIS 的话去掉它，
+> 会额外产出 `.msi` / `.exe` 安装包。**注意**：直接 `cargo build --release`
+> 不会走 Tauri 的前端嵌入流程，产物会去加载 `devUrl`（localhost）而白屏 —— 必须用 `tauri build`。
 
 命令行自检（不启 GUI）：
 
 ```bash
-.\src-tauri\target\debug\agent-checkin-tools.exe --selftest
+.\src-tauri\target\release\agent-checkin-tools.exe --selftest
 ```
 
 ## 用法
