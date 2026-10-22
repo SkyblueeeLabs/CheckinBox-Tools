@@ -9,22 +9,24 @@ interface Props {
 }
 
 /**
- * 积分卡：发放 / 已用 / 剩余。
- *
- * 「剩余」用大字显示（用户最关心的），「已用」和「发放」作为辅助行，
- * 明细批次折叠在下方，避免一屏塞满。
+ * 积分块：剩余（大字） + 已用/发放（等宽数字） + 用量条 + 批次明细。
  */
 export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
   if (error) {
     return (
       <div className="quota quota-error">
-        <span className="quota-label">积分</span>
-        <span className="quota-msg">{error}</span>
-        {onRefresh && (
-          <button className="link" onClick={onRefresh}>
-            重试
-          </button>
-        )}
+        <div className="quota-top">
+          <div className="quota-remaining">
+            <span className="q-label">Credits</span>
+            <span className="q-value">—</span>
+          </div>
+          {onRefresh && (
+            <button className="link" onClick={onRefresh}>
+              重试
+            </button>
+          )}
+        </div>
+        <p className="quota-msg">{error}</p>
       </div>
     );
   }
@@ -32,8 +34,15 @@ export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
   if (!quota) {
     return (
       <div className="quota quota-empty">
-        <span className="quota-label">积分</span>
-        <span className="quota-msg">{loading ? "读取中…" : "暂无数据"}</span>
+        <div className="quota-top">
+          <div className="quota-remaining">
+            <span className="q-label">Credits</span>
+            <span className="q-value" style={{ color: "var(--text-3)" }}>
+              —
+            </span>
+          </div>
+        </div>
+        <p className="quota-msg">{loading ? "读取中…" : "暂无数据"}</p>
       </div>
     );
   }
@@ -43,35 +52,32 @@ export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
 
   return (
     <div className="quota">
-      <div className="quota-main">
+      <div className="quota-top">
         <div className="quota-remaining">
-          <span className="quota-num">{fmtPoints(totalRemaining)}</span>
-          <span className="quota-unit">剩余</span>
+          <span className="q-label">剩余</span>
+          <span className="q-value">{fmtPoints(totalRemaining)}</span>
         </div>
 
-        <div className="quota-bars">
-          <div className="quota-row">
-            <span className="quota-key">已用</span>
-            <span className="quota-val">{fmtPoints(totalConsumed)}</span>
-            <span className="quota-pct">{usedPct.toFixed(0)}%</span>
+        <div className="quota-stats">
+          <div className="qstat">
+            <span className="q-label">已用</span>
+            <span className="q-value">{fmtPoints(totalConsumed)}</span>
+            <span className="q-sub">{usedPct.toFixed(0)}%</span>
           </div>
-          <div className="quota-track">
-            <span
-              className="quota-fill used"
-              style={{ width: `${Math.min(100, usedPct)}%` }}
-            />
+          <div className="qstat">
+            <span className="q-label">发放</span>
+            <span className="q-value">{fmtPoints(totalGranted)}</span>
           </div>
-          <div className="quota-row">
-            <span className="quota-key">发放</span>
-            <span className="quota-val">{fmtPoints(totalGranted)}</span>
-          </div>
+          {onRefresh && (
+            <button className="link" onClick={onRefresh} disabled={loading}>
+              {loading ? "…" : "刷新"}
+            </button>
+          )}
         </div>
+      </div>
 
-        {onRefresh && (
-          <button className="link quota-refresh" onClick={onRefresh} disabled={loading}>
-            {loading ? "刷新中" : "刷新"}
-          </button>
-        )}
+      <div className="quota-bar">
+        <span style={{ width: `${Math.min(100, usedPct)}%` }} />
       </div>
 
       {message && <p className="quota-msg">{message}</p>}
@@ -83,21 +89,19 @@ export default function QuotaCard({ quota, error, loading, onRefresh }: Props) {
             <thead>
               <tr>
                 <th>类别</th>
-                <th className="num">发放</th>
-                <th className="num">已用</th>
-                <th className="num">剩余</th>
+                <th className="r">发放</th>
+                <th className="r">已用</th>
+                <th className="r">剩余</th>
                 <th>到期</th>
               </tr>
             </thead>
             <tbody>
               {items.map((item, i) => (
                 <tr key={i}>
-                  <td>
-                    {item.creditType === "purchased" ? "购买" : "签到"}
-                  </td>
-                  <td className="num">{fmtPoints(item.granted)}</td>
-                  <td className="num">{fmtPoints(item.consumed)}</td>
-                  <td className="num">{fmtPoints(item.remaining)}</td>
+                  <td>{item.creditType === "purchased" ? "购买" : item.creditType === "plan" ? "套餐" : item.creditType === "addon" ? "加购" : "签到"}</td>
+                  <td className="r">{fmtPoints(item.granted)}</td>
+                  <td className="r">{fmtPoints(item.consumed)}</td>
+                  <td className="r">{fmtPoints(item.remaining)}</td>
                   <td>{fmtDate(item.expireAtMs)}</td>
                 </tr>
               ))}

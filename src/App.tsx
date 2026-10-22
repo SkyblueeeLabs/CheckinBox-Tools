@@ -1,11 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  api,
-  fmtPoints,
-  formatMinute,
-  onCheckinProgress,
-  parseMinute,
-} from "./lib/api";
+import { api, onCheckinProgress } from "./lib/api";
 import type {
   AccountResult,
   AgentGroup,
@@ -23,7 +17,7 @@ interface Toast {
   text: string;
 }
 
-/** 把 overview 折成侧边栏要用的分组摘要 */
+/** 把 overview 折成侧边栏/面板要用的分组 */
 function buildGroups(overview: Overview): AgentGroup[] {
   return overview.providers.map((provider) => {
     const accounts = overview.accounts.filter(
@@ -32,20 +26,18 @@ function buildGroups(overview: Overview): AgentGroup[] {
     return {
       provider,
       accounts,
-      totalRemaining: accounts.reduce(
-        (sum, a) => sum + (a.quota?.totalRemaining ?? 0),
-        0
-      ),
-      totalGranted: accounts.reduce(
-        (sum, a) => sum + (a.quota?.totalGranted ?? 0),
-        0
-      ),
-      claimableCount: accounts.filter(
-        (a) => a.status?.state === "claimable"
-      ).length,
-      claimedToday: accounts.filter(
-        (a) => a.status?.state === "claimed"
-      ).length,
+      totalRemaining: accounts.reduce((s, a) => s + (a.quota?.totalRemaining ?? 0), 0),
+      totalGranted: accounts.reduce((s, a) => s + (a.quota?.totalGranted ?? 0), 0),
+      claimableCount: accounts.filter((a) => a.status?.state === "claimable").length,
+      claimedToday: accounts.filter((a) => a.status?.state === "claimed").length,
+      schedule: overview.agents[provider.id] ?? {
+        enabled: true,
+        startMinute: 6 * 60,
+        endMinute: 8 * 60,
+        accountCount: accounts.length,
+        todayClaimed: 0,
+        todayClaimable: 0,
+      },
     };
   });
 }
@@ -80,7 +72,9 @@ export default function App() {
       setLogs(lg);
       setConfig(cfg);
       setSelected((prev) =>
-        prev && ov.providers.some((p) => p.id === prev) ? prev : ov.providers[0]?.id ?? ""
+        prev && ov.providers.some((p) => p.id === prev)
+          ? prev
+          : ov.providers[0]?.id ?? ""
       );
     } catch (e) {
       pushToast("err", `加载失败：${e}`);
@@ -117,12 +111,12 @@ export default function App() {
       if (failed.length) {
         pushToast(
           "warn",
-          `完成 ${ok} 成功 / ${already} 已签，${failed.length} 个失败：${failed
+          `${ok} 成功 / ${already} 已签，${failed.length} 个失败：${failed
             .map((f) => `${f.label}（${f.message}）`)
             .join("；")}`
         );
       } else {
-        pushToast("ok", `完成：${ok} 个签到成功，${already} 个今日已签`);
+        pushToast("ok", `${ok} 个签到成功，${already} 个今日已签`);
       }
     } catch (e) {
       pushToast("err", `签到失败：${e}`);
@@ -136,15 +130,11 @@ export default function App() {
     setBusy(true);
     try {
       const result = await api.checkinAccount(providerId, accountId);
-      if (result.status === "success") {
-        pushToast("ok", `${label} 签到成功 +${result.points}`);
-      } else if (result.status === "already") {
-        pushToast("warn", `${label} 今日已签到`);
-      } else {
-        pushToast("warn", `${label}：${result.message}`);
-      }
+      if (result.status === "success") pushToast("ok", `${label} +${result.points}`);
+      else if (result.status === "already") pushToast("warn", `${label} 今日已签`);
+      else pushToast("warn", `${label}：${result.message}`);
     } catch (e) {
-      pushToast("err", `${label} 签到失败：${e}`);
+      pushToast("err", `${label}：${e}`);
     } finally {
       setBusy(false);
       await refresh();
@@ -173,7 +163,7 @@ export default function App() {
         return;
       }
       await api.addDiscoveredAccount(providerId);
-      pushToast("ok", `已导入账号：${hit.account.label}`);
+      pushToast("ok", `已导入：${hit.account.label}`);
     } catch (e) {
       pushToast("err", `导入失败：${e}`);
     } finally {
@@ -188,7 +178,7 @@ export default function App() {
       setAuthSession(challenge.sessionId);
       setAuthUrl(challenge.authUrl);
       await api.openExternal(challenge.authUrl);
-      pushToast("warn", "请在浏览器里用要登录的账号确认授权");
+      pushToast("warn", "请在浏览器里确认授权");
     } catch (e) {
       pushToast("err", `发起授权失败：${e}`);
     }
@@ -213,7 +203,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [authSession, pushToast, refresh]);
 
-  // 应用重启后恢复未完成的授权轮询（会话已落盘）
+  // 应用重启后恢复未完成的授权轮询
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -224,7 +214,7 @@ export default function App() {
           setAuthUrl(pending[0].authUrl);
         }
       } catch {
-        /* 忽略：没有待完成会话时接口也不会报错 */
+        /* 忽略 */
       }
     })();
     return () => {
@@ -235,27 +225,74 @@ export default function App() {
   const removeAccount = async (providerId: string, accountId: string, label: string) => {
     try {
       await api.removeAccount(providerId, accountId);
-      pushToast("warn", `已移除账号：${label}`);
+      pushToast("warn", `已移除：${label}`);
       await refresh();
     } catch (e) {
       pushToast("err", `移除失败：${e}`);
     }
   };
 
-  const updateConfig = async (next: AppConfig) => {
-    setConfig(next);
+  const setActive = async (providerId: string, accountId: string) => {
     try {
-      await api.setConfig(next);
-    } catch (e) {
-      pushToast("err", `保存配置失败：${e}`);
+      await api.setActiveAccount(providerId, accountId);
+      pushToast("ok", "已设为当前账号");
       await refresh();
+    } catch (e) {
+      pushToast("err", `切换失败：${e}`);
+    }
+  };
+
+  const launch = async (providerId: string) => {
+    try {
+      const exe = await api.launchClient(providerId);
+      pushToast("ok", `已打开客户端`);
+      void exe;
+    } catch (e) {
+      pushToast("err", `${e}`);
+    }
+  };
+
+  /** 改某个 agent 自己的自动签到配置（前端乐观更新 + 后端落盘） */
+  const patchSchedule = useCallback(
+    (providerId: string, patch: { enabled?: boolean; startMinute?: number; endMinute?: number }) => {
+      setOverview((prev) => {
+        if (!prev) return prev;
+        const cur = prev.agents[providerId];
+        if (!cur) return prev;
+        return {
+          ...prev,
+          agents: {
+            ...prev.agents,
+            [providerId]: { ...cur, ...patch },
+          },
+        };
+      });
+      void api
+        .setAgentSchedule(
+          providerId,
+          patch.enabled ?? overview?.agents[providerId]?.enabled ?? true,
+          patch.startMinute ?? overview?.agents[providerId]?.startMinute ?? 360,
+          patch.endMinute ?? overview?.agents[providerId]?.endMinute ?? 480
+        )
+        .then((cfg) => setConfig(cfg))
+        .catch((e) => pushToast("err", `保存失败：${e}`));
+    },
+    [overview, pushToast]
+  );
+
+  const toggleMaster = async (enabled: boolean) => {
+    try {
+      const cfg = await api.setSchedulerEnabled(enabled);
+      setConfig(cfg);
+    } catch (e) {
+      pushToast("err", `${e}`);
     }
   };
 
   if (!overview || !config) {
     return (
       <div className="loading">
-        <div className="loading-logo" />
+        <div className="loading-mark" />
         <p>加载中…</p>
       </div>
     );
@@ -263,14 +300,12 @@ export default function App() {
 
   const groups = buildGroups(overview);
   const current = groups.find((g) => g.provider.id === selected) ?? groups[0];
-  const totalRemaining = groups.reduce((s, g) => s + g.totalRemaining, 0);
 
   return (
     <div className="shell">
       <Sidebar
         groups={groups}
         selected={current?.provider.id ?? ""}
-        activeCount={overview.totalCount}
         onSelect={setSelected}
       />
 
@@ -278,38 +313,39 @@ export default function App() {
         {authSession && authUrl && (
           <div className="auth-banner">
             <div className="auth-text">
-              <strong>等待 Qoder 授权确认</strong>
+              <strong>等待 Qoder 授权</strong>
               <span>
-                已在浏览器打开授权页。若没打开或已关闭，
+                已在浏览器打开授权页。
                 <button className="link" onClick={() => api.openExternal(authUrl)}>
-                  点这里重新打开
+                  重新打开
                 </button>
-                ，用要登录的账号点「确认授权」。
+                用要登录的账号点「确认授权」。
               </span>
             </div>
-            <button className="ghost" onClick={() => setAuthSession(null)}>
+            <button className="btn small" onClick={() => setAuthSession(null)}>
               取消
             </button>
           </div>
         )}
 
         <header className="topbar">
-          <div className="topbar-left">
-            <h1>聚合签到</h1>
-            <p className="topbar-sub">
-              今日已签 {overview.claimedCount}/{overview.totalCount} 个账号 · 累计发放 +
-              {fmtPoints(
-                groups.reduce((s, g) => s + g.totalGranted, 0)
-              )}
-            </p>
+          <div className="brand">
+            <span className="brand-name">聚合签到</span>
+            <span className="brand-sub">
+              今日已签 <b>{overview.claimedCount}</b> / {overview.totalCount} 个账号
+            </span>
           </div>
 
           <div className="topbar-right">
-            <div className="topbar-quota">
-              <span className="topbar-quota-num">{fmtPoints(totalRemaining)}</span>
-              <span className="topbar-quota-key">总剩余积分</span>
-            </div>
-            <button className="primary" onClick={runAll} disabled={busy}>
+            <label className="switch" title="总闸：关掉后所有 agent 都不跑">
+              <input
+                type="checkbox"
+                checked={config.scheduler.enabled}
+                onChange={(e) => toggleMaster(e.target.checked)}
+              />
+              <span>总闸</span>
+            </label>
+            <button className="btn primary" onClick={runAll} disabled={busy}>
               {busy ? "签到中…" : "一键全部签到"}
             </button>
           </div>
@@ -323,88 +359,18 @@ export default function App() {
             authPending={authSession !== null}
             onCheckin={runOne}
             onRefreshQuota={refreshOneQuota}
+            onSetActive={setActive}
+            onLaunch={launch}
+            onRemove={removeAccount}
             onDiscover={() => discover(current.provider.id)}
             onAddAccount={startQoderAuth}
-            onRemove={removeAccount}
+            onScheduleChange={(id, patch) => patchSchedule(id, patch)}
           />
         ) : (
-          <div className="group-empty">
+          <div className="empty">
             <p>还没有任何 agent 分组。先在左侧选择一个平台添加账号。</p>
           </div>
         )}
-
-        <section className="scheduler">
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={config.scheduler.enabled}
-              onChange={(e) =>
-                updateConfig({
-                  ...config,
-                  scheduler: { ...config.scheduler, enabled: e.target.checked },
-                })
-              }
-            />
-            <span>自动签到</span>
-          </label>
-
-          <div className="window">
-            <span className="window-label">时间窗</span>
-            <input
-              className="time"
-              value={formatMinute(config.scheduler.startMinute)}
-              onChange={(e) => {
-                const m = parseMinute(e.target.value);
-                if (m !== null) {
-                  updateConfig({
-                    ...config,
-                    scheduler: { ...config.scheduler, startMinute: m },
-                  });
-                }
-              }}
-            />
-            <span className="window-dash">→</span>
-            <input
-              className="time"
-              value={formatMinute(config.scheduler.endMinute)}
-              onChange={(e) => {
-                const m = parseMinute(e.target.value);
-                if (m !== null) {
-                  updateConfig({
-                    ...config,
-                    scheduler: { ...config.scheduler, endMinute: m },
-                  });
-                }
-              }}
-            />
-            <span className="window-hint">窗内每账号随机错峰执行</span>
-          </div>
-
-          <div className="provider-toggles">
-            {overview.providers.map((p) => (
-              <label key={p.id} className="chip">
-                <input
-                  type="checkbox"
-                  checked={config.scheduler.providers[p.id] ?? true}
-                  onChange={(e) =>
-                    updateConfig({
-                      ...config,
-                      scheduler: {
-                        ...config.scheduler,
-                        providers: {
-                          ...config.scheduler.providers,
-                          [p.id]: e.target.checked,
-                        },
-                      },
-                    })
-                  }
-                />
-                <span className="chip-dot" style={{ background: p.accent }} />
-                {p.name}
-              </label>
-            ))}
-          </div>
-        </section>
 
         <LogPanel logs={logs} visible={logsOpen} onToggle={() => setLogsOpen((v) => !v)} />
 

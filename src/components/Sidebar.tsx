@@ -4,26 +4,26 @@ import { fmtPoints } from "../lib/api";
 interface Props {
   groups: AgentGroup[];
   selected: string;
-  activeCount: number;
   onSelect: (id: string) => void;
 }
 
 /**
- * 左侧 agent 分组栏 —— 布局参考 Cockpit Tools：
- * 每个 agent 一行，显示名称、账号数、剩余积分汇总。
+ * 左侧 agent 列表。
+ * 每行：强调色小方块 + 名称 + 账号数/状态角标 + 右侧剩余积分（等宽数字）。
  */
-export default function Sidebar({ groups, selected, activeCount, onSelect }: Props) {
+export default function Sidebar({ groups, selected, onSelect }: Props) {
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <span className="sidebar-title">Agent 分组</span>
-        <span className="sidebar-count">{activeCount} 个在线</span>
+        <span className="micro">Agents</span>
+        <span className="micro">{groups.length}</span>
       </div>
 
       <nav className="sidebar-list">
-        {groups.length === 0 && <p className="sidebar-empty">还没有账号</p>}
+        {groups.length === 0 && <p className="empty">还没有账号</p>}
         {groups.map((group) => {
           const isActive = group.provider.id === selected;
+          const remaining = group.totalRemaining;
           return (
             <button
               key={group.provider.id}
@@ -31,27 +31,24 @@ export default function Sidebar({ groups, selected, activeCount, onSelect }: Pro
               onClick={() => onSelect(group.provider.id)}
             >
               <span
-                className="side-icon"
+                className="side-dot"
                 style={{ background: group.provider.accent }}
-              >
-                {group.provider.name.slice(0, 1)}
-              </span>
+              />
               <span className="side-body">
                 <span className="side-name">{group.provider.name}</span>
                 <span className="side-sub">
                   {group.accounts.length} 个账号
                   {group.claimableCount > 0 ? (
-                    <em className="side-badge warn">{group.claimableCount} 可签</em>
+                    <em className="side-flag warn">
+                      {group.claimableCount} 待签
+                    </em>
                   ) : group.claimedToday > 0 ? (
-                    <em className="side-badge ok">{group.claimedToday} 已签</em>
+                    <em className="side-flag ok">{group.claimedToday} 已签</em>
                   ) : null}
                 </span>
               </span>
-              <span className="side-quota">
-                <span className="side-quota-num">
-                  {group.totalRemaining > 0 ? fmtPoints(group.totalRemaining) : "—"}
-                </span>
-                <span className="side-quota-label">剩余</span>
+              <span className={`side-remaining ${remaining > 0 ? "" : "empty"}`}>
+                {remaining > 0 ? fmtPoints(remaining) : "—"}
               </span>
             </button>
           );

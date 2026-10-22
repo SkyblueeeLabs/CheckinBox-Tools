@@ -31,6 +31,24 @@ export const api = {
     invoke<Account[]>("remove_account", { providerId, accountId }),
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (config: AppConfig) => invoke<AppConfig>("set_config", { config }),
+  setAgentSchedule: (
+    providerId: string,
+    enabled: boolean,
+    startMinute: number,
+    endMinute: number
+  ) =>
+    invoke<AppConfig>("set_agent_schedule", {
+      providerId,
+      enabled,
+      startMinute,
+      endMinute,
+    }),
+  setSchedulerEnabled: (enabled: boolean) =>
+    invoke<AppConfig>("set_scheduler_enabled", { enabled }),
+  setActiveAccount: (providerId: string, accountId: string) =>
+    invoke<AppConfig>("set_active_account", { providerId, accountId }),
+  launchClient: (providerId: string) =>
+    invoke<string>("launch_client", { providerId }),
   getLogs: (days = 7) => invoke<LogEntry[]>("get_logs", { days }),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
 };
@@ -57,7 +75,7 @@ export function parseMinute(text: string): number | null {
   return h * 60 + m;
 }
 
-/** 积分数取整显示，去掉无意义的小数；顺带把 -0 归一成 0 */
+/** 积分数取整显示；顺带把 -0 归一成 0 */
 export function fmtPoints(n: number): string {
   if (!Number.isFinite(n)) return "0";
   const rounded = Math.round(n);

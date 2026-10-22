@@ -88,6 +88,10 @@ pub struct ProviderView {
     pub supports_discovery: bool,
     /// 是否已配置账号
     pub configured: bool,
+    /// 本机是否装了该 agent 的客户端
+    pub has_client: bool,
+    /// 客户端可执行文件路径
+    pub client_exe: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -101,6 +105,26 @@ pub struct AccountView {
     pub quota_error: Option<String>,
     pub error: Option<String>,
     pub today_log: Option<LogEntry>,
+    /// 是否为该 agent 的当前账号
+    pub is_active: bool,
+    /// 客户端数据目录（项目/会话都在这里）
+    pub data_dir: Option<String>,
+    /// 本地项目数
+    pub project_count: usize,
+    /// 本地会话数
+    pub session_count: usize,
+}
+
+/// 单个 agent 的调度配置（前端用来渲染它自己的自动签到开关）。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentScheduleView {
+    pub enabled: bool,
+    pub start_minute: u32,
+    pub end_minute: u32,
+    pub account_count: usize,
+    pub today_claimed: usize,
+    pub today_claimable: usize,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -111,16 +135,10 @@ pub struct Overview {
     pub today_points: i64,
     pub claimed_count: usize,
     pub total_count: usize,
-    pub scheduler: SchedulerView,
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SchedulerView {
-    pub enabled: bool,
-    pub start_minute: u32,
-    pub end_minute: u32,
-    pub provider_enabled: BTreeMap<String, bool>,
+    /// 总闸
+    pub scheduler_enabled: bool,
+    /// 每个 agent 自己的调度配置（前端按 agent 渲染各自的开关）
+    pub agents: BTreeMap<String, AgentScheduleView>,
     /// 每个账号今天的计划执行时刻（分钟）
     pub plans: BTreeMap<String, u32>,
 }
@@ -199,6 +217,17 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             .find(|l| l.account_id == account.id && l.provider == account.provider)
             .cloned();
 
+        let is_active = config.active_of(&account.provider).as_deref() == Some(account.id.as_str());
+        let (data_dir, project_count, session_count) = match crate::core::launcher::account_stats(&account.provider) {
+            Some((p, s)) => (
+                crate::core::launcher::data_dir(&account.provider)
+                    .map(|d| d.to_string_lossy().to_string()),
+                p,
+                s,
+            ),
+            None => (None, 0, 0),
+        };
+
         accounts.push(AccountView {
             provider_name: provider.display_name().to_string(),
             accent: provider.accent().to_string(),
@@ -208,21 +237,56 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             quota_error,
             error,
             today_log,
+            is_active,
+            data_dir,
+            project_count,
+            session_count,
         });
     }
 
     let provider_views = state
         .providers
         .iter()
-        .map(|p| ProviderView {
-            id: p.id().to_string(),
-            name: p.display_name().to_string(),
-            accent: p.accent().to_string(),
-            docs_url: p.docs_url().to_string(),
-            supports_discovery: p.id() == "minimax",
-            configured: !store.list_of(p.id()).is_empty(),
+        .map(|p| {
+            let exe = crate::core::launcher::client_exe(p.id());
+            ProviderView {
+                id: p.id().to_string(),
+                name: p.display_name().to_string(),
+                accent: p.accent().to_string(),
+                docs_url: p.docs_url().to_string(),
+                supports_discovery: p.id() == "minimax",
+                configured: !store.list_of(p.id()).is_empty(),
+                has_client: exe.is_some(),
+                client_exe: exe.map(|p| p.to_string_lossy().to_string()),
+            }
         })
         .collect();
+
+    // 每个 agent 自己的调度配置
+    let mut agents_view: BTreeMap<String, AgentScheduleView> = BTreeMap::new();
+    for provider in state.providers.iter() {
+        let cfg = config.scheduler.agent(provider.id());
+        let list = store.list_of(provider.id());
+        let claimed = accounts
+            .iter()
+            .filter(|a| a.account.provider == provider.id() && a.status.as_ref().map(|s| s.state == ClaimState::Claimed).unwrap_or(false))
+            .count();
+        let claimable = accounts
+            .iter()
+            .filter(|a| a.account.provider == provider.id() && a.status.as_ref().map(|s| s.state == ClaimState::Claimable).unwrap_or(false))
+            .count();
+        agents_view.insert(
+            provider.id().to_string(),
+            AgentScheduleView {
+                enabled: cfg.enabled,
+                start_minute: cfg.start_minute,
+                end_minute: cfg.end_minute,
+                account_count: list.len(),
+                today_claimed: claimed,
+                today_claimable: claimable,
+            },
+        );
+    }
 
     let plans = scheduler
         .accounts
@@ -236,13 +300,9 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         today_points,
         accounts,
         providers: provider_views,
-        scheduler: SchedulerView {
-            enabled: config.scheduler.enabled,
-            start_minute: config.scheduler.start_minute,
-            end_minute: config.scheduler.end_minute,
-            provider_enabled: config.scheduler.providers.clone(),
-            plans,
-        },
+        scheduler_enabled: config.scheduler.enabled,
+        agents: agents_view,
+        plans,
     })
 }
 
@@ -486,13 +546,74 @@ pub async fn set_config(
     state: State<'_, AppState>,
     config: AppConfig,
 ) -> Result<AppConfig, String> {
-    if !config.scheduler.is_valid() {
-        return Err("调度时间窗不合法（起必须早于止）".into());
+    // 校验每个 agent 自己的时间窗
+    for (id, cfg) in &config.scheduler.agents {
+        if !cfg.is_valid() {
+            return Err(format!("{id} 的调度时间窗不合法（起必须早于止）"));
+        }
     }
     let mut guard = state.config.lock().unwrap();
     *guard = config;
     guard.save().map_err(|e| e.to_string())?;
     Ok(guard.clone())
+}
+
+/// 设置某个 agent 自己的自动签到配置（开关 + 时间窗）。
+#[tauri::command]
+pub async fn set_agent_schedule(
+    state: State<'_, AppState>,
+    provider_id: String,
+    enabled: bool,
+    start_minute: u32,
+    end_minute: u32,
+) -> Result<AppConfig, String> {
+    let mut guard = state.config.lock().unwrap();
+    let mut cfg = guard.scheduler.agent(&provider_id);
+    cfg.enabled = enabled;
+    cfg.start_minute = start_minute;
+    cfg.end_minute = end_minute;
+    if !cfg.is_valid() {
+        return Err("时间窗不合法（起必须早于止）".into());
+    }
+    guard.scheduler.set_agent(&provider_id, cfg);
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 切换某个 agent 的自动签到总闸（应急用）。
+#[tauri::command]
+pub async fn set_scheduler_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<AppConfig, String> {
+    let mut guard = state.config.lock().unwrap();
+    guard.scheduler.enabled = enabled;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 把某个账号设为该 agent 的当前账号（多账号切换）。
+#[tauri::command]
+pub async fn set_active_account(
+    state: State<'_, AppState>,
+    provider_id: String,
+    account_id: String,
+) -> Result<AppConfig, String> {
+    let store = state.store.lock().unwrap().clone();
+    if !store.contains(&provider_id, &account_id) {
+        return Err(format!("账号不存在：{account_id}"));
+    }
+    let mut guard = state.config.lock().unwrap();
+    guard.set_active(&provider_id, &account_id);
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 打开该 agent 的客户端（用当前账号的上下文）。
+#[tauri::command]
+pub async fn launch_client(provider_id: String) -> Result<String, String> {
+    let exe = crate::core::launcher::launch(&provider_id).map_err(|e| e.to_string())?;
+    Ok(exe.to_string_lossy().to_string())
 }
 
 /// 读取最近若干天的签到流水。
@@ -644,32 +765,51 @@ pub async fn scheduler_loop(app: AppHandle) {
         let today = scheduler::today();
         let now_minute = scheduler::now_minute();
 
+        // 按 agent 分组：每个 agent 有自己独立的时间窗
         let accounts = state.store.lock().unwrap().list();
-        let keys: Vec<String> = accounts
-            .iter()
-            .map(|a| AccountStore::key(&a.provider, &a.id))
-            .collect();
+        let mut window_by_provider: BTreeMap<String, (u32, u32)> = BTreeMap::new();
+        for account in &accounts {
+            if !window_by_provider.contains_key(&account.provider) {
+                let cfg = config.scheduler.agent(&account.provider);
+                window_by_provider
+                    .insert(account.provider.clone(), (cfg.start_minute, cfg.end_minute));
+            }
+        }
 
-        // 跨天重排计划
+        // 跨天重排计划（各 agent 用自己的时间窗）
         {
             let mut sched = state.scheduler.lock().unwrap();
-            sched.roll_over(
-                &today,
-                &keys,
-                config.scheduler.start_minute,
-                config.scheduler.end_minute,
-            );
+            for (provider, (start, end)) in &window_by_provider {
+                let provider_keys: Vec<String> = accounts
+                    .iter()
+                    .filter(|a| &a.provider == provider)
+                    .map(|a| AccountStore::key(&a.provider, &a.id))
+                    .collect();
+                sched.roll_over(&today, &provider_keys, *start, *end);
+            }
+            // 清掉已不属于任何 agent 的残留计划
+            let live: std::collections::HashSet<&String> = window_by_provider.keys().collect();
+            let stale: Vec<String> = sched
+                .accounts
+                .keys()
+                .filter(|k| {
+                    k.split(':')
+                        .next()
+                        .map(|p| !live.contains(&p.to_string()))
+                        .unwrap_or(true)
+                })
+                .cloned()
+                .collect();
+            for key in stale {
+                sched.accounts.remove(&key);
+            }
             let _ = sched.save();
         }
 
         for account in accounts {
-            let provider_enabled = config
-                .scheduler
-                .providers
-                .get(&account.provider)
-                .copied()
-                .unwrap_or(true);
-            if !provider_enabled {
+            // 每个 agent 自己管自己的开关
+            let agent_cfg = config.scheduler.agent(&account.provider);
+            if !agent_cfg.enabled || !agent_cfg.is_valid() {
                 continue;
             }
 

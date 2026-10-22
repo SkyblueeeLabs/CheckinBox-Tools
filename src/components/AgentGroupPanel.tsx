@@ -1,5 +1,5 @@
 import type { AgentGroup } from "../lib/types";
-import { fmtPoints } from "../lib/api";
+import { fmtPoints, formatMinute, parseMinute } from "../lib/api";
 import AccountCard from "./AccountCard";
 
 interface Props {
@@ -9,14 +9,22 @@ interface Props {
   authPending: boolean;
   onCheckin: (providerId: string, accountId: string, label: string) => void;
   onRefreshQuota: (providerId: string, accountId: string) => void;
+  onSetActive: (providerId: string, accountId: string) => void;
+  onLaunch: (providerId: string, accountId: string) => void;
+  onRemove: (providerId: string, accountId: string, label: string) => void;
   onDiscover: () => void;
   onAddAccount: () => void;
-  onRemove: (providerId: string, accountId: string, label: string) => void;
+  onScheduleChange: (
+    providerId: string,
+    patch: { enabled?: boolean; startMinute?: number; endMinute?: number }
+  ) => void;
 }
 
 /**
- * 单个 agent 分组的主面板。
- * 顶部是该 agent 的积分汇总条，下面是账号列表。
+ * 单个 agent 的面板。
+ *
+ * 自动签到配置**属于这个 agent 自己**（开关 + 时间窗），不再有全局时间窗 ——
+ * 这样 Qoder 这种 10:00 才刷新活动的平台可以单独配窗口。
  */
 export default function AgentGroupPanel({
   group,
@@ -25,85 +33,131 @@ export default function AgentGroupPanel({
   authPending,
   onCheckin,
   onRefreshQuota,
+  onSetActive,
+  onLaunch,
+  onRemove,
   onDiscover,
   onAddAccount,
-  onRemove,
+  onScheduleChange,
 }: Props) {
-  const { provider, accounts, totalRemaining, totalGranted } = group;
+  const { provider, accounts, schedule } = group;
+  const accent = provider.accent;
 
   return (
-    <section className="group" style={{ ["--accent" as string]: provider.accent }}>
-      <header className="group-head">
-        <div className="group-title">
-          <span className="group-icon">{provider.name.slice(0, 1)}</span>
+    <section className="panel" style={{ ["--agent-accent" as string]: accent }}>
+      <header className="panel-head">
+        <div className="panel-title">
+          <span className="panel-mark" />
           <div>
             <h2>{provider.name}</h2>
-            <p className="group-sub">
-              {accounts.length} 个账号 · 今日已签 {group.claimedToday} 个
+            <p className="panel-sub">
+              {accounts.length} 个账号 · 今日已签 {schedule.todayClaimed} 个
+              {schedule.todayClaimable > 0 ? ` · ${schedule.todayClaimable} 个可签` : ""}
             </p>
           </div>
         </div>
 
-        <div className="group-actions">
-          <button className="ghost" onClick={onDiscover} disabled={busy}>
-            从本机客户端导入
-          </button>
+        <div className="panel-actions">
+          {provider.hasClient && (
+            <button className="btn small" onClick={() => onLaunch(provider.id, "")} disabled={busy}>
+              打开 {provider.name}
+            </button>
+          )}
+          {provider.supportsDiscovery && (
+            <button className="btn small" onClick={onDiscover} disabled={busy}>
+              从本机导入
+            </button>
+          )}
           {provider.id === "qoder" && (
-            <button className="ghost" onClick={onAddAccount} disabled={busy || authPending}>
+            <button className="btn small" onClick={onAddAccount} disabled={busy || authPending}>
               {authPending ? "等待授权…" : "添加账号"}
             </button>
           )}
         </div>
       </header>
 
-      {accounts.length > 0 && (
-        <div className="group-totals">
-          <div className="total-cell">
-            <span className="total-num accent">{fmtPoints(totalRemaining)}</span>
-            <span className="total-key">剩余积分</span>
-          </div>
-          <div className="total-cell">
-            <span className="total-num">{fmtPoints(totalGranted)}</span>
-            <span className="total-key">累计发放</span>
-          </div>
-          <div className="total-cell">
-            <span className="total-num">
-              {accounts.filter((a) => a.status?.state === "claimable").length}
-            </span>
-            <span className="total-key">待签到</span>
-          </div>
-        </div>
-      )}
+      {/* 这个 agent 自己的自动签到 */}
+      <div className="sched">
+        <label className="switch">
+          <input
+            type="checkbox"
+            checked={schedule.enabled}
+            onChange={(e) => onScheduleChange(provider.id, { enabled: e.target.checked })}
+          />
+          <span>自动签到</span>
+        </label>
+
+        <span className="sched-label">时间窗</span>
+        <span className="sched-win">
+          <input
+            value={formatMinute(schedule.startMinute)}
+            onChange={(e) => {
+              const m = parseMinute(e.target.value);
+              if (m !== null) onScheduleChange(provider.id, { startMinute: m });
+            }}
+          />
+          <span className="sched-dash">→</span>
+          <input
+            value={formatMinute(schedule.endMinute)}
+            onChange={(e) => {
+              const m = parseMinute(e.target.value);
+              if (m !== null) onScheduleChange(provider.id, { endMinute: m });
+            }}
+          />
+        </span>
+        <span className="sched-hint">窗内每账号随机错峰执行</span>
+      </div>
 
       {accounts.length === 0 ? (
-        <div className="group-empty">
+        <div className="empty">
           <p>
             还没有账号。
             {provider.supportsDiscovery
-              ? "点「从本机客户端导入」读取本机登录态。"
+              ? "点「从本机导入」读取本机客户端登录态。"
               : "点「添加账号」走一次浏览器授权。"}
           </p>
         </div>
       ) : (
-        <div className="acct-list">
-          {accounts.map((view) => (
-            <AccountCard
-              key={`${view.account.provider}:${view.account.id}`}
-              view={view}
-              busy={busy}
-              quotaLoading={quotaLoadingId === `${view.account.provider}:${view.account.id}`}
-              onCheckin={() =>
-                onCheckin(view.account.provider, view.account.id, view.account.label)
-              }
-              onRefreshQuota={() =>
-                onRefreshQuota(view.account.provider, view.account.id)
-              }
-              onRemove={() =>
-                onRemove(view.account.provider, view.account.id, view.account.label)
-              }
-            />
-          ))}
-        </div>
+        <>
+          <div className="quota-stats" style={{ marginTop: 14, gap: 24 }}>
+            <div className="qstat">
+              <span className="q-label">剩余积分</span>
+              <span className="q-value" style={{ fontSize: 18, color: "var(--ok)" }}>
+                {fmtPoints(group.totalRemaining)}
+              </span>
+            </div>
+            <div className="qstat">
+              <span className="q-label">累计发放</span>
+              <span className="q-value" style={{ fontSize: 18 }}>
+                {fmtPoints(group.totalGranted)}
+              </span>
+            </div>
+          </div>
+
+          <div className="acct-list">
+            {accounts.map((view) => (
+              <AccountCard
+                key={`${view.account.provider}:${view.account.id}`}
+                view={view}
+                busy={busy}
+                quotaLoading={quotaLoadingId === `${view.account.provider}:${view.account.id}`}
+                onCheckin={() =>
+                  onCheckin(view.account.provider, view.account.id, view.account.label)
+                }
+                onRefreshQuota={() =>
+                  onRefreshQuota(view.account.provider, view.account.id)
+                }
+                onSetActive={() =>
+                  onSetActive(view.account.provider, view.account.id)
+                }
+                onLaunch={() => onLaunch(view.account.provider, view.account.id)}
+                onRemove={() =>
+                  onRemove(view.account.provider, view.account.id, view.account.label)
+                }
+              />
+            ))}
+          </div>
+        </>
       )}
     </section>
   );

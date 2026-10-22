@@ -24,6 +24,10 @@ pub fn run() {
             commands::remove_account,
             commands::get_config,
             commands::set_config,
+            commands::set_agent_schedule,
+            commands::set_scheduler_enabled,
+            commands::set_active_account,
+            commands::launch_client,
             commands::get_logs,
             commands::open_external,
         ])

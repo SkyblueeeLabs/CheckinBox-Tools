@@ -9,6 +9,7 @@
 
 pub mod config;
 pub mod dpapi;
+pub mod launcher;
 pub mod logging;
 pub mod paths;
 pub mod provider;

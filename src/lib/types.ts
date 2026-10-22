@@ -9,7 +9,6 @@ export interface CheckinStatus {
   bonusPoints: number;
 }
 
-/** 单个积分发放批次 */
 export interface CreditItem {
   creditType: string;
   granted: number;
@@ -19,7 +18,6 @@ export interface CreditItem {
   expireAtMs: number;
 }
 
-/** 积分总览：发放 / 已用 / 剩余 */
 export interface Quota {
   totalGranted: number;
   totalConsumed: number;
@@ -46,6 +44,12 @@ export interface AccountView {
   quotaError?: string | null;
   error?: string | null;
   todayLog?: LogEntry | null;
+  /** 是否为该 agent 的当前账号 */
+  isActive: boolean;
+  /** 客户端数据目录 */
+  dataDir?: string | null;
+  projectCount: number;
+  sessionCount: number;
 }
 
 export interface ProviderView {
@@ -55,14 +59,18 @@ export interface ProviderView {
   docsUrl: string;
   supportsDiscovery: boolean;
   configured: boolean;
+  hasClient: boolean;
+  clientExe?: string | null;
 }
 
-export interface SchedulerView {
+/** 单个 agent 自己的自动签到配置 */
+export interface AgentScheduleView {
   enabled: boolean;
   startMinute: number;
   endMinute: number;
-  providerEnabled: Record<string, boolean>;
-  plans: Record<string, number>;
+  accountCount: number;
+  todayClaimed: number;
+  todayClaimable: number;
 }
 
 export interface Overview {
@@ -71,10 +79,14 @@ export interface Overview {
   todayPoints: number;
   claimedCount: number;
   totalCount: number;
-  scheduler: SchedulerView;
+  /** 总闸 */
+  schedulerEnabled: boolean;
+  /** 每个 agent 自己的调度配置 */
+  agents: Record<string, AgentScheduleView>;
+  /** 每个账号今天的计划执行时刻（分钟） */
+  plans: Record<string, number>;
 }
 
-/** 侧边栏用的分组摘要 */
 export interface AgentGroup {
   provider: ProviderView;
   accounts: AccountView[];
@@ -82,6 +94,7 @@ export interface AgentGroup {
   totalGranted: number;
   claimableCount: number;
   claimedToday: number;
+  schedule: AgentScheduleView;
 }
 
 export interface AccountResult {
@@ -105,15 +118,21 @@ export interface LogEntry {
   message: string;
 }
 
-export interface SchedulerConfig {
+export interface AgentScheduleConfig {
   enabled: boolean;
   startMinute: number;
   endMinute: number;
-  providers: Record<string, boolean>;
+}
+
+export interface SchedulerConfig {
+  enabled: boolean;
+  agents: Record<string, AgentScheduleConfig>;
 }
 
 export interface AppConfig {
   scheduler: SchedulerConfig;
+  /** 每个 agent 当前激活的账号 id */
+  activeAccounts: Record<string, string>;
 }
 
 export interface DiscoveredAccount {

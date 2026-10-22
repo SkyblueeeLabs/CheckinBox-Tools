@@ -7,6 +7,8 @@ interface Props {
   quotaLoading: boolean;
   onCheckin: () => void;
   onRefreshQuota: () => void;
+  onSetActive: () => void;
+  onLaunch: () => void;
   onRemove: () => void;
 }
 
@@ -23,6 +25,8 @@ export default function AccountCard({
   quotaLoading,
   onCheckin,
   onRefreshQuota,
+  onSetActive,
+  onLaunch,
   onRemove,
 }: Props) {
   const { status, error, account } = view;
@@ -38,7 +42,11 @@ export default function AccountCard({
             <span className="acct-origin">{account.origin}</span>
           </div>
         </div>
-        <span className={`acct-badge ${state}`}>{STATE_TEXT[state] ?? state}</span>
+
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          {view.isActive && <span className="chip-active">当前账号</span>}
+          <span className={`acct-badge ${state}`}>{STATE_TEXT[state] ?? state}</span>
+        </div>
       </header>
 
       <QuotaCard
@@ -49,37 +57,59 @@ export default function AccountCard({
       />
 
       <div className="acct-signin">
-        {error ? (
-          <p className="acct-error">{error}</p>
-        ) : status ? (
-          <p className="acct-status-msg">{status.message}</p>
-        ) : (
-          <p className="acct-status-msg dim">正在读取签到状态…</p>
-        )}
+        <div style={{ minWidth: 0 }}>
+          {error ? (
+            <p className="acct-error">{error}</p>
+          ) : status ? (
+            <p className="acct-status-msg">{status.message}</p>
+          ) : (
+            <p className="acct-status-msg dim">正在读取签到状态…</p>
+          )}
 
-        <div className="acct-meta">
-          {status?.dayIndex ? <span>第 {status.dayIndex}/7 天</span> : null}
-          {status && status.streakDays > 0 ? (
-            <span>连签 {status.streakDays} 天</span>
-          ) : null}
-          {status && status.bonusPoints > 0 ? (
-            <span className="acct-bonus">额外 +{status.bonusPoints}</span>
-          ) : null}
+          <div className="acct-meta">
+            {status?.dayIndex ? <span>第 {status.dayIndex}/7 天</span> : null}
+            {status && status.streakDays > 0 ? (
+              <span>连签 {status.streakDays} 天</span>
+            ) : null}
+            {status && status.bonusPoints > 0 ? (
+              <span className="acct-bonus">额外 +{status.bonusPoints}</span>
+            ) : null}
+          </div>
         </div>
-      </div>
 
-      <footer className="acct-foot">
         <button
-          className="primary small"
+          className="btn small primary"
           onClick={onCheckin}
           disabled={busy || state !== "claimable"}
         >
-          {state === "claimable" ? "立即签到" : "已处理"}
+          {state === "claimable" ? "签到" : "已处理"}
         </button>
-        <button className="link" onClick={onRemove} disabled={busy}>
-          移除
-        </button>
-      </footer>
+      </div>
+
+      <div className="acct-local">
+        <span>
+          {view.projectCount} 项目 · {view.sessionCount} 会话
+        </span>
+        <div style={{ display: "flex", gap: 10 }}>
+          {!view.isActive && (
+            <button className="link" onClick={onSetActive} disabled={busy}>
+              设为当前
+            </button>
+          )}
+          <button className="link" onClick={onLaunch} disabled={busy}>
+            打开客户端
+          </button>
+          <button className="link" onClick={onRemove} disabled={busy}>
+            移除
+          </button>
+        </div>
+      </div>
+
+      {view.dataDir && (
+        <div className="acct-local">
+          <span className="path">{view.dataDir}</span>
+        </div>
+      )}
     </article>
   );
 }

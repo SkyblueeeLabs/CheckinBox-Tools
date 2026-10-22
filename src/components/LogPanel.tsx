@@ -32,7 +32,7 @@ export default function LogPanel({ logs, visible, onToggle }: Props) {
             {logs.map((log) => (
               <div key={log.id} className={`log-row ${log.status}`}>
                 <span className="log-ts">{log.timestamp.slice(5)}</span>
-                <span className="log-who">{log.label}</span>
+                <span>{log.label}</span>
                 <span className="log-what">{log.message}</span>
                 <span className="log-tag">{STATUS_TEXT[log.status] ?? log.status}</span>
                 {log.points > 0 ? (
