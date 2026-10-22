@@ -24,6 +24,7 @@ export const api = {
   addDiscoveredAccount: (providerId: string) =>
     invoke<Account[]>("add_discovered_account", { providerId }),
   beginQoderAuth: () => invoke<AuthChallenge>("begin_qoder_auth"),
+  pendingAuth: () => invoke<AuthChallenge[]>("pending_auth"),
   pollQoderAuth: (sessionId: string) =>
     invoke<Account | null>("poll_qoder_auth", { sessionId }),
   removeAccount: (providerId: string, accountId: string) =>

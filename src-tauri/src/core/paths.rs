@@ -31,6 +31,14 @@ pub fn scheduler_state_file() -> PathBuf {
     data_dir().join("scheduler_state.json")
 }
 
+/// 待完成的设备授权会话（Qoder 用）。
+///
+/// 设备授权需要用户在浏览器里点一次确认，这期间应用可能被重启或前端被热更新。
+/// 把会话落盘，启动时恢复，轮询才不会白等。
+pub fn auth_pending_file() -> PathBuf {
+    data_dir().join("auth_pending.json")
+}
+
 pub fn logs_dir() -> PathBuf {
     data_dir().join("logs")
 }

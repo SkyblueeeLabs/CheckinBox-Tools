@@ -35,7 +35,7 @@ impl AppState {
             store: Mutex::new(AccountStore::load().unwrap_or_default()),
             config: Mutex::new(AppConfig::load().unwrap_or_default()),
             scheduler: Mutex::new(SchedulerState::load().unwrap_or_default()),
-            auth_sessions: Mutex::new(BTreeMap::new()),
+            auth_sessions: Mutex::new(load_pending_auth()),
             providers: list,
             qoder,
         }
@@ -43,6 +43,33 @@ impl AppState {
 
     fn provider(&self, id: &str) -> Option<Arc<dyn Provider>> {
         self.providers.iter().find(|p| p.id() == id).cloned()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 待完成授权会话的持久化
+// ---------------------------------------------------------------------------
+
+/// 读回上次没完成的设备授权会话（应用重启后恢复轮询用）。
+fn load_pending_auth() -> BTreeMap<String, AuthSession> {
+    let path = crate::core::paths::auth_pending_file();
+    let Ok(raw) = std::fs::read_to_string(&path) else {
+        return BTreeMap::new();
+    };
+    let Ok(map) = serde_json::from_str::<BTreeMap<String, AuthSession>>(&raw) else {
+        return BTreeMap::new();
+    };
+    map
+}
+
+fn save_pending_auth(sessions: &BTreeMap<String, AuthSession>) {
+    let path = crate::core::paths::auth_pending_file();
+    if sessions.is_empty() {
+        let _ = std::fs::remove_file(&path);
+        return;
+    }
+    if let Ok(text) = serde_json::to_string_pretty(sessions) {
+        let _ = crate::core::paths::atomic_write(&path, text.as_bytes());
     }
 }
 
@@ -377,12 +404,25 @@ pub async fn begin_qoder_auth(state: State<'_, AppState>) -> Result<AuthChalleng
         session_id: session.id.clone(),
         auth_url: session.auth_url.clone(),
     };
-    state
-        .auth_sessions
-        .lock()
-        .unwrap()
-        .insert(session.id.clone(), session);
+    {
+        let mut sessions = state.auth_sessions.lock().unwrap();
+        sessions.insert(session.id.clone(), session);
+        save_pending_auth(&sessions);
+    }
     Ok(challenge)
+}
+
+/// 取当前所有待完成的授权会话（前端启动时恢复轮询用）。
+#[tauri::command]
+pub async fn pending_auth(state: State<'_, AppState>) -> Result<Vec<AuthChallenge>, String> {
+    let sessions = state.auth_sessions.lock().unwrap().clone();
+    Ok(sessions
+        .into_values()
+        .map(|s| AuthChallenge {
+            session_id: s.id,
+            auth_url: s.auth_url,
+        })
+        .collect())
 }
 
 /// 轮询 Qoder 设备授权结果；`None` 表示用户还没确认。
@@ -408,7 +448,11 @@ pub async fn poll_qoder_auth(
         Ok(Some((account, cred))) => {
             let mut store = state.store.lock().unwrap();
             store.upsert(account.clone(), &cred).map_err(|e| e.to_string())?;
-            state.auth_sessions.lock().unwrap().remove(&session_id);
+            {
+                let mut sessions = state.auth_sessions.lock().unwrap();
+                sessions.remove(&session_id);
+                save_pending_auth(&sessions);
+            }
             Ok(Some(account))
         }
         Ok(None) => Ok(None),

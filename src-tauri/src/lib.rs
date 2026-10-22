@@ -19,6 +19,7 @@ pub fn run() {
             commands::discover_accounts,
             commands::add_discovered_account,
             commands::begin_qoder_auth,
+            commands::pending_auth,
             commands::poll_qoder_auth,
             commands::remove_account,
             commands::get_config,

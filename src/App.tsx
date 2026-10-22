@@ -59,6 +59,7 @@ export default function App() {
   const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [authSession, setAuthSession] = useState<string | null>(null);
+  const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [logsOpen, setLogsOpen] = useState(true);
   const toastSeq = useRef(0);
 
@@ -185,6 +186,7 @@ export default function App() {
     try {
       const challenge = await api.beginQoderAuth();
       setAuthSession(challenge.sessionId);
+      setAuthUrl(challenge.authUrl);
       await api.openExternal(challenge.authUrl);
       pushToast("warn", "请在浏览器里用要登录的账号确认授权");
     } catch (e) {
@@ -210,6 +212,25 @@ export default function App() {
     }, 2500);
     return () => clearInterval(timer);
   }, [authSession, pushToast, refresh]);
+
+  // 应用重启后恢复未完成的授权轮询（会话已落盘）
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const pending = await api.pendingAuth();
+        if (!cancelled && pending.length > 0) {
+          setAuthSession(pending[0].sessionId);
+          setAuthUrl(pending[0].authUrl);
+        }
+      } catch {
+        /* 忽略：没有待完成会话时接口也不会报错 */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const removeAccount = async (providerId: string, accountId: string, label: string) => {
     try {
@@ -254,6 +275,24 @@ export default function App() {
       />
 
       <div className="main">
+        {authSession && authUrl && (
+          <div className="auth-banner">
+            <div className="auth-text">
+              <strong>等待 Qoder 授权确认</strong>
+              <span>
+                已在浏览器打开授权页。若没打开或已关闭，
+                <button className="link" onClick={() => api.openExternal(authUrl)}>
+                  点这里重新打开
+                </button>
+                ，用要登录的账号点「确认授权」。
+              </span>
+            </div>
+            <button className="ghost" onClick={() => setAuthSession(null)}>
+              取消
+            </button>
+          </div>
+        )}
+
         <header className="topbar">
           <div className="topbar-left">
             <h1>聚合签到</h1>
