@@ -1,0 +1,636 @@
+//! Tauri 命令层：UI 与后端之间的唯一入口。
+
+use std::collections::BTreeMap;
+use std::sync::{Arc, Mutex};
+
+use serde::{Deserialize, Serialize};
+use tauri::{AppHandle, Emitter, Manager, State};
+
+use crate::core::config::{AppConfig, SchedulerConfig};
+use crate::core::logging::{self, LogEntry};
+use crate::core::provider::{Account, CheckinStatus, ClaimState, Provider};
+use crate::core::scheduler::{self, SchedulerState};
+use crate::core::store::AccountStore;
+use crate::providers;
+use crate::providers::qoder::AuthSession;
+
+/// 全局应用状态。
+pub struct AppState {
+    pub store: Mutex<AccountStore>,
+    pub config: Mutex<AppConfig>,
+    pub scheduler: Mutex<SchedulerState>,
+    pub auth_sessions: Mutex<BTreeMap<String, AuthSession>>,
+    pub providers: Vec<Arc<dyn Provider>>,
+    /// Qoder 适配器的具体类型（设备授权不走通用 trait，需要单独拿到）
+    pub qoder: Arc<crate::providers::qoder::QoderProvider>,
+}
+
+impl AppState {
+    pub fn new() -> Self {
+        let qoder = Arc::new(crate::providers::qoder::QoderProvider::new());
+        let list: Vec<Arc<dyn Provider>> = vec![
+            Arc::new(crate::providers::minimax::MiniMaxProvider::new()),
+            qoder.clone(),
+        ];
+        Self {
+            store: Mutex::new(AccountStore::load().unwrap_or_default()),
+            config: Mutex::new(AppConfig::load().unwrap_or_default()),
+            scheduler: Mutex::new(SchedulerState::load().unwrap_or_default()),
+            auth_sessions: Mutex::new(BTreeMap::new()),
+            providers: list,
+            qoder,
+        }
+    }
+
+    fn provider(&self, id: &str) -> Option<Arc<dyn Provider>> {
+        self.providers.iter().find(|p| p.id() == id).cloned()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 返回给前端的数据结构
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderView {
+    pub id: String,
+    pub name: String,
+    pub accent: String,
+    pub docs_url: String,
+    /// 是否支持从本机客户端自动发现账号
+    pub supports_discovery: bool,
+    /// 是否已配置账号
+    pub configured: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountView {
+    pub account: Account,
+    pub provider_name: String,
+    pub accent: String,
+    pub status: Option<CheckinStatus>,
+    pub error: Option<String>,
+    pub today_log: Option<LogEntry>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Overview {
+    pub accounts: Vec<AccountView>,
+    pub providers: Vec<ProviderView>,
+    pub today_points: i64,
+    pub claimed_count: usize,
+    pub total_count: usize,
+    pub scheduler: SchedulerView,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SchedulerView {
+    pub enabled: bool,
+    pub start_minute: u32,
+    pub end_minute: u32,
+    pub provider_enabled: BTreeMap<String, bool>,
+    /// 每个账号今天的计划执行时刻（分钟）
+    pub plans: BTreeMap<String, u32>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountResult {
+    pub account_id: String,
+    pub provider: String,
+    pub label: String,
+    /// `success` / `already` / `failed` / `skipped`
+    pub status: String,
+    pub points: i64,
+    pub message: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DiscoveredAccount {
+    pub account: Account,
+    pub provider: String,
+    pub already_added: bool,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AuthChallenge {
+    pub session_id: String,
+    pub auth_url: String,
+}
+
+// ---------------------------------------------------------------------------
+// 命令
+// ---------------------------------------------------------------------------
+
+/// 汇总所有账号的今日状态。
+#[tauri::command]
+pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
+    let store = state.store.lock().unwrap().clone();
+    let config = state.config.lock().unwrap().clone();
+    let scheduler = state.scheduler.lock().unwrap().clone();
+    let logs = logging::recent(1).unwrap_or_default();
+
+    let mut accounts = Vec::new();
+    let mut today_points = 0i64;
+    let mut claimed_count = 0usize;
+
+    for account in store.list() {
+        let provider = match state.provider(&account.provider) {
+            Some(p) => p,
+            None => continue,
+        };
+        let key = AccountStore::key(&account.provider, &account.id);
+
+        let (status, error) = match store.credential(&account.provider, &account.id) {
+            Ok(cred) => match provider.status(&account, &cred).await {
+                Ok(s) => {
+                    if s.state == ClaimState::Claimed {
+                        claimed_count += 1;
+                    }
+                    today_points += if s.state == ClaimState::Claimed { s.points } else { 0 };
+                    (Some(s), None)
+                }
+                Err(e) => (None, Some(e.to_string())),
+            },
+            Err(e) => (None, Some(e.to_string())),
+        };
+
+        let today_log = logs
+            .iter()
+            .find(|l| l.account_id == account.id && l.provider == account.provider)
+            .cloned();
+
+        accounts.push(AccountView {
+            provider_name: provider.display_name().to_string(),
+            accent: provider.accent().to_string(),
+            account,
+            status,
+            error,
+            today_log,
+        });
+    }
+
+    let provider_views = state
+        .providers
+        .iter()
+        .map(|p| ProviderView {
+            id: p.id().to_string(),
+            name: p.display_name().to_string(),
+            accent: p.accent().to_string(),
+            docs_url: p.docs_url().to_string(),
+            supports_discovery: p.id() == "minimax",
+            configured: !store.list_of(p.id()).is_empty(),
+        })
+        .collect();
+
+    let plans = scheduler
+        .accounts
+        .iter()
+        .map(|(k, v)| (k.clone(), v.scheduled_minute))
+        .collect();
+
+    Ok(Overview {
+        total_count: accounts.len(),
+        claimed_count,
+        today_points,
+        accounts,
+        providers: provider_views,
+        scheduler: SchedulerView {
+            enabled: config.scheduler.enabled,
+            start_minute: config.scheduler.start_minute,
+            end_minute: config.scheduler.end_minute,
+            provider_enabled: config.scheduler.providers.clone(),
+            plans,
+        },
+    })
+}
+
+/// 对单个账号执行签到。
+#[tauri::command]
+pub async fn checkin_account(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    provider_id: String,
+    account_id: String,
+) -> Result<AccountResult, String> {
+    let Some(provider) = state.provider(&provider_id) else {
+        return Err(format!("未知平台：{provider_id}"));
+    };
+    let store = state.store.lock().unwrap().clone();
+    let Some(account) = store
+        .list_of(&provider_id)
+        .into_iter()
+        .find(|a| a.id == account_id)
+    else {
+        return Err(format!("账号不存在：{account_id}"));
+    };
+    let cred = store
+        .credential(&provider_id, &account_id)
+        .map_err(|e| e.to_string())?;
+
+    let result = run_checkin(&app, provider.as_ref(), &account, &cred).await;
+
+    // 手动执行后清掉「今日已签」标记，交给调度器重新判定状态。
+    if result.status != "failed" {
+        let mut sched = state.scheduler.lock().unwrap();
+        sched.clear_done(&AccountStore::key(&provider_id, &account_id));
+        let _ = sched.save();
+    }
+    Ok(result)
+}
+
+/// 对所有账号执行签到。
+#[tauri::command]
+pub async fn checkin_all(app: AppHandle, state: State<'_, AppState>) -> Result<Vec<AccountResult>, String> {
+    Ok(checkin_all_inner(app, &state).await)
+}
+
+/// 对所有账号执行签到（供托盘菜单等非命令入口复用）。
+pub async fn checkin_all_inner(app: AppHandle, state: &AppState) -> Vec<AccountResult> {
+    let store = state.store.lock().unwrap().clone();
+    let mut out = Vec::new();
+    for account in store.list() {
+        let Some(provider) = state.provider(&account.provider) else {
+            continue;
+        };
+        let cred = match store.credential(&account.provider, &account.id) {
+            Ok(c) => c,
+            Err(e) => {
+                out.push(AccountResult {
+                    account_id: account.id.clone(),
+                    provider: account.provider.clone(),
+                    label: account.label.clone(),
+                    status: "failed".into(),
+                    points: 0,
+                    message: e.to_string(),
+                });
+                continue;
+            }
+        };
+        out.push(run_checkin(&app, provider.as_ref(), &account, &cred).await);
+    }
+    out
+}
+
+/// 从本机客户端自动发现已登录账号（不写盘）。
+#[tauri::command]
+pub async fn discover_accounts(state: State<'_, AppState>) -> Result<Vec<DiscoveredAccount>, String> {
+    let store = state.store.lock().unwrap().clone();
+    let mut out = Vec::new();
+    for provider in state.providers.iter() {
+        if let Ok(found) = provider.discover().await {
+            for (account, _) in found {
+                let already = store.contains(&account.provider, &account.id);
+                out.push(DiscoveredAccount {
+                    provider: account.provider.clone(),
+                    already_added: already,
+                    account,
+                });
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// 把发现的账号加入账号池。
+#[tauri::command]
+pub async fn add_discovered_account(
+    state: State<'_, AppState>,
+    provider_id: String,
+) -> Result<Vec<Account>, String> {
+    let Some(provider) = state.provider(&provider_id) else {
+        return Err(format!("未知平台：{provider_id}"));
+    };
+    let found = provider.discover().await.map_err(|e| e.to_string())?;
+    let mut store = state.store.lock().unwrap();
+    for (account, cred) in found {
+        store.upsert(account, &cred).map_err(|e| e.to_string())?;
+    }
+    Ok(store.list())
+}
+
+/// 发起 Qoder 设备授权：返回一个需要在浏览器里确认的地址。
+#[tauri::command]
+pub async fn begin_qoder_auth(state: State<'_, AppState>) -> Result<AuthChallenge, String> {
+    let Some(provider) = state.provider("qoder") else {
+        return Err("未注册 Qoder 适配器".into());
+    };
+    let _ = provider;
+    let qoder = state.qoder.clone();
+    let session = qoder.begin_authorization().map_err(|e| e.to_string())?;
+    let challenge = AuthChallenge {
+        session_id: session.id.clone(),
+        auth_url: session.auth_url.clone(),
+    };
+    state
+        .auth_sessions
+        .lock()
+        .unwrap()
+        .insert(session.id.clone(), session);
+    Ok(challenge)
+}
+
+/// 轮询 Qoder 设备授权结果；`None` 表示用户还没确认。
+#[tauri::command]
+pub async fn poll_qoder_auth(
+    state: State<'_, AppState>,
+    session_id: String,
+) -> Result<Option<Account>, String> {
+    let session = {
+        let mut sessions = state.auth_sessions.lock().unwrap();
+        sessions.get(&session_id).cloned()
+    };
+    let Some(session) = session else {
+        return Err("授权会话已过期，请重新发起".into());
+    };
+    let Some(provider) = state.provider("qoder") else {
+        return Err("未注册 Qoder 适配器".into());
+    };
+    let _ = provider;
+    let qoder = state.qoder.clone();
+
+    match qoder.poll_authorization(&session).await {
+        Ok(Some((account, cred))) => {
+            let mut store = state.store.lock().unwrap();
+            store.upsert(account.clone(), &cred).map_err(|e| e.to_string())?;
+            state.auth_sessions.lock().unwrap().remove(&session_id);
+            Ok(Some(account))
+        }
+        Ok(None) => Ok(None),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
+/// 从账号池移除账号。
+#[tauri::command]
+pub async fn remove_account(
+    state: State<'_, AppState>,
+    provider_id: String,
+    account_id: String,
+) -> Result<Vec<Account>, String> {
+    let mut store = state.store.lock().unwrap();
+    store
+        .remove(&provider_id, &account_id)
+        .map_err(|e| e.to_string())?;
+    Ok(store.list())
+}
+
+/// 读取配置。
+#[tauri::command]
+pub async fn get_config(state: State<'_, AppState>) -> Result<AppConfig, String> {
+    Ok(state.config.lock().unwrap().clone())
+}
+
+/// 写回配置。
+#[tauri::command]
+pub async fn set_config(
+    state: State<'_, AppState>,
+    config: AppConfig,
+) -> Result<AppConfig, String> {
+    if !config.scheduler.is_valid() {
+        return Err("调度时间窗不合法（起必须早于止）".into());
+    }
+    let mut guard = state.config.lock().unwrap();
+    *guard = config;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 读取最近若干天的签到流水。
+#[tauri::command]
+pub async fn get_logs(days: Option<i64>) -> Result<Vec<LogEntry>, String> {
+    logging::recent(days.unwrap_or(7)).map_err(|e| e.to_string())
+}
+
+/// 在系统默认浏览器里打开链接（Qoder 授权页等）。
+#[tauri::command]
+pub async fn open_external(url: String) -> Result<(), String> {
+    if !(url.starts_with("https://") || url.starts_with("http://")) {
+        return Err("只允许打开 http(s) 链接".into());
+    }
+    open::that(url).map_err(|e| e.to_string())
+}
+
+// ---------------------------------------------------------------------------
+// 内部
+// ---------------------------------------------------------------------------
+
+/// 核心签到流程：查状态 → 需要则领取 → 落流水 → 广播进度。
+async fn run_checkin(
+    app: &AppHandle,
+    provider: &dyn Provider,
+    account: &Account,
+    cred: &serde_json::Value,
+) -> AccountResult {
+    let emit = |result: &AccountResult| {
+        let _ = app.emit("checkin-progress", result);
+    };
+
+    let status = match provider.status(account, cred).await {
+        Ok(s) => s,
+        Err(e) => {
+            let result = AccountResult {
+                account_id: account.id.clone(),
+                provider: account.provider.clone(),
+                label: account.label.clone(),
+                status: "failed".into(),
+                points: 0,
+                message: e.to_string(),
+            };
+            let _ = logging::append(&LogEntry::new(
+                &account.provider,
+                &account.id,
+                &account.label,
+                "failed",
+                0,
+                &result.message,
+            ));
+            emit(&result);
+            return result;
+        }
+    };
+
+    if status.state != ClaimState::Claimable {
+        let result = AccountResult {
+            account_id: account.id.clone(),
+            provider: account.provider.clone(),
+            label: account.label.clone(),
+            status: if status.state == ClaimState::Claimed {
+                "already".into()
+            } else {
+                "skipped".into()
+            },
+            points: status.points,
+            message: if status.message.is_empty() {
+                "今日无签到活动".into()
+            } else {
+                status.message.clone()
+            },
+        };
+        let _ = logging::append(&LogEntry::new(
+            &account.provider,
+            &account.id,
+            &account.label,
+            &result.status,
+            result.points,
+            &result.message,
+        ));
+        emit(&result);
+        return result;
+    }
+
+    let outcome = match provider.claim(account, cred).await {
+        Ok(o) => o,
+        Err(e) => {
+            let result = AccountResult {
+                account_id: account.id.clone(),
+                provider: account.provider.clone(),
+                label: account.label.clone(),
+                status: "failed".into(),
+                points: 0,
+                message: e.to_string(),
+            };
+            let _ = logging::append(&LogEntry::new(
+                &account.provider,
+                &account.id,
+                &account.label,
+                "failed",
+                0,
+                &result.message,
+            ));
+            emit(&result);
+            return result;
+        }
+    };
+
+    let result = AccountResult {
+        account_id: account.id.clone(),
+        provider: account.provider.clone(),
+        label: account.label.clone(),
+        status: if outcome.state == ClaimState::Claimed {
+            "success".into()
+        } else {
+            "failed".into()
+        },
+        points: outcome.points,
+        message: outcome.message.clone(),
+    };
+    let _ = logging::append(&LogEntry::new(
+        &account.provider,
+        &account.id,
+        &account.label,
+        &result.status,
+        result.points,
+        &result.message,
+    ));
+    emit(&result);
+    result
+}
+
+/// 调度器后台循环：每 30 秒检查一次是否有到点的账号。
+pub async fn scheduler_loop(app: AppHandle) {
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(30)).await;
+
+        let state = match app.try_state::<AppState>() {
+            Some(s) => s,
+            None => continue,
+        };
+
+        let config = state.config.lock().unwrap().clone();
+        if !config.scheduler.enabled {
+            continue;
+        }
+
+        let today = scheduler::today();
+        let now_minute = scheduler::now_minute();
+
+        let accounts = state.store.lock().unwrap().list();
+        let keys: Vec<String> = accounts
+            .iter()
+            .map(|a| AccountStore::key(&a.provider, &a.id))
+            .collect();
+
+        // 跨天重排计划
+        {
+            let mut sched = state.scheduler.lock().unwrap();
+            sched.roll_over(
+                &today,
+                &keys,
+                config.scheduler.start_minute,
+                config.scheduler.end_minute,
+            );
+            let _ = sched.save();
+        }
+
+        for account in accounts {
+            let provider_enabled = config
+                .scheduler
+                .providers
+                .get(&account.provider)
+                .copied()
+                .unwrap_or(true);
+            if !provider_enabled {
+                continue;
+            }
+
+            let key = AccountStore::key(&account.provider, &account.id);
+            let (done, minute) = {
+                let sched = state.scheduler.lock().unwrap();
+                (
+                    sched.is_done(&key, &today),
+                    sched.minute_of(&key).unwrap_or(u32::MAX),
+                )
+            };
+            if done || minute == u32::MAX || now_minute < minute {
+                continue;
+            }
+            // 只在计划分钟之后的第一个 tick 执行，避免同一分钟内重复触发
+            if now_minute > minute + 1 {
+                continue;
+            }
+
+            let Some(provider) = state.provider(&account.provider) else {
+                continue;
+            };
+            let cred = match state.store.lock().unwrap().credential(&account.provider, &account.id)
+            {
+                Ok(c) => c,
+                Err(e) => {
+                    let result = AccountResult {
+                        account_id: account.id.clone(),
+                        provider: account.provider.clone(),
+                        label: account.label.clone(),
+                        status: "failed".into(),
+                        points: 0,
+                        message: e.to_string(),
+                    };
+                    let _ = logging::append(&LogEntry::new(
+                        &account.provider,
+                        &account.id,
+                        &account.label,
+                        "failed",
+                        0,
+                        &result.message,
+                    ));
+                    let _ = app.emit("checkin-progress", &result);
+                    continue;
+                }
+            };
+
+            let result = run_checkin(&app, provider.as_ref(), &account, &cred).await;
+
+            let mut sched = state.scheduler.lock().unwrap();
+            if result.status != "failed" {
+                sched.mark_done(&key, &today);
+            }
+            let _ = sched.save();
+        }
+    }
+}

@@ -1,0 +1,42 @@
+[package]
+name = "agent-checkin-tools"
+version = "0.1.0"
+description = "聚合 AI 编程工具每日签到"
+authors = ["Skyblueee"]
+edition = "2021"
+rust-version = "1.77"
+
+[lib]
+name = "agent_checkin_tools_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = [
+    "json",
+    "gzip",
+    "default-tls",
+] }
+chrono = { version = "0.4", features = ["serde", "clock"] }
+base64 = "0.22"
+sha2 = "0.10"
+getrandom = "0.2"
+uuid = { version = "1", features = ["v4"] }
+anyhow = "1"
+thiserror = "2"
+async-trait = "0.1"
+dirs = "6"
+open = "5"
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true
