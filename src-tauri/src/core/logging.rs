@@ -67,13 +67,31 @@ pub fn append(entry: &LogEntry) -> Result<()> {
 }
 
 /// 读取最近 `days` 天的流水，按时间倒序。
+///
+/// 实现要点：按月分文件，**每个月只读一次**，再按日期区间过滤。
+/// 早先的版本对区间内每天都重读一遍整月文件，导致同一条记录重复 N 次。
 pub fn recent(days: i64) -> Result<Vec<LogEntry>> {
+    let days = days.max(1);
     let today = Local::now().date_naive();
-    let mut out = Vec::new();
+    let oldest = today - chrono::Duration::days(days - 1);
+    let oldest_str = oldest.format("%Y-%m-%d").to_string();
+    let today_str = today.format("%Y-%m-%d").to_string();
 
-    for offset in 0..days.max(1) {
-        let date = today - chrono::Duration::days(offset);
-        let month = date.format("%Y-%m").to_string();
+    // 收集区间覆盖到的月份（去重）
+    let mut months: Vec<String> = Vec::new();
+    let mut cursor = oldest;
+    while cursor <= today {
+        let month = cursor.format("%Y-%m").to_string();
+        if months.last().map(|m| m != &month).unwrap_or(true) {
+            months.push(month);
+        }
+        cursor += chrono::Duration::days(1);
+    }
+
+    let mut out: Vec<LogEntry> = Vec::new();
+    let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+    for month in months {
         let path = log_file(&month);
         if !path.exists() {
             continue;
@@ -83,10 +101,14 @@ pub fn recent(days: i64) -> Result<Vec<LogEntry>> {
             if line.trim().is_empty() {
                 continue;
             }
-            if let Ok(entry) = serde_json::from_str::<LogEntry>(line) {
-                if entry.date >= date.format("%Y-%m-%d").to_string() {
-                    out.push(entry);
-                }
+            let Ok(entry) = serde_json::from_str::<LogEntry>(line) else {
+                continue;
+            };
+            if entry.date < oldest_str || entry.date > today_str {
+                continue;
+            }
+            if seen.insert(entry.id.clone()) {
+                out.push(entry);
             }
         }
     }

@@ -100,6 +100,66 @@ fn local_label() -> String {
         .unwrap_or_else(|| "本机账号".to_string())
 }
 
+impl MiniMaxProvider {
+    /// 带一次重试的 GET。
+    ///
+    /// MiniMax 的 token 约 1 小时过期，客户端续期有几分钟空窗；
+    /// 空窗内请求会失败，等 2 秒重读本机登录态再试一次就能恢复。
+    async fn get_json(&self, url: &str, cred: &Value) -> Result<Value> {
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 0..2 {
+            let token = current_token(cred)?;
+            match self
+                .http
+                .get(url)
+                .bearer_auth(&token)
+                .header("accept", "application/json")
+                .header("accept-language", "zh-CN,zh;q=0.9")
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    return resp.json().await.map_err(|e| anyhow!("解析响应失败：{e}"));
+                }
+                Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status().as_u16())),
+                Err(e) => last_err = Some(anyhow!("{e}")),
+            }
+            if attempt == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow!("请求失败")))
+    }
+
+    /// 带一次重试的 POST（领取用）。
+    async fn post_json(&self, url: &str, cred: &Value) -> Result<Value> {
+        let mut last_err: Option<anyhow::Error> = None;
+        for attempt in 0..2 {
+            let token = current_token(cred)?;
+            match self
+                .http
+                .post(url)
+                .bearer_auth(&token)
+                .header("accept", "application/json")
+                .header("content-type", "application/json")
+                .json(&json!({}))
+                .send()
+                .await
+            {
+                Ok(resp) if resp.status().is_success() => {
+                    return resp.json().await.map_err(|e| anyhow!("解析响应失败：{e}"));
+                }
+                Ok(resp) => last_err = Some(anyhow!("HTTP {}", resp.status().as_u16())),
+                Err(e) => last_err = Some(anyhow!("{e}")),
+            }
+            if attempt == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(2000)).await;
+            }
+        }
+        Err(last_err.unwrap_or_else(|| anyhow!("请求失败")))
+    }
+}
+
 /// 取当前可用的 access token。
 ///
 /// MiniMax 的 token 生命周期很短（实测约 1 小时），而本机客户端会自动续期
@@ -251,21 +311,10 @@ impl Provider for MiniMaxProvider {
     }
 
     async fn status(&self, _account: &Account, cred: &Value) -> Result<CheckinStatus> {
-        let token = &current_token(cred)?;
-
         let tz = urlenc(&tz::iana_timezone());
         let url = format!("{BASE}{STATUS_PATH}?timezone_id={tz}");
 
-        let body: Value = self
-            .http
-            .get(url)
-            .bearer_auth(token)
-            .header("accept", "application/json")
-            .header("accept-language", "zh-CN,zh;q=0.9")
-            .send()
-            .await?
-            .json()
-            .await?;
+        let body: Value = self.get_json(&url, cred).await?;
 
         check_base_resp(&body)?;
 
@@ -306,22 +355,10 @@ impl Provider for MiniMaxProvider {
     }
 
     async fn claim(&self, _account: &Account, cred: &Value) -> Result<ClaimOutcome> {
-        let token = &current_token(cred)?;
-
         let tz = urlenc(&tz::iana_timezone());
         let url = format!("{BASE}{CLAIM_PATH}?timezone_id={tz}");
 
-        let body: Value = self
-            .http
-            .post(url)
-            .bearer_auth(token)
-            .header("accept", "application/json")
-            .header("content-type", "application/json")
-            .json(&json!({}))
-            .send()
-            .await?
-            .json()
-            .await?;
+        let body: Value = self.post_json(&url, cred).await?;
 
         check_base_resp(&body)?;
 
@@ -339,21 +376,10 @@ impl Provider for MiniMaxProvider {
     }
 
     async fn quota(&self, _account: &Account, cred: &Value) -> Result<Quota> {
-        let token = &current_token(cred)?;
-
         let tz = urlenc(&tz::iana_timezone());
         let url = format!("{BASE}/minimax-cloud/api/v1/credit/details?timezone_id={tz}");
 
-        let body: Value = self
-            .http
-            .get(url)
-            .bearer_auth(token)
-            .header("accept", "application/json")
-            .header("accept-language", "zh-CN,zh;q=0.9")
-            .send()
-            .await?
-            .json()
-            .await?;
+        let body: Value = self.get_json(&url, cred).await?;
 
         check_base_resp(&body)?;
 

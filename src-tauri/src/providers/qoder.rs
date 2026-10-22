@@ -27,7 +27,7 @@ use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 use crate::core::provider::{
-    Account, CheckinStatus, ClaimOutcome, ClaimState, Provider, Quota,
+    Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
 };
 
 const WEB_BASE: &str = "https://qoder.com.cn";
@@ -123,35 +123,45 @@ impl QoderProvider {
             return Err(anyhow!("授权失败（HTTP {}）：{msg}", status.as_u16()));
         }
 
+        // 注意：这个接口的响应**没有 data 包装层**，token 直接在顶层。
+        // （实测：{"token":"dt-...","user_id":"...","expires_at":"..."}）
+        // 所以 data 缺失时回退到整个 body，不能当成"还没授权"。
+        let empty = serde_json::Map::new();
         let data = body
             .get("data")
             .and_then(|d| d.as_object())
-            .cloned()
-            .unwrap_or_default();
-        let token = data
-            .get("token")
-            .or_else(|| data.get("access_token"))
-            .or_else(|| data.get("device_token"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or(&empty);
+        let lookup = |keys: &[&str]| -> Option<String> {
+            // 先在有 data 包装时找，再在整个 body 里找
+            for k in keys {
+                if let Some(v) = data.get(*k).and_then(|v| v.as_str()) {
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+            for k in keys {
+                if let Some(v) = body.get(*k).and_then(|v| v.as_str()) {
+                    if !v.is_empty() {
+                        return Some(v.to_string());
+                    }
+                }
+            }
+            None
+        };
+
+        let token = lookup(&["token", "access_token", "device_token"]).unwrap_or_default();
         if token.is_empty() {
             return Ok(None);
         }
 
-        let refresh = data
-            .get("refresh_token")
-            .or_else(|| data.get("refreshToken"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let user_id = data
-            .get("user_id")
-            .or_else(|| data.get("userId"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let expires_at = data
-            .get("expires_at")
-            .or_else(|| data.get("expiresAt"))
-            .and_then(|v| v.as_i64())
+        let refresh = lookup(&["refresh_token", "refreshToken"]).unwrap_or_default();
+        let refresh_id = lookup(&["refresh_token_id", "refreshTokenId"]).unwrap_or_default();
+        let user_id = lookup(&["user_id", "userId"]).unwrap_or_default();
+        // expires_at 实测是 ISO 字符串（"2026-11-21T13:10:38Z"），不是数字
+        let expires_at = lookup(&["expires_at", "expiresAt"])
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.timestamp_millis())
             .unwrap_or(0);
 
         let label = if user_id.is_empty() {
@@ -171,6 +181,7 @@ impl QoderProvider {
         let cred = json!({
             "access_token": token,
             "refresh_token": refresh,
+            "refresh_token_id": refresh_id,
             "user_id": user_id,
             "expires_at": expires_at,
             "machine_id": session.machine_id,
@@ -460,8 +471,11 @@ impl Provider for QoderProvider {
 
     async fn quota(&self, _account: &Account, cred: &Value) -> Result<Quota> {
         // 客户端自己用的就是 /sash/api/v2/me/usage（见其 main.log）。
-        // 响应结构未在文档中公布，这里做防御式解析：能认出多少算多少，
-        // 认不出就如实说明，不猜数。
+        // 实测响应结构：
+        //   { "qoderUsage": {
+        //       "userQuota":  {"total":300,"used":15,"remaining":285,"unit":"credits"},
+        //       "addOnQuota": {"total":500,"used":0, "remaining":500,"unit":"credits"} } }
+        // 两块配额（套餐 + 加购）合并展示。
         let url = format!("{OPENAPI_BASE}/sash/api/v2/me/usage");
         let resp = self
             .http
@@ -483,64 +497,67 @@ impl Provider for QoderProvider {
             return Err(anyhow!("积分查询失败 HTTP {} {msg}", status.as_u16()));
         }
 
-        let num = |v: &Value| -> Option<f64> {
+        let num = |v: &Value| -> f64 {
             v.as_f64()
                 .or_else(|| v.as_i64().map(|i| i as f64))
                 .or_else(|| {
                     v.as_str()
                         .and_then(|s| s.replace(',', "").trim().parse::<f64>().ok())
                 })
+                .unwrap_or(0.0)
         };
 
-        // 常见字段名（不同版本可能不同）
-        let candidates: [(&str, &str, &str); 3] = [
-            ("total_credits", "used_credits", "remaining_credits"),
-            ("total", "used", "remaining"),
-            ("granted_amount", "consumed_amount", "remaining_amount"),
-        ];
+        let usage = &body["qoderUsage"];
+        let user_q = &usage["userQuota"];
+        let addon_q = &usage["addOnQuota"];
 
-        for (tg, uc, rm) in candidates {
-            if let (Some(t), Some(u), Some(r)) = (
-                body.get(tg).and_then(num),
-                body.get(uc).and_then(num),
-                body.get(rm).and_then(num),
-            ) {
-                return Ok(Quota {
-                    total_granted: t,
-                    total_consumed: u,
-                    total_remaining: r,
-                    items: Vec::new(),
-                    message: format!("剩余 {r:.0} / 共 {t:.0} Credits"),
-                });
-            }
+        // 结构不符时如实说明，不猜数
+        if usage.is_null() || user_q.is_null() {
+            return Ok(Quota::empty(
+                "积分接口返回了数据，但结构不是预期的 qoderUsage.userQuota（上游可能已变更）",
+            ));
         }
 
-        // 也可能挂在 data / summary / resource_packages 之类的子对象里
-        for key in ["data", "summary", "usage", "result"] {
-            if let Some(sub) = body.get(key) {
-                if let Some(sub) = sub.as_object() {
-                    for (tg, uc, rm) in candidates {
-                        if let (Some(t), Some(u), Some(r)) = (
-                            sub.get(tg).and_then(num),
-                            sub.get(uc).and_then(num),
-                            sub.get(rm).and_then(num),
-                        ) {
-                            return Ok(Quota {
-                                total_granted: t,
-                                total_consumed: u,
-                                total_remaining: r,
-                                items: Vec::new(),
-                                message: format!("剩余 {r:.0} / 共 {t:.0} Credits"),
-                            });
-                        }
-                    }
-                }
-            }
+        let mut items = Vec::new();
+        let mut total_granted = 0.0;
+        let mut total_consumed = 0.0;
+        let mut total_remaining = 0.0;
+
+        let mut absorb = |label: &str, q: &Value, items: &mut Vec<CreditItem>| {
+            let granted = num(&q["total"]);
+            let consumed = num(&q["used"]);
+            let remaining = num(&q["remaining"]);
+            total_granted += granted;
+            total_consumed += consumed;
+            total_remaining += remaining;
+            items.push(CreditItem {
+                credit_type: label.to_string(),
+                granted,
+                consumed,
+                remaining,
+                granted_at_ms: 0,
+                expire_at_ms: usage["expiresAt"].as_i64().unwrap_or(0),
+            });
+        };
+
+        absorb("plan", user_q, &mut items);
+        if !addon_q.is_null() {
+            absorb("addon", addon_q, &mut items);
         }
 
-        Ok(Quota::empty(
-            "积分接口返回了数据，但字段名与预期不符（上游结构可能已变更）",
-        ))
+        let message = if total_remaining > 0.0 {
+            format!("剩余 {total_remaining:.0} / 共 {total_granted:.0} Credits")
+        } else {
+            "当前无剩余 Credits".to_string()
+        };
+
+        Ok(Quota {
+            total_granted,
+            total_consumed,
+            total_remaining,
+            items,
+            message,
+        })
     }
 }
 
