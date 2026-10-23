@@ -144,7 +144,7 @@ src/                    React 前端
                         TrendLine / LogPanel / SettingsPanel
 src-tauri/src/
 ├── core/               provider 抽象 / 账号池 / 调度 / 日志 / DPAPI / 时区
-├── providers/          minimax.rs、qoder.rs、qwenwork.rs、miaoshou.rs
+├── providers/          minimax.rs、qoder.rs、miaoshou.rs
 ├── commands.rs         Tauri 命令层
 ├── tray.rs             系统托盘
 └── selftest.rs         --selftest 自检

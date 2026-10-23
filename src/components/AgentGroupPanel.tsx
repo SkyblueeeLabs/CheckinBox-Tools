@@ -17,7 +17,7 @@ interface Props {
     providerId: string,
     patch: { enabled?: boolean; startMinute?: number; endMinute?: number }
   ) => void;
-  /** 发起设备授权（qoder / qwenwork 共用同一套 URL，只是账号不同） */
+  /** 发起设备授权 */
   onAddAccount: (providerId: string) => void;
   onAlertChange: (providerId: string, value: number) => void;
 }
@@ -28,7 +28,6 @@ interface Props {
  */
 const RESET_HINT: Record<string, string> = {
   qoder: "Qoder 的每日活动 10:00（UTC+8）才刷新，时间窗要放在 10:00 之后",
-  qwenwork: "千问办公的每日签到活动当前是停用状态，暂不会自动领取",
 };
 
 /**
@@ -84,7 +83,7 @@ export default function AgentGroupPanel({
               从本机导入
             </button>
           )}
-          {provider.id === "qoder" || provider.id === "qwenwork" ? (
+          {provider.id === "qoder" ? (
             <button
               className="btn small"
               onClick={() => onAddAccount(provider.id)}

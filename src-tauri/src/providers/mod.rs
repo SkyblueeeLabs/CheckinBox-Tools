@@ -6,7 +6,6 @@
 pub mod miaoshou;
 pub mod minimax;
 pub mod qoder;
-pub mod qwenwork;
 
 use std::sync::Arc;
 
@@ -18,7 +17,6 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
     vec![
         Arc::new(minimax::MiniMaxProvider::new()),
         Arc::new(qoder::QoderProvider::new()),
-        Arc::new(qwenwork::QwenWorkProvider::new()),
         Arc::new(miaoshou::MiaoshouProvider::new()),
     ]
 }

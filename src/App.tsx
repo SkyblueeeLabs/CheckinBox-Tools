@@ -227,7 +227,8 @@ export default function App() {
         if (!cancelled && pending.length > 0) {
           setAuthSession(pending[0].sessionId);
           setAuthUrl(pending[0].authUrl);
-          setAuthProvider("qoder");
+          // 待完成会话自带 provider（命令行入驻时可能直接指定）
+          setAuthProvider(pending[0].provider ?? "qoder");
         }
       } catch {
         /* 忽略 */

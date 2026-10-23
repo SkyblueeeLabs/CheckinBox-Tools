@@ -31,7 +31,6 @@ impl AppState {
         let list: Vec<Arc<dyn Provider>> = vec![
             Arc::new(crate::providers::minimax::MiniMaxProvider::new()),
             qoder.clone(),
-            Arc::new(crate::providers::qwenwork::QwenWorkProvider::new()),
             Arc::new(crate::providers::miaoshou::MiaoshouProvider::new()),
         ];
         Self {
@@ -191,6 +190,8 @@ pub struct DiscoveredAccount {
 pub struct AuthChallenge {
     pub session_id: String,
     pub auth_url: String,
+    /// 发起授权的 provider
+    pub provider: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -329,7 +330,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 name: p.display_name().to_string(),
                 accent: p.accent().to_string(),
                 docs_url: p.docs_url().to_string(),
-                supports_discovery: p.id() == "minimax",
+                supports_discovery: matches!(p.id(), "minimax" | "miaoshou"),
                 configured: !store.list_of(p.id()).is_empty(),
                 has_client: exe.is_some(),
                 client_exe: exe.map(|p| p.to_string_lossy().to_string()),
@@ -537,15 +538,12 @@ pub async fn add_discovered_account(
 }
 
 /// 发起设备授权：返回一个需要在浏览器里确认的地址。
-///
-/// Qoder CN 与千问办公共用同一套设备授权 URL，只是各自账号不同，
-/// 所以这里按 provider 分发到同一个流程。
 #[tauri::command]
 pub async fn begin_device_auth(
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<AuthChallenge, String> {
-    if provider_id != "qoder" && provider_id != "qwenwork" {
+    if provider_id != "qoder" {
         return Err(format!("{provider_id} 不支持设备授权"));
     }
     let qoder = state.qoder.clone();
@@ -555,6 +553,7 @@ pub async fn begin_device_auth(
     let challenge = AuthChallenge {
         session_id: session.id.clone(),
         auth_url: session.auth_url.clone(),
+        provider: session.provider.clone(),
     };
     {
         let mut sessions = state.auth_sessions.lock().unwrap();
@@ -573,6 +572,7 @@ pub async fn pending_auth(state: State<'_, AppState>) -> Result<Vec<AuthChalleng
         .map(|s| AuthChallenge {
             session_id: s.id,
             auth_url: s.auth_url,
+            provider: s.provider,
         })
         .collect())
 }
@@ -595,16 +595,8 @@ pub async fn poll_device_auth(
 
     match qoder.poll_authorization(&session).await {
         Ok(Some((mut account, cred))) => {
-            // 账号归属以发起时的 provider 为准（同一台机器可能同时授权多个平台）
+            // 账号归属以发起时的 provider 为准
             account.provider = provider_id.clone();
-            // 设备授权返回的兜底 label 带的是 Qoder 前缀，按实际归属改掉，
-            // 否则千问办公的账号也会显示成 `Qoder 01a1348c-3fc`。
-            if provider_id != "qoder" {
-                let prefix = if provider_id == "qwenwork" { "千问办公" } else { "账号" };
-                account.label = account
-                    .label
-                    .replacen("Qoder ", &format!("{prefix} "), 1);
-            }
             let mut store = state.store.lock().unwrap();
             store.upsert(account.clone(), &cred).map_err(|e| e.to_string())?;
             {
@@ -1123,4 +1115,79 @@ pub async fn scheduler_loop(app: AppHandle) {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// 命令行入口（不启 GUI）
+//
+// 界面里的「从本机导入」和「添加账号」需要点按钮，在无界面 / 自动化场景下
+// 用不了，所以补两个等价命令：
+//   agent-checkin-tools --import-local              导入本机客户端登录态
+//   agent-checkin-tools --device-auth qoder
+// ---------------------------------------------------------------------------
+
+/// 把所有「读本机客户端登录态」的平台账号导入账号池（MiniMax / 妙手）。
+pub fn cli_import_local() -> Result<(), String> {
+    let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
+    rt.block_on(async {
+        let state = AppState::new();
+        let providers: Vec<Arc<dyn Provider>> = state
+            .providers
+            .iter()
+            .filter(|p| matches!(p.id(), "minimax" | "miaoshou"))
+            .cloned()
+            .collect();
+
+        for provider in providers {
+            let found = match provider.discover().await {
+                Ok(f) => f,
+                Err(e) => {
+                    println!("  {} 发现失败：{e}", provider.display_name());
+                    continue;
+                }
+            };
+            if found.is_empty() {
+                println!("  {}：本机客户端没有登录态", provider.display_name());
+                continue;
+            }
+            for (account, cred) in found {
+                state
+                    .store
+                    .lock()
+                    .unwrap()
+                    .upsert(account.clone(), &cred)
+                    .map_err(|e| e.to_string())?;
+                println!("  已导入 {} · {}", provider.display_name(), account.label);
+            }
+        }
+        Ok(())
+    })
+}
+
+/// 命令行版的设备授权：发起会话、落盘、打印授权地址。
+///
+/// **不在这里轮询** —— 轮询交给应用本身：会话写进 `auth_pending.json`，
+/// 应用启动时会读回来接着轮询（和界面里「等待授权」那条提示是同一条路径）。
+/// 命令行进程在后台容易被收掉，让它长时间轮询不可靠。
+pub fn cli_device_auth(provider_id: &str) -> Result<(), String> {
+    if provider_id != "qoder" {
+        return Err(format!("不支持设备授权：{provider_id}"));
+    }
+    let state = AppState::new();
+    let session = state
+        .qoder
+        .begin_authorization(provider_id)
+        .map_err(|e| e.to_string())?;
+
+    let mut sessions = load_pending_auth();
+    sessions.insert(session.id.clone(), session.clone());
+    save_pending_auth(&sessions);
+
+    println!("授权地址：{}", session.auth_url);
+    println!(
+        "已登记为待完成会话（provider={}）。启动应用后会显示「等待授权」提示并自动轮询，"
+        , session.provider
+    );
+    println!("在浏览器里打开上面的地址，用要登录的账号点「确认授权」即可。");
+    Ok(())
 }

@@ -1,6 +1,6 @@
 //! 应用入口（Tauri 2）。
 
-mod commands;
+pub mod commands;
 mod core;
 mod providers;
 pub mod selftest;

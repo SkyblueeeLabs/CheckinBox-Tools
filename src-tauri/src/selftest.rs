@@ -90,30 +90,6 @@ pub fn run() {
             }
         }
 
-        // ---- 3c. 千问办公 ----
-        println!("\n[3c] 千问办公 QwenWorkCN");
-        {
-            let provider = crate::providers::qwenwork::QwenWorkProvider::new();
-            let store = crate::core::store::AccountStore::load().unwrap_or_default();
-            if let Some(account) = store.list_of("qwenwork").first().cloned() {
-                match store.credential("qwenwork", &account.id) {
-                    Ok(cred) => {
-                        match provider.status(&account, &cred).await {
-                            Ok(st) => println!("     状态={:?} {}", st.state, st.message),
-                            Err(e) => println!("     状态读取失败：{e}"),
-                        }
-                        match provider.quota(&account, &cred).await {
-                            Ok(q) => println!("     积分: 剩余={:.0} 已用={:.0} 发放={:.0}", q.total_remaining, q.total_consumed, q.total_granted),
-                            Err(e) => println!("     积分读取失败：{e}"),
-                        }
-                    }
-                    Err(e) => println!("     取凭据失败：{e}"),
-                }
-            } else {
-                println!("     账号池里没有千问办公账号（点界面「添加账号」走一次设备授权）");
-            }
-        }
-
         // ---- 4. Qoder 本机环境 ----
         println!("\n[4] Qoder CN 本机环境");
         let umid = crate::providers::qoder::umid_identity();

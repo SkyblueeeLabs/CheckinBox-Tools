@@ -49,7 +49,7 @@ const SASH_USER_AGENT: &str = "Qoder";
 #[serde(rename_all = "camelCase")]
 pub struct AuthSession {
     pub id: String,
-    /// 发起授权的 provider（qoder / qwenwork 共用同一套设备授权 URL）
+    /// 发起授权的 provider
     pub provider: String,
     /// 让用户在浏览器里打开的授权地址
     pub auth_url: String,
@@ -745,7 +745,7 @@ pub fn umid_identity() -> Option<UmidIdentity> {
     None
 }
 
-/// 本机 machine id。
+/// 本机 machine id（客户端自己缓存了一份）。
 pub fn local_machine_id() -> String {
     let home = dirs::home_dir().unwrap_or_default();
     for candidate in [

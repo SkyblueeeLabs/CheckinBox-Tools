@@ -62,8 +62,6 @@ impl AgentScheduleConfig {
         let (start_minute, end_minute) = match provider {
             // Qoder CN：每日活动 10:00（UTC+8）刷新
             "qoder" => (10 * 60, 11 * 60),
-            // 千问办公的签到活动已停用，窗口仅作占位
-            "qwenwork" => (6 * 60, 8 * 60),
             _ => (6 * 60, 8 * 60),
         };
         Self {

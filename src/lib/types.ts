@@ -167,4 +167,6 @@ export interface DiscoveredAccount {
 export interface AuthChallenge {
   sessionId: string;
   authUrl: string;
+  /** 发起授权的 provider */
+  provider?: string;
 }

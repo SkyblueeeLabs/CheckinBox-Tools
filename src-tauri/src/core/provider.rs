@@ -28,9 +28,7 @@ impl Account {
     ///
     /// 只有这种情况才值得为它多打一次 `profile` 接口去换真实昵称。
     pub fn label_is_fallback(&self) -> bool {
-        ["Qoder ", "千问办公 "]
-            .iter()
-            .any(|prefix| self.label.starts_with(prefix))
+        self.label.starts_with("Qoder ")
     }
 }
 
