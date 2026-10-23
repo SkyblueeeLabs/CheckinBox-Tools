@@ -58,7 +58,7 @@ export default function AgentGroupPanel({
     <section className="panel" style={{ ["--agent-accent" as string]: accent }}>
       <header className="panel-head">
         <div className="panel-title">
-          <span className="panel-mark" />
+          <span className="panel-mark">{provider.name.slice(0, 1)}</span>
           <div>
             <h2>{provider.name}</h2>
             <p className="panel-sub">
@@ -156,17 +156,19 @@ export default function AgentGroupPanel({
         </div>
       ) : (
         <>
-          <div className="quota-stats" style={{ marginTop: 14, gap: 24 }}>
+          <div className="quota-stats summary">
             <div className="qstat">
               <span className="q-label">剩余积分</span>
-              <span className="q-value" style={{ fontSize: 18, color: "var(--ok)" }}>
-                {fmtPoints(group.totalRemaining)}
-              </span>
+              <span className="q-value lg">{fmtPoints(group.totalRemaining)}</span>
             </div>
             <div className="qstat">
               <span className="q-label">累计发放</span>
-              <span className="q-value" style={{ fontSize: 18 }}>
-                {fmtPoints(group.totalGranted)}
+              <span className="q-value lg">{fmtPoints(group.totalGranted)}</span>
+            </div>
+            <div className="qstat">
+              <span className="q-label">今日已签</span>
+              <span className="q-value lg">
+                {schedule.todayClaimed} / {accounts.length}
               </span>
             </div>
           </div>

@@ -6,3 +6,7 @@ src-tauri/gen/
 .DS_Store
 .idea/
 .vscode/
+
+# 临时参考图 / 截图（用户放的设计参考，不入库）
+temp/
+

@@ -12,15 +12,17 @@ interface Props {
 export const SETTINGS_ID = "__settings__";
 
 /**
- * 左侧 agent 列表。
- * 每行：强调色小方块 + 名称 + 账号数/状态角标 + 右侧剩余积分（等宽数字）。
+ * 左侧导航。
+ *
+ * 每个平台一个圆角方块做身份标记（淡色底 + 首字母），
+ * 右侧跟剩余积分（等宽数字）。
  */
 export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: Props) {
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
-        <span className="micro">Agents</span>
-        <span className="micro">{groups.length}</span>
+        <span className="sidebar-title">Agents</span>
+        <span className="sidebar-count">{groups.length}</span>
       </div>
 
       <nav className="sidebar-list">
@@ -28,24 +30,21 @@ export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: 
         {groups.map((group) => {
           const isActive = group.provider.id === selected;
           const remaining = group.totalRemaining;
+          const mark = group.provider.name.slice(0, 1);
           return (
             <button
               key={group.provider.id}
               className={`side-item ${isActive ? "active" : ""}`}
+              style={{ ["--agent-accent" as string]: group.provider.accent }}
               onClick={() => onSelect(group.provider.id)}
             >
-              <span
-                className="side-dot"
-                style={{ background: group.provider.accent }}
-              />
+              <span className="side-mark">{mark}</span>
               <span className="side-body">
                 <span className="side-name">{group.provider.name}</span>
                 <span className="side-sub">
                   {group.accounts.length} 个账号
                   {group.claimableCount > 0 ? (
-                    <em className="side-flag warn">
-                      {group.claimableCount} 待签
-                    </em>
+                    <em className="side-flag warn">{group.claimableCount} 待签</em>
                   ) : group.claimedToday > 0 ? (
                     <em className="side-flag ok">{group.claimedToday} 已签</em>
                   ) : null}
@@ -64,7 +63,7 @@ export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: 
           className={`side-item side-settings ${selected === SETTINGS_ID ? "active" : ""}`}
           onClick={onOpenSettings}
         >
-          <span className="side-dot settings-dot" />
+          <span className="settings-mark">设</span>
           <span className="side-body">
             <span className="side-name">设置</span>
             <span className="side-sub">同步 / 调度 / 数据</span>

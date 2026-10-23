@@ -279,7 +279,8 @@ impl Provider for MiniMaxProvider {
     }
 
     fn accent(&self) -> &'static str {
-        "#f97316"
+        // iOS 系统蓝，和妙手的橙、Qoder 的紫区分开
+        "#0a84ff"
     }
 
     fn docs_url(&self) -> &'static str {

@@ -53,7 +53,7 @@ export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [selected, setSelected] = useState<string>(SETTINGS_ID);
+  const [selected, setSelected] = useState<string>("");
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
