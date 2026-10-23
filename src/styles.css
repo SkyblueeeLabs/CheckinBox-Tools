@@ -215,19 +215,27 @@ button:disabled {
   background: var(--surface-2);
 }
 
-/* 身份方块：淡色底 + 彩色首字母 */
+/* 身份方块：直接放客户端官方图标（图标自带圆角和品牌底色） */
 .side-mark {
   width: 38px;
   height: 38px;
   flex: none;
-  border-radius: 11px;
+  border-radius: 12px;
   display: grid;
   place-items: center;
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
   font-size: 15px;
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--agent-accent, var(--text));
-  background: color-mix(in srgb, var(--agent-accent, var(--text)) 12%, #ffffff);
+}
+.mark-img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
 }
 
 .side-body {
@@ -488,17 +496,19 @@ button:disabled {
   min-width: 0;
 }
 .panel-mark {
-  width: 44px;
-  height: 44px;
+  width: 46px;
+  height: 46px;
   flex: none;
-  border-radius: 13px;
+  border-radius: 14px;
   display: grid;
   place-items: center;
+  overflow: hidden;
   font-size: 19px;
   font-weight: 700;
   letter-spacing: -0.03em;
   color: var(--agent-accent, var(--text));
-  background: color-mix(in srgb, var(--agent-accent, var(--text)) 12%, #fff);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .panel-title h2 {
   margin: 0;
@@ -692,11 +702,13 @@ button:disabled {
   border-top: 1px solid var(--line);
   padding-top: 14px;
 }
+
+/* 左侧「剩余」+ 右侧统计：顶部对齐，三列标签在同一行 */
 .quota-top {
   display: flex;
-  align-items: flex-end;
+  align-items: flex-start;
   justify-content: space-between;
-  gap: 14px;
+  gap: 16px;
 }
 .quota-remaining .q-label {
   display: block;
@@ -715,33 +727,63 @@ button:disabled {
   font-variant-numeric: tabular-nums;
 }
 
+/* 统计项改成「一行：标签 值」——参考图里是「Saved: $2 … Goal: $3」的写法 */
 .quota-stats {
   display: flex;
-  align-items: flex-end;
-  gap: 18px;
+  align-items: baseline;
+  gap: 20px;
+  flex: none;
 }
 .qstat {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
+  align-items: baseline;
+  justify-content: flex-end;
+  gap: 6px;
   min-width: 0;
-  align-items: flex-end;
 }
 .qstat .q-label {
-  font-size: 11px;
+  font-size: 12px;
   font-weight: 500;
   color: var(--text-3);
+  white-space: nowrap;
 }
 .qstat .q-value {
   font-family: var(--mono);
   font-size: 14px;
   font-variant-numeric: tabular-nums;
   color: var(--text);
+  white-space: nowrap;
 }
 .qstat .q-sub {
   font-size: 11px;
   color: var(--text-3);
   font-family: var(--mono);
+}
+.quota-stats .link {
+  align-self: center;
+  white-space: nowrap;
+}
+
+/* 面板顶部的汇总统计：标签在上、大字在下，左对齐 */
+.quota-stats.summary {
+  align-items: flex-start;
+  gap: 38px;
+}
+.quota-stats.summary .qstat {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 3px;
+}
+.quota-stats.summary .qstat .q-label {
+  font-size: 12px;
+  color: var(--text-3);
+  font-weight: 500;
+}
+.quota-stats.summary .qstat .q-value.lg {
+  font-size: 26px;
+  font-weight: 500;
+  letter-spacing: -0.03em;
+  font-variant-numeric: tabular-nums;
 }
 
 .quota-bar {

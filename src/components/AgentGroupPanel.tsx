@@ -1,5 +1,6 @@
 import type { AgentGroup } from "../lib/types";
 import { fmtPoints, formatMinute, parseMinute } from "../lib/api";
+import { agentIcon } from "../lib/agentIcons";
 import AccountCard from "./AccountCard";
 
 interface Props {
@@ -53,12 +54,15 @@ export default function AgentGroupPanel({
 }: Props) {
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
+  const panelIcon = agentIcon(provider.id);
 
   return (
     <section className="panel" style={{ ["--agent-accent" as string]: accent }}>
       <header className="panel-head">
         <div className="panel-title">
-          <span className="panel-mark">{provider.name.slice(0, 1)}</span>
+          <span className="panel-mark">
+            <img src={panelIcon} alt="" className="mark-img" draggable={false} />
+          </span>
           <div>
             <h2>{provider.name}</h2>
             <p className="panel-sub">

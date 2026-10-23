@@ -1,5 +1,6 @@
 import type { AgentGroup } from "../lib/types";
 import { fmtPoints } from "../lib/api";
+import { agentIcon } from "../lib/agentIcons";
 
 interface Props {
   groups: AgentGroup[];
@@ -14,8 +15,7 @@ export const SETTINGS_ID = "__settings__";
 /**
  * 左侧导航。
  *
- * 每个平台一个圆角方块做身份标记（淡色底 + 首字母），
- * 右侧跟剩余积分（等宽数字）。
+ * 每个平台一个圆角方块显示**官方图标**，右侧跟剩余积分（等宽数字）。
  */
 export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: Props) {
   return (
@@ -30,7 +30,8 @@ export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: 
         {groups.map((group) => {
           const isActive = group.provider.id === selected;
           const remaining = group.totalRemaining;
-          const mark = group.provider.name.slice(0, 1);
+          const icon = agentIcon(group.provider.id);
+          const fallback = group.provider.name.slice(0, 1);
           return (
             <button
               key={group.provider.id}
@@ -38,7 +39,13 @@ export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: 
               style={{ ["--agent-accent" as string]: group.provider.accent }}
               onClick={() => onSelect(group.provider.id)}
             >
-              <span className="side-mark">{mark}</span>
+              <span className="side-mark">
+                {icon ? (
+                  <img src={icon} alt="" className="mark-img" draggable={false} />
+                ) : (
+                  fallback
+                )}
+              </span>
               <span className="side-body">
                 <span className="side-name">{group.provider.name}</span>
                 <span className="side-sub">
