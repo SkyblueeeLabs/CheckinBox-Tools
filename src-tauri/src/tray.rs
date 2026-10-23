@@ -30,7 +30,7 @@ pub fn setup(app: &AppHandle) -> tauri::Result<()> {
     let mut builder = TrayIconBuilder::with_id("main")
         .menu(&menu)
         .show_menu_on_left_click(false)
-        .tooltip("聚合签到")
+        .tooltip("CheckinBox")
         .on_menu_event(|app, event| match event.id().as_ref() {
             "show" => show_main_window(app),
             "checkin" => {

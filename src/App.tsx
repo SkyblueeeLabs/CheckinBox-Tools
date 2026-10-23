@@ -447,7 +447,7 @@ export default function App() {
 
         <header className="topbar">
           <div className="brand">
-            <span className="brand-name">{inSettings ? "设置" : "聚合签到"}</span>
+            <span className="brand-name">{inSettings ? "设置" : "CheckinBox"}</span>
             <span className="brand-sub">
               今日已签 <b>{overview.claimedCount}</b> / {overview.totalCount} 个账号
               {overview.todayPoints > 0 ? ` · 今日 +${overview.todayPoints}` : ""}

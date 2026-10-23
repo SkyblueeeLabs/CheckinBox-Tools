@@ -10,6 +10,11 @@ rust-version = "1.77"
 name = "agent_checkin_tools_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
+# 可执行文件名（窗口标题/托盘/安装包同名）
+[[bin]]
+name = "CheckinBox"
+path = "src/main.rs"
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 

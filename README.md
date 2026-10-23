@@ -1,9 +1,8 @@
-# 聚合签到（Agent Checkin Tools）
+# CheckinBox
 
 > 把散落在各个 AI 编程工具里的「每日领取积分」，收进一个窗口。
 
 ![stack](https://img.shields.io/badge/Tauri_2-6366f1) ![rust](https://img.shields.io/badge/Rust-stable-orange) ![react](https://img.shields.io/badge/React-18-61dafb)
-
 ## 它解决什么
 
 | 平台 | 每日奖励 | Cockpit Tools 是否支持 | 本项目 |
@@ -47,14 +46,26 @@ npm run tauri:dev                        # 开发模式运行
 npm run tauri build -- --no-bundle
 ```
 
-产物：`src-tauri/target/release/agent-checkin-tools.exe`。
+产物：`src-tauri/target/release/CheckinBox.exe`。
 
-> `--no-bundle` 是跳过安装包打包（跳过 NSIS / WiX）。**注意**：直接
-> `cargo build --release` 不会走 Tauri 的前端嵌入流程，产物会去加载 `devUrl`
-> （localhost）而白屏 —— 必须用 `tauri build`。
->
-> 中文产品名会让 WiX 报 `LGHT0311`（代码页 1252 装不下中文），所以默认跳过打包；
-> 需要安装包时先把产品名改成纯 ASCII 再去掉 `--no-bundle`。
+> **注意**：直接 `cargo build --release` 不会走 Tauri 的前端嵌入流程，产物会去加载
+> `devUrl`（localhost）而白屏 —— 必须用 `tauri build`。
+
+### 打包安装程序（NSIS / MSI）
+
+```bash
+npm run tauri build
+```
+
+产物在 `src-tauri/target/release/bundle/` 下：
+
+| 文件 | 大小 | 用途 |
+|---|---|---|
+| `nsis/CheckinBox_0.1.0_x64-setup.exe` | 1.5 MB | 在线安装器 |
+| `msi/CheckinBox_0.1.0_x64_en-US.msi` | 2.2 MB | 企业部署 |
+
+> 产品名改成纯 ASCII 之后 WiX 的 `LGHT0311`（代码页 1252 装不下中文）就没了，
+> 所以现在安装包可以直接打。
 
 命令行自检（不启 GUI）：
 

@@ -1181,8 +1181,8 @@ pub async fn scheduler_loop(app: AppHandle) {
 //
 // 界面里的「从本机导入」和「添加账号」需要点按钮，在无界面 / 自动化场景下
 // 用不了，所以补两个等价命令：
-//   agent-checkin-tools --import-local              导入本机客户端登录态
-//   agent-checkin-tools --device-auth qoder
+//   CheckinBox --import-local              导入本机客户端登录态
+//   CheckinBox --device-auth qoder
 // ---------------------------------------------------------------------------
 
 /// 把所有「读本机客户端登录态」的平台账号导入账号池（MiniMax / 妙手）。
@@ -1226,7 +1226,7 @@ pub fn cli_import_local() -> Result<(), String> {
 /// 命令行版：把客户端切换成指定账号（备份原登录态 → 写入 → 启动客户端）。
 ///
 /// 用途：脚本里切账号，或者界面点不动时的兜底。
-///   agent-checkin-tools --switch-client <minimax|miaoshou> <account_id>
+///   CheckinBox --switch-client <minimax|miaoshou> <account_id>
 pub fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<(), String> {
     let state = AppState::new();
     let store = state.store.lock().unwrap().clone();

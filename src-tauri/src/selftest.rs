@@ -1,6 +1,6 @@
 //! 命令行自检：不启动 GUI，直接验证「发现账号 → 读签到状态 → DPAPI 加解密」。
 //!
-//! 用法：`agent-checkin-tools --selftest`
+//! 用法：`CheckinBox --selftest`
 //!
 //! 注意：只读状态，不领取。领取接口是幂等的，但自检不主动调用它。
 
@@ -13,7 +13,7 @@ use crate::providers::minimax::MiniMaxProvider;
 use crate::providers::qoder::QoderProvider;
 
 pub fn run() {
-    println!("=== 聚合签到自检 ===\n");
+    println!("=== CheckinBox 自检 ===\n");
 
     // ---- 1. DPAPI 加解密 ----
     println!("[1] DPAPI 凭据加解密");

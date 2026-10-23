@@ -45,5 +45,5 @@ pub fn run() {
             Ok(())
         })
         .run(tauri::generate_context!())
-        .expect("启动聚合签到失败");
+        .expect("启动 CheckinBox 失败");
 }

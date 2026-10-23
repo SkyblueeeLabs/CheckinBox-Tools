@@ -1,4 +1,4 @@
-# 聚合签到工具（Agent Checkin Tools）设计规格
+# CheckinBox 设计规格
 
 - 日期：2026-10-22
 - 版本：0.1（demo）
