@@ -5,10 +5,12 @@ import type {
   AccountResult,
   AppConfig,
   AuthChallenge,
+  ClientAccountView,
   DiscoveredAccount,
   LogEntry,
   Overview,
   Quota,
+  SwitchOutcome,
 } from "./types";
 
 export const api = {
@@ -58,6 +60,10 @@ export const api = {
     invoke<AppConfig>("set_alert_threshold", { providerId, value }),
   launchClient: (providerId: string) =>
     invoke<string>("launch_client", { providerId }),
+  detectClientAccount: (providerId: string) =>
+    invoke<ClientAccountView | null>("detect_client_account", { providerId }),
+  switchClientAccount: (providerId: string, accountId: string) =>
+    invoke<SwitchOutcome>("switch_client_account", { providerId, accountId }),
   getLogs: (days = 7) => invoke<LogEntry[]>("get_logs", { days }),
   openExternal: (url: string) => invoke<void>("open_external", { url }),
 };

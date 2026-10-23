@@ -5,6 +5,9 @@ interface Props {
   view: AccountView;
   busy: boolean;
   quotaLoading: boolean;
+  /** 这个平台的客户端能不能靠写凭据文件换账号 */
+  switchable: boolean;
+  onSwitchClient: () => void;
   onCheckin: () => void;
   onRefreshQuota: () => void;
   onSetActive: () => void;
@@ -23,6 +26,8 @@ export default function AccountCard({
   view,
   busy,
   quotaLoading,
+  switchable,
+  onSwitchClient,
   onCheckin,
   onRefreshQuota,
   onSetActive,
@@ -97,6 +102,11 @@ export default function AccountCard({
           {!view.isActive && (
             <button className="link" onClick={onSetActive} disabled={busy}>
               设为当前
+            </button>
+          )}
+          {switchable && (
+            <button className="link" onClick={onSwitchClient} disabled={busy}>
+              切换客户端账号
             </button>
           )}
           <button className="link" onClick={onLaunch} disabled={busy}>

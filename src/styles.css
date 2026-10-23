@@ -522,6 +522,26 @@ button:disabled {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+/* 客户端当前登录的账号 */
+.client-line {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-3);
+}
+.client-line b {
+  color: var(--text-2);
+  font-weight: 600;
+}
+.client-line.warn b {
+  color: #b8820a;
+}
+.client-note {
+  color: var(--text-3);
+}
+.client-line.warn .client-note {
+  color: #b8820a;
+  font-weight: 500;
+}
 .panel-actions {
   display: flex;
   align-items: center;

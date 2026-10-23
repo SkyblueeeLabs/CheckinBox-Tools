@@ -85,6 +85,27 @@ export interface AgentScheduleView {
   alertThreshold?: number;
   /** 该 agent 的数据自动同步间隔（分钟） */
   refreshIntervalMinutes: number;
+  /** 客户端当前实际登录的账号（读不到就是 undefined） */
+  clientAccount?: ClientAccountView;
+  /** 能不能靠「写凭据文件」给这个客户端换账号 */
+  switchable: boolean;
+}
+
+/** 客户端当前登录的账号 */
+export interface ClientAccountView {
+  accountId: string;
+  label: string;
+  /** 这个账号在不在我们的账号池里 */
+  inPool: boolean;
+}
+
+/** 切换客户端账号的结果 */
+export interface SwitchOutcome {
+  /** 客户端原登录态的备份路径 */
+  backup?: string;
+  /** 写入的凭据文件 */
+  targetFile: string;
+  clientExe: string;
 }
 
 export interface Overview {

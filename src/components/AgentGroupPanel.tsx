@@ -20,6 +20,8 @@ interface Props {
   ) => void;
   /** 发起设备授权 */
   onAddAccount: (providerId: string) => void;
+  /** 把客户端切换成这个账号（改写客户端凭据文件） */
+  onSwitchClient: (providerId: string, accountId: string) => void;
   onAlertChange: (providerId: string, value: number) => void;
 }
 
@@ -49,12 +51,19 @@ export default function AgentGroupPanel({
   onRemove,
   onDiscover,
   onAddAccount,
+  onSwitchClient,
   onAlertChange,
   onScheduleChange,
 }: Props) {
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
   const panelIcon = agentIcon(provider.id);
+
+  // 客户端实际登录的账号，和工具里选中的当前账号对不对得上
+  const clientAccount = schedule.clientAccount;
+  const activeId = accounts.find((a) => a.isActive)?.account.id;
+  const mismatch =
+    !!clientAccount && !!activeId && clientAccount.accountId !== activeId;
 
   return (
     <section className="panel" style={{ ["--agent-accent" as string]: accent }}>
@@ -69,6 +78,13 @@ export default function AgentGroupPanel({
               {accounts.length} 个账号 · 今日已签 {schedule.todayClaimed} 个
               {schedule.todayClaimable > 0 ? ` · ${schedule.todayClaimable} 个可签` : ""}
             </p>
+            {clientAccount && (
+              <p className={`client-line ${mismatch ? "warn" : ""}`}>
+                客户端当前登录 <b>{clientAccount.label}</b>
+                {!clientAccount.inPool && <span className="client-note">（不在账号池里）</span>}
+                {mismatch && <span className="client-note"> · 与当前账号不一致</span>}
+              </p>
+            )}
           </div>
         </div>
 
@@ -184,6 +200,10 @@ export default function AgentGroupPanel({
                 view={view}
                 busy={busy}
                 quotaLoading={quotaLoadingId === `${view.account.provider}:${view.account.id}`}
+                switchable={schedule.switchable}
+                onSwitchClient={() =>
+                  onSwitchClient(view.account.provider, view.account.id)
+                }
                 onCheckin={() =>
                   onCheckin(view.account.provider, view.account.id, view.account.label)
                 }

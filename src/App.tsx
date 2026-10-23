@@ -269,6 +269,31 @@ export default function App() {
     }
   };
 
+  /**
+   * 把客户端切换成这个账号：备份客户端当前登录态 → 写入这个账号的凭据 → 启动客户端。
+   * 借鉴 Cockpit Tools 的做法（Cockpit 靠换凭据文件实现切账号）。
+   */
+  const switchClient = async (providerId: string, accountId: string) => {
+    const label =
+      overview?.accounts.find(
+        (a) => a.account.provider === providerId && a.account.id === accountId
+      )?.account.label ?? accountId;
+    setBusy(true);
+    try {
+      const result = await api.switchClientAccount(providerId, accountId);
+      pushToast(
+        "ok",
+        `${label}：已切换客户端账号并启动${result.backup ? "（原登录态已备份）" : ""}`
+      );
+      pushToast("warn", "如果客户端之前开着，请先完全退出（含托盘）再切换");
+      await refresh();
+    } catch (e) {
+      pushToast("err", `切换失败：${e}`);
+    } finally {
+      setBusy(false);
+    }
+  };
+
   /** 改某个 agent 的积分预警阈值 */
   const patchAlert = useCallback((providerId: string, value: number) => {
     setOverview((prev) => {
@@ -475,6 +500,7 @@ export default function App() {
             onRefreshQuota={refreshOneQuota}
             onSetActive={setActive}
             onLaunch={launch}
+            onSwitchClient={switchClient}
             onRemove={removeAccount}
             onDiscover={(id) => discover(id)}
             onAddAccount={(id: string) => { void startDeviceAuth(id); }}

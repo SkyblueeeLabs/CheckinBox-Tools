@@ -31,6 +31,8 @@ pub fn run() {
             commands::set_active_account,
             commands::set_alert_threshold,
             commands::launch_client,
+            commands::detect_client_account,
+            commands::switch_client_account,
             commands::sync_now,
             commands::open_data_dir,
             commands::get_logs,

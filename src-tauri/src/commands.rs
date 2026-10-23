@@ -143,6 +143,20 @@ pub struct AgentScheduleView {
     pub today_claimable: usize,
     /// 该 agent 的数据自动同步间隔（分钟）
     pub refresh_interval_minutes: u32,
+    /// 客户端当前实际登录的账号（None = 读不到 / 客户端没登录）
+    pub client_account: Option<ClientAccountView>,
+    /// 能不能靠「写凭据文件」给这个客户端换账号
+    pub switchable: bool,
+}
+
+/// 客户端当前登录的账号。
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientAccountView {
+    pub account_id: String,
+    pub label: String,
+    /// 这个账号在不在我们的账号池里（不在说明是客户端自己登的号）
+    pub in_pool: bool,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -361,6 +375,16 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 today_claimed: claimed,
                 today_claimable: claimable,
                 refresh_interval_minutes: config.refresh_interval_of(provider.id()),
+                // 客户端当前登录的账号（只读，读不到就是 None）
+                client_account: crate::core::client_switch::detect(provider.id())
+                    .ok()
+                    .flatten()
+                    .map(|d| ClientAccountView {
+                        in_pool: store.contains(&provider.id(), &d.account_id),
+                        account_id: d.account_id,
+                        label: d.label,
+                    }),
+                switchable: crate::core::client_switch::is_switchable(provider.id()),
             },
         );
     }
@@ -785,6 +809,41 @@ pub async fn launch_client(provider_id: String) -> Result<String, String> {
     Ok(exe.to_string_lossy().to_string())
 }
 
+/// 读客户端当前实际登录的账号（只读，不改任何文件）。
+#[tauri::command]
+pub async fn detect_client_account(
+    provider_id: String,
+) -> Result<Option<crate::core::client_switch::DetectedAccount>, String> {
+    crate::core::client_switch::detect(&provider_id).map_err(|e| e.to_string())
+}
+
+/// 把客户端切换成指定账号，然后启动客户端。
+///
+/// ⚠️ 会改写客户端的登录态文件（先备份）。客户端必须在切换前完全退出，
+/// 否则它内存里的旧登录态会覆盖我们写进去的文件。
+#[tauri::command]
+pub async fn switch_client_account(
+    state: State<'_, AppState>,
+    provider_id: String,
+    account_id: String,
+) -> Result<crate::core::client_switch::SwitchOutcome, String> {
+    if !crate::core::client_switch::is_switchable(&provider_id) {
+        return Err(format!("{provider_id} 不支持切换客户端账号（凭据格式无法注入）"));
+    }
+    let store = state.store.lock().unwrap().clone();
+    let account = store
+        .list_of(&provider_id)
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| format!("账号不存在：{account_id}"))?;
+    let cred = store
+        .credential(&provider_id, &account_id)
+        .map_err(|e| e.to_string())?;
+
+    crate::core::client_switch::switch(&provider_id, &cred, &account_id, &account.label)
+        .map_err(|e| e.to_string())
+}
+
 /// 读取最近若干天的签到流水。
 #[tauri::command]
 pub async fn get_logs(days: Option<i64>) -> Result<Vec<LogEntry>, String> {
@@ -1162,6 +1221,32 @@ pub fn cli_import_local() -> Result<(), String> {
         }
         Ok(())
     })
+}
+
+/// 命令行版：把客户端切换成指定账号（备份原登录态 → 写入 → 启动客户端）。
+///
+/// 用途：脚本里切账号，或者界面点不动时的兜底。
+///   agent-checkin-tools --switch-client <minimax|miaoshou> <account_id>
+pub fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<(), String> {
+    let state = AppState::new();
+    let store = state.store.lock().unwrap().clone();
+    let account = store
+        .list_of(provider_id)
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| format!("账号不存在：{account_id}"))?;
+    let cred = store.credential(provider_id, account_id).map_err(|e| e.to_string())?;
+
+    let out = crate::core::client_switch::switch(provider_id, &cred, account_id, &account.label)
+        .map_err(|e| e.to_string())?;
+
+    println!("已把 {} 的客户端账号切换成 {}", provider_id, account.label);
+    println!("  写入凭据: {}", out.target_file);
+    if let Some(bak) = out.backup {
+        println!("  原登录态备份: {bak}");
+    }
+    println!("  客户端: {}", out.client_exe);
+    Ok(())
 }
 
 /// 命令行版的设备授权：发起会话、落盘、打印授权地址。

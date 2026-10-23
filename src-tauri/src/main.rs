@@ -37,5 +37,20 @@ fn main() {
         return;
     }
 
+    // 命令行版切换客户端账号（会备份原登录态并启动客户端）
+    if let Some(pos) = args.iter().position(|a| a == "--switch-client") {
+        let provider = args.get(pos + 1).cloned().unwrap_or_default();
+        let account = args.get(pos + 2).cloned().unwrap_or_default();
+        if provider.is_empty() || account.is_empty() {
+            eprintln!("用法：--switch-client <minimax|miaoshou> <account_id>");
+            std::process::exit(1);
+        }
+        if let Err(e) = commands::cli_switch_client(&provider, &account) {
+            eprintln!("失败：{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     agent_checkin_tools_lib::run()
 }

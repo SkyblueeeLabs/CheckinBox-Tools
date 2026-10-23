@@ -87,7 +87,8 @@ fn local_profile() -> Option<Value> {
     serde_json::from_str(&raw).ok()
 }
 
-fn local_label() -> String {
+/// 读本机客户端的用户信息，用于给账号起个看得懂的名字。
+pub fn local_label() -> String {
     local_profile()
         .and_then(|p| {
             let shared = p.get("sharedUser")?;
