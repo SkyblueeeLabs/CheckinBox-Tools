@@ -23,6 +23,30 @@ pub struct Account {
     pub origin: String,
 }
 
+impl Account {
+    /// 当前 label 是否是「拿不到昵称时的兜底值」（平台名 + id 前缀）。
+    ///
+    /// 只有这种情况才值得为它多打一次 `profile` 接口去换真实昵称。
+    pub fn label_is_fallback(&self) -> bool {
+        ["Qoder ", "千问办公 "]
+            .iter()
+            .any(|prefix| self.label.starts_with(prefix))
+    }
+}
+
+/// 账号真实资料（昵称 / 邮箱 / 头像）。
+///
+/// 有些平台（例如 Qoder）在授权时只给一个内部 uid，界面只能显示
+/// `Qoder 01a1348c-3fc` 这种 id 前缀；这里补一个「按 token 查资料」的接口，
+/// 拿到用户在平台上真实设置的昵称。取不到就返回 `Ok(None)`，不影响主流程。
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AccountProfile {
+    pub name: Option<String>,
+    pub email: Option<String>,
+    pub avatar: Option<String>,
+}
+
 /// 今日签到状态。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -177,6 +201,14 @@ pub trait Provider: Send + Sync {
     /// 默认返回空并给出说明；平台支持时覆盖实现。
     async fn quota(&self, _account: &Account, _cred: &Value) -> Result<Quota> {
         Ok(Quota::empty("该平台暂未提供积分查询"))
+    }
+
+    /// 查询账号真实资料（昵称 / 邮箱 / 头像）。
+    ///
+    /// 默认取不到；平台有对应接口时覆盖实现。用于把
+    /// `Qoder 01a1348c-3fc` 这种 id 前缀换成用户真实设置的昵称。
+    async fn profile(&self, _account: &Account, _cred: &Value) -> Result<Option<AccountProfile>> {
+        Ok(None)
     }
 
     /// 凭据过期时尝试刷新，返回新的凭据；无法刷新返回 `Ok(None)`。

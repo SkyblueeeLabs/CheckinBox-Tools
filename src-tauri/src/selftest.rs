@@ -135,6 +135,45 @@ pub fn run() {
             ),
             Err(e) => println!("    授权会话生成失败：{e}"),
         }
+
+        // ---- 4b. 账号池里的 Qoder 账号：状态 + 真实昵称 ----
+        println!("\n[4b] Qoder CN 账号池账号");
+        {
+            let store = crate::core::store::AccountStore::load().unwrap_or_default();
+            match store.list_of("qoder").first().cloned() {
+                Some(account) => {
+                    println!("     账号 {}（{}）", account.label, account.id);
+                    match store.credential("qoder", &account.id) {
+                        Ok(cred) => {
+                            match qoder.status(&account, &cred).await {
+                                Ok(s) => println!(
+                                    "        状态={:?} 可领={} 消息={}",
+                                    s.state, s.points, s.message
+                                ),
+                                Err(e) => println!("        状态读取失败：{e}"),
+                            }
+                            match qoder.quota(&account, &cred).await {
+                                Ok(q) => println!(
+                                    "        积分: 发放={:.0} 已用={:.0} 剩余={:.0}",
+                                    q.total_granted, q.total_consumed, q.total_remaining
+                                ),
+                                Err(e) => println!("        积分读取失败：{e}"),
+                            }
+                            match qoder.profile(&account, &cred).await {
+                                Ok(Some(p)) => println!(
+                                    "        昵称={:?} 邮箱={:?}",
+                                    p.name, p.email
+                                ),
+                                Ok(None) => println!("        昵称接口没返回数据"),
+                                Err(e) => println!("        昵称读取失败：{e}"),
+                            }
+                        }
+                        Err(e) => println!("        取凭据失败：{e}"),
+                    }
+                }
+                None => println!("     账号池里没有 Qoder 账号"),
+            }
+        }
     });
 
     // ---- 5. 账号池读写 ----

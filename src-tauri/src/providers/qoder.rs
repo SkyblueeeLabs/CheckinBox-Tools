@@ -14,20 +14,25 @@
 //!   * 请求必须带设备风控头 `Cosy-MachineToken` / `Cosy-MachineCode` /
 //!     `Cosy-MachineType`（本机 `~/.qoder-cn/umid-cache.json` 里就有），
 //!     否则活动不会下发。
-//!   * 活动窗口每天 10:00（UTC+8）开启；没到点时如实提示，不谎报失败。
+//!   * **活动周期按「10:00 刷新」算，不是按自然日**：活动行的
+//!     `startAt`/`endAt` 是一个跨天窗口（如 10-22 10:00 → 10-23 09:59）。
+//!     「今天能不能签」= 今天 10:00 起的那个窗口，不能拿昨天窗口的
+//!     `CLAIMED` 当成今天已签。
+//!   * 账号真实昵称：`GET /api/v1/userinfo`（返回 `name` / `username`）。
 //!   * 已领取的判定：HTTP 409 / `result == ALREADY_CLAIMED` / `replayed == true`。
 
 use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine;
+use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
 use std::path::PathBuf;
 
 use crate::core::provider::{
-    Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+    Account, AccountProfile, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
 };
 
 const WEB_BASE: &str = "https://qoder.com.cn";
@@ -35,6 +40,7 @@ const OPENAPI_BASE: &str = "https://openapi.qoder.com.cn";
 const CAMPAIGNS_PATH: &str = "/sash/api/v1/me/campaigns";
 const DEVICE_POLL_PATH: &str = "/api/v1/deviceToken/poll";
 const DEVICE_LOGIN_PATH: &str = "/device/selectAccounts";
+const USERINFO_PATH: &str = "/api/v1/userinfo";
 const SASH_CLIENT_TYPE: &str = "10";
 const SASH_USER_AGENT: &str = "Qoder";
 
@@ -273,6 +279,125 @@ impl QoderProvider {
         let body: Value = resp.json().await.unwrap_or(Value::Null);
         Ok((status, body))
     }
+
+    /// 从活动列表响应里取 `campaigns` 数组。
+    fn campaign_rows(&self, body: &Value) -> Vec<Value> {
+        body.get("campaigns")
+            .and_then(|v| v.as_array())
+            .or_else(|| {
+                body.get("data")
+                    .and_then(|d| d.get("campaigns"))
+                    .and_then(|v| v.as_array())
+            })
+            .cloned()
+            .unwrap_or_default()
+    }
+}
+
+/// 是不是「每日积分」活动行。
+///
+/// 活动列表里还混着别的 `CLAIM_BENEFIT` 活动（例如「发布站点领奶茶兑换卡」，
+/// `benefit.kind == REDEMPTION_CODE`），不能当成每日签到，否则会领错东西。
+fn is_daily_credits(row: &Value) -> bool {
+    row.get("actionType").and_then(|v| v.as_str()) == Some("CLAIM_BENEFIT")
+        && row.get("benefit")
+            .and_then(|b| b.get("kind"))
+            .and_then(|v| v.as_str())
+            == Some("CREDITS")
+}
+
+/// 活动的 `[startAt, endAt]` 窗口（Unix 秒）。
+fn campaign_window(row: &Value) -> Option<(i64, i64)> {
+    let start = row.get("startAt").and_then(|v| v.as_i64())?;
+    let end = row.get("endAt").and_then(|v| v.as_i64())?;
+    Some((start, end))
+}
+
+/// 把 Unix 秒换成本地时间。
+fn to_local(ts: i64) -> chrono::DateTime<chrono::Local> {
+    chrono::DateTime::<chrono::Utc>::from_timestamp(ts, 0)
+        .unwrap_or_default()
+        .with_timezone(&chrono::Local)
+}
+
+/// 从活动行推断「每日刷新时刻」（本地时间的当天分钟数）。
+///
+/// 实测：每日活动的 `startAt` 是 10:00（UTC+8），窗口到次日 09:59 结束。
+/// 取不到时按 10:00 兜底。
+fn reset_minute_of_day(row: &Value) -> Option<u32> {
+    let (start, _) = campaign_window(row)?;
+    let local = to_local(start);
+    Some(local.hour() * 60 + local.minute())
+}
+
+/// 一行活动里取可领取积分数。
+fn row_points(row: &Value) -> i64 {
+    row.get("benefit")
+        .and_then(|b| b.get("amount"))
+        .and_then(|v| v.as_i64())
+        .unwrap_or(100)
+}
+
+/// 「今天这个周期」的判定结果。
+#[derive(Debug)]
+enum Cycle {
+    /// 今天可以领，带可领积分数
+    Claimable(i64),
+    /// 今天已经领过了
+    Claimed,
+    /// 今天还没到刷新点
+    NotYet { reset_minute: u32 },
+    /// 已经过了刷新点，但上游还没下发今天的活动行
+    NotIssued { reset_minute: u32 },
+}
+
+/// 判断「今天能不能签」。
+///
+/// 关键点：活动行的 `[startAt, endAt]` 是**跨天窗口**（如 10-22 10:00 → 10-23 09:59）。
+/// 只看「有没有 CLAIMED 行」会把上一个周期的已领记录当成今天已签，
+/// 导致 10:00 之前一直显示「今日已签」。所以这里取的是
+/// 「startAt 是今天、且已经过了刷新点」的那一行。
+fn daily_cycle(rows: &[Value], now: &chrono::DateTime<chrono::Local>) -> Cycle {
+    let daily: Vec<&Value> = rows.iter().filter(|r| is_daily_credits(r)).collect();
+
+    // 刷新时刻：由每日活动的 startAt 推断（默认 10:00 UTC+8）
+    let reset_minute = daily
+        .iter()
+        .find_map(|row| reset_minute_of_day(row))
+        .unwrap_or(10 * 60);
+
+    let today = now.format("%Y-%m-%d").to_string();
+    let now_minute = now.hour() * 60 + now.minute();
+    let now_ts = now.timestamp();
+
+    // 「今天这个周期」= startAt 是今天、已经过了刷新点、**并且已经开窗**
+    // （startAt <= now）的那一行。三个条件缺一不可：
+    //   * 只看「有没有 CLAIMED 行」→ 会把上一个周期的已领记录当成今天已签；
+    //   * 不看 startAt 是否已到 → 活动行提前下发时会显示「可签」，实际还没开窗。
+    let today_row = daily.iter().find(|row| {
+        campaign_window(row)
+            .map(|(start, _)| {
+                let local = to_local(start);
+                local.format("%Y-%m-%d").to_string() == today
+                    && local.hour() * 60 + local.minute() >= reset_minute
+                    && start <= now_ts
+            })
+            .unwrap_or(false)
+    });
+
+    if let Some(row) = today_row {
+        return match row.get("claimStatus").and_then(|v| v.as_str()) {
+            Some("CLAIMABLE") => Cycle::Claimable(row_points(row)),
+            Some("CLAIMED") => Cycle::Claimed,
+            _ => Cycle::NotIssued { reset_minute },
+        };
+    }
+
+    if now_minute < reset_minute {
+        Cycle::NotYet { reset_minute }
+    } else {
+        Cycle::NotIssued { reset_minute }
+    }
 }
 
 #[async_trait]
@@ -309,69 +434,49 @@ impl Provider for QoderProvider {
             return Err(anyhow!("活动列表返回 HTTP {}", status.as_u16()));
         }
 
-        let rows = body
-            .get("campaigns")
-            .and_then(|v| v.as_array())
-            .or_else(|| {
-                body.get("data")
-                    .and_then(|d| d.get("campaigns"))
-                    .and_then(|v| v.as_array())
-            })
-            .cloned()
-            .unwrap_or_default();
+        let rows = self.campaign_rows(&body);
+        let now = chrono::Local::now();
 
-        let mut target: Option<Value> = None;
-        let mut claimed = false;
-        for row in rows.iter() {
-            if row.get("actionType").and_then(|v| v.as_str()) != Some("CLAIM_BENEFIT") {
-                continue;
-            }
-            match row.get("claimStatus").and_then(|v| v.as_str()) {
-                Some("CLAIMABLE") => {
-                    if target.is_none() {
-                        target = Some(row.clone());
-                    }
-                }
-                Some("CLAIMED") => claimed = true,
-                _ => {}
-            }
-        }
-
-        if let Some(row) = target {
-            let points = row
-                .get("benefit")
-                .and_then(|b| b.get("amount"))
-                .and_then(|v| v.as_i64())
-                .unwrap_or(100);
-            return Ok(CheckinStatus {
+        return Ok(match daily_cycle(&rows, &now) {
+            Cycle::Claimable(points) => CheckinStatus {
                 state: ClaimState::Claimable,
                 points,
                 streak_days: 0,
                 message: format!("可签到 +{points} Credits"),
                 day_index: None,
                 bonus_points: 0,
-            });
-        }
-
-        if claimed {
-            return Ok(CheckinStatus {
+            },
+            Cycle::Claimed => CheckinStatus {
                 state: ClaimState::Claimed,
                 points: 0,
                 streak_days: 0,
                 message: "今日已领取".to_string(),
                 day_index: None,
                 bonus_points: 0,
-            });
-        }
-
-        Ok(CheckinStatus {
-            state: ClaimState::NotAvailable,
-            points: 0,
-            streak_days: 0,
-            message: "上游暂未下发每日活动（官方活动窗口每天 10:00 UTC+8 开启；今天若已在客户端领过，活动行会消失）".to_string(),
-            day_index: None,
-            bonus_points: 0,
-        })
+            },
+            Cycle::NotYet { reset_minute } => {
+                let reset_text = format!("{:02}:{:02}", reset_minute / 60, reset_minute % 60);
+                CheckinStatus {
+                    state: ClaimState::NotAvailable,
+                    points: 0,
+                    streak_days: 0,
+                    message: format!("今日活动 {reset_text}（UTC+8）开启"),
+                    day_index: None,
+                    bonus_points: 0,
+                }
+            }
+            Cycle::NotIssued { reset_minute } => {
+                let reset_text = format!("{:02}:{:02}", reset_minute / 60, reset_minute % 60);
+                CheckinStatus {
+                    state: ClaimState::NotAvailable,
+                    points: 0,
+                    streak_days: 0,
+                    message: format!("已过 {reset_text}，但今天的活动尚未下发（上游可能已变更）"),
+                    day_index: None,
+                    bonus_points: 0,
+                }
+            }
+        });
     }
 
     async fn claim(&self, _account: &Account, cred: &Value) -> Result<ClaimOutcome> {
@@ -380,30 +485,29 @@ impl Provider for QoderProvider {
             return Err(anyhow!("活动列表返回 HTTP {}", status.as_u16()));
         }
 
-        let rows = body
-            .get("campaigns")
-            .and_then(|v| v.as_array())
-            .or_else(|| {
-                body.get("data")
-                    .and_then(|d| d.get("campaigns"))
-                    .and_then(|v| v.as_array())
-            })
-            .cloned()
-            .unwrap_or_default();
+        let rows = self.campaign_rows(&body);
 
-        let target = rows.iter().find(|row| {
-            row.get("actionType").and_then(|v| v.as_str()) == Some("CLAIM_BENEFIT")
-                && row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMABLE")
-        });
+        // 只认「每日积分」活动，并且优先取窗口更晚的那个
+        // （跨天窗口下今天/昨天的可能同时开着，晚的那个才是当前该领的）。
+        let mut candidates: Vec<Value> = rows
+            .into_iter()
+            .filter(|row| is_daily_credits(row))
+            .collect();
+        candidates.sort_by_key(|row| campaign_window(row).map(|(s, _)| s).unwrap_or(0));
+
+        let target = candidates
+            .iter()
+            .rev()
+            .find(|row| row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMABLE"));
+
         let Some(target) = target else {
-            let already = rows.iter().any(|row| {
-                row.get("actionType").and_then(|v| v.as_str()) == Some("CLAIM_BENEFIT")
-                    && row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMED")
+            let already = candidates.iter().any(|row| {
+                row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMED")
             });
             return if already {
-                Ok(ClaimOutcome::already(0, "今日已领取"))
+                Ok(ClaimOutcome::already(0, "当前周期已领取"))
             } else {
-                Ok(ClaimOutcome::failed("当前没有可领取的签到活动"))
+                Ok(ClaimOutcome::failed("当前没有可领取的每日积分活动"))
             };
         };
 
@@ -438,7 +542,7 @@ impl Provider for QoderProvider {
             || body.get("result").and_then(|v| v.as_str()) == Some("ALREADY_CLAIMED")
             || body.get("replayed").and_then(|v| v.as_bool()) == Some(true);
         if already {
-            return Ok(ClaimOutcome::already(0, "今日已领取"));
+            return Ok(ClaimOutcome::already(0, "当前周期已领取"));
         }
         if !status.is_success() {
             let msg = body
@@ -561,6 +665,45 @@ impl Provider for QoderProvider {
             items,
             message,
         })
+    }
+
+    /// 账号真实资料。
+    ///
+    /// 设备授权只给一个内部 uid（界面会显示成 `Qoder 01a1348c-3fc` 这种 id 前缀），
+    /// 这个接口能拿回用户在 Qoder 里真实设置的昵称：
+    ///   `GET /api/v1/userinfo` → `{ id, name, username, avatar, source, ... }`
+    async fn profile(&self, _account: &Account, cred: &Value) -> Result<Option<AccountProfile>> {
+        let token = cred["access_token"].as_str().unwrap_or("");
+        if token.is_empty() {
+            return Ok(None);
+        }
+        let url = format!("{OPENAPI_BASE}{USERINFO_PATH}");
+        let resp = self
+            .http
+            .get(url)
+            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
+            .header("accept", "application/json")
+            .header("user-agent", SASH_USER_AGENT)
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Ok(None);
+        }
+
+        let name = body["name"].as_str().map(str::to_string);
+        let email = body["email"].as_str().map(str::to_string);
+        let avatar = body["avatar"].as_str().map(str::to_string);
+        if name.is_none() && email.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(AccountProfile {
+            name,
+            email,
+            avatar,
+        }))
     }
 }
 
@@ -711,4 +854,113 @@ fn urlenc(value: &str) -> String {
             _ => format!("%{:02X}", c as u32),
         })
         .collect()
+}
+
+// ---------------------------------------------------------------------------
+// 测试
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::TimeZone;
+
+    /// 构造一个本地时间点。
+    fn at(y: i32, m: u32, d: u32, hh: u32, mm: u32) -> chrono::DateTime<chrono::Local> {
+        chrono::Local
+            .with_ymd_and_hms(y, m, d, hh, mm, 0)
+            .single()
+            .expect("本地时间不唯一（夏令时重叠）")
+    }
+
+    /// 一条每日积分活动行。`start` 为该周期起点的时间戳。
+    fn daily_row(start: i64, status: &str) -> Value {
+        json!({
+            "campaignId": "camp-1",
+            "campaignKey": "act-20261023-993",
+            "actionType": "CLAIM_BENEFIT",
+            "startAt": start,
+            "endAt": start + 24 * 3600 - 60,
+            "claimStatus": status,
+            "benefit": { "kind": "CREDITS", "amount": 100 }
+        })
+    }
+
+    /// 非每日积分的活动行（例如「发布站点领奶茶兑换卡」），不该被当成签到。
+    fn voucher_row(status: &str) -> Value {
+        json!({
+            "campaignId": "camp-2",
+            "actionType": "CLAIM_BENEFIT",
+            "startAt": 1_790_697_600,
+            "endAt": 1_793_289_540,
+            "claimStatus": status,
+            "benefit": { "kind": "REDEMPTION_CODE", "amount": 1 }
+        })
+    }
+
+    #[test]
+    fn 十点前拿昨天周期的已领记录不能算今天已签() {
+        // 10-23 09:23：当前窗口是 10-22 10:00 起的那一个，已领
+        let rows = vec![daily_row(at(2026, 10, 22, 10, 0).timestamp(), "CLAIMED")];
+        assert!(matches!(
+            daily_cycle(&rows, &at(2026, 10, 23, 9, 23)),
+            Cycle::NotYet { .. }
+        ));
+    }
+
+    #[test]
+    fn 十点后今天的活动可领() {
+        let rows = vec![
+            daily_row(at(2026, 10, 22, 10, 0).timestamp(), "CLAIMED"),
+            daily_row(at(2026, 10, 23, 10, 0).timestamp(), "CLAIMABLE"),
+        ];
+        match daily_cycle(&rows, &at(2026, 10, 23, 10, 5)) {
+            Cycle::Claimable(points) => assert_eq!(points, 100),
+            other => panic!("应为 Claimable，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn 十点后今天已领() {
+        let rows = vec![daily_row(at(2026, 10, 23, 10, 0).timestamp(), "CLAIMED")];
+        assert!(matches!(
+            daily_cycle(&rows, &at(2026, 10, 23, 10, 5)),
+            Cycle::Claimed
+        ));
+    }
+
+    #[test]
+    fn 兑换码活动不算签到() {
+        // 只有奶茶兑换卡（REDEMPTION_CODE）时，10:00 前应显示「未开始」
+        let rows = vec![voucher_row("CLAIMED")];
+        assert!(matches!(
+            daily_cycle(&rows, &at(2026, 10, 23, 9, 0)),
+            Cycle::NotYet { .. }
+        ));
+        // 10:00 后也没有每日活动行 → 未下发
+        assert!(matches!(
+            daily_cycle(&rows, &at(2026, 10, 23, 10, 5)),
+            Cycle::NotIssued { .. }
+        ));
+    }
+
+    #[test]
+    fn 过点但上游没下发() {
+        let rows: Vec<Value> = Vec::new();
+        match daily_cycle(&rows, &at(2026, 10, 23, 10, 5)) {
+            Cycle::NotIssued { reset_minute } => assert_eq!(reset_minute, 10 * 60),
+            other => panic!("应为 NotIssued，实际 {other:?}"),
+        }
+    }
+
+    #[test]
+    fn 刷新时刻从活动行推断() {
+        let rows = vec![daily_row(at(2026, 10, 23, 10, 0).timestamp(), "CLAIMABLE")];
+        match daily_cycle(&rows, &at(2026, 10, 23, 9, 59)) {
+            Cycle::NotYet { reset_minute } => {
+                assert_eq!(reset_minute, 600);
+            }
+            other => panic!("应为 NotYet，实际 {other:?}"),
+        }
+    }
 }

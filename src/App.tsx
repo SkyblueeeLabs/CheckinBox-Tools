@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, onCheckinProgress } from "./lib/api";
+import { api, onAccountsSynced, onCheckinProgress } from "./lib/api";
 import type {
   AccountResult,
   AgentGroup,
@@ -7,8 +7,9 @@ import type {
   LogEntry,
   Overview,
 } from "./lib/types";
-import Sidebar from "./components/Sidebar";
+import Sidebar, { SETTINGS_ID } from "./components/Sidebar";
 import AgentGroupPanel from "./components/AgentGroupPanel";
+import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
 
 interface Toast {
@@ -38,6 +39,7 @@ function buildGroups(overview: Overview): AgentGroup[] {
           accountCount: accounts.length,
           todayClaimed: 0,
           todayClaimable: 0,
+          refreshIntervalMinutes: 10,
         }),
         alertThreshold: overview.accounts
           .find((a) => a.account.provider === provider.id)
@@ -51,8 +53,9 @@ export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [selected, setSelected] = useState<string>("");
+  const [selected, setSelected] = useState<string>(SETTINGS_ID);
   const [busy, setBusy] = useState(false);
+  const [syncing, setSyncing] = useState(false);
   const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [authSession, setAuthSession] = useState<string | null>(null);
@@ -78,7 +81,7 @@ export default function App() {
       setLogs(lg);
       setConfig(cfg);
       setSelected((prev) =>
-        prev && ov.providers.some((p) => p.id === prev)
+        prev === SETTINGS_ID || ov.providers.some((p) => p.id === prev)
           ? prev
           : ov.providers[0]?.id ?? ""
       );
@@ -96,12 +99,17 @@ export default function App() {
         pushToast("err", `${result.label} 签到失败：${result.message}`);
       }
     });
+    // 后台自动同步跑完一轮，界面跟着刷新（跨天同步尤其重要）
+    const unlistenSync = onAccountsSynced(() => {
+      void refresh();
+    });
     return () => {
       void unlisten.then((fn) => fn());
+      void unlistenSync.then((fn) => fn());
     };
   }, [refresh, pushToast]);
 
-  // 后台定时刷新（积分和签到状态都会变）
+  // 前台轮询（积分和签到状态都会变）
   useEffect(() => {
     const timer = setInterval(() => void refresh(), 45_000);
     return () => clearInterval(timer);
@@ -305,10 +313,63 @@ export default function App() {
     [overview, pushToast]
   );
 
+  const patchRefreshInterval = useCallback(
+    (providerId: string, minutes: number) => {
+      setOverview((prev) => {
+        if (!prev) return prev;
+        const cur = prev.agents[providerId];
+        if (!cur) return prev;
+        return {
+          ...prev,
+          agents: {
+            ...prev.agents,
+            [providerId]: { ...cur, refreshIntervalMinutes: minutes },
+          },
+        };
+      });
+      void api
+        .setRefreshInterval(providerId, minutes)
+        .then((cfg) => setConfig(cfg))
+        .catch((e) => pushToast("err", `保存失败：${e}`));
+    },
+    [pushToast]
+  );
+
   const toggleMaster = async (enabled: boolean) => {
     try {
       const cfg = await api.setSchedulerEnabled(enabled);
       setConfig(cfg);
+    } catch (e) {
+      pushToast("err", `${e}`);
+    }
+  };
+
+  const toggleSync = async (enabled: boolean) => {
+    try {
+      const cfg = await api.setSyncEnabled(enabled);
+      setConfig(cfg);
+      pushToast("ok", enabled ? "自动同步已开启" : "自动同步已关闭");
+    } catch (e) {
+      pushToast("err", `${e}`);
+    }
+  };
+
+  const syncNow = async () => {
+    setSyncing(true);
+    try {
+      const count = await api.syncNow();
+      pushToast("ok", `已同步 ${count} 个账号`);
+      await refresh();
+    } catch (e) {
+      pushToast("err", `同步失败：${e}`);
+    } finally {
+      setSyncing(false);
+    }
+  };
+
+  const openDataDir = async () => {
+    try {
+      await api.openDataDir();
     } catch (e) {
       pushToast("err", `${e}`);
     }
@@ -324,14 +385,19 @@ export default function App() {
   }
 
   const groups = buildGroups(overview);
-  const current = groups.find((g) => g.provider.id === selected) ?? groups[0];
+  const inSettings = selected === SETTINGS_ID;
+  const current = groups.find((g) => g.provider.id === selected);
+  const providerNames = Object.fromEntries(
+    overview.providers.map((p) => [p.id, p.name])
+  );
 
   return (
     <div className="shell">
       <Sidebar
         groups={groups}
-        selected={current?.provider.id ?? ""}
+        selected={selected}
         onSelect={setSelected}
+        onOpenSettings={() => setSelected(SETTINGS_ID)}
       />
 
       <div className="main">
@@ -355,9 +421,10 @@ export default function App() {
 
         <header className="topbar">
           <div className="brand">
-            <span className="brand-name">聚合签到</span>
+            <span className="brand-name">{inSettings ? "设置" : "聚合签到"}</span>
             <span className="brand-sub">
               今日已签 <b>{overview.claimedCount}</b> / {overview.totalCount} 个账号
+              {overview.todayPoints > 0 ? ` · 今日 +${overview.todayPoints}` : ""}
             </span>
           </div>
 
@@ -368,7 +435,15 @@ export default function App() {
                 checked={config.scheduler.enabled}
                 onChange={(e) => toggleMaster(e.target.checked)}
               />
-              <span>总闸</span>
+              <span>签到总闸</span>
+            </label>
+            <label className="switch" title="后台自动同步积分 / 签到状态 / 账号资料">
+              <input
+                type="checkbox"
+                checked={config.scheduler.syncEnabled}
+                onChange={(e) => toggleSync(e.target.checked)}
+              />
+              <span>自动同步</span>
             </label>
             <button className="btn primary" onClick={runAll} disabled={busy}>
               {busy ? "签到中…" : "一键全部签到"}
@@ -376,7 +451,20 @@ export default function App() {
           </div>
         </header>
 
-        {current ? (
+        {inSettings ? (
+          <SettingsPanel
+            overview={overview}
+            config={config}
+            busy={busy}
+            syncing={syncing}
+            onSchedulerEnabled={toggleMaster}
+            onSyncEnabled={toggleSync}
+            onRefreshInterval={patchRefreshInterval}
+            onScheduleChange={(id, patch) => patchSchedule(id, patch)}
+            onSyncNow={syncNow}
+            onOpenDataDir={openDataDir}
+          />
+        ) : current ? (
           <AgentGroupPanel
             group={current}
             busy={busy}
@@ -398,7 +486,14 @@ export default function App() {
           </div>
         )}
 
-        <LogPanel logs={logs} visible={logsOpen} onToggle={() => setLogsOpen((v) => !v)} />
+        <LogPanel
+          logs={logs}
+          providerId={current?.provider.id ?? null}
+          providerName={current?.provider.name ?? "全部"}
+          providerNames={providerNames}
+          visible={logsOpen}
+          onToggle={() => setLogsOpen((v) => !v)}
+        />
 
         <div className="toasts">
           {toasts.map((t) => (

@@ -23,6 +23,15 @@ interface Props {
 }
 
 /**
+ * 各平台「活动刷新时刻」的提示。
+ * 时间窗如果配在刷新之前，到点只会拿到「未开始」，然后被标记成今天已处理。
+ */
+const RESET_HINT: Record<string, string> = {
+  qoder: "Qoder 的每日活动 10:00（UTC+8）才刷新，时间窗要放在 10:00 之后",
+  qwenwork: "千问办公的每日签到活动当前是停用状态，暂不会自动领取",
+};
+
+/**
  * 单个 agent 的面板。
  *
  * 自动签到配置**属于这个 agent 自己**（开关 + 时间窗），不再有全局时间窗 ——
@@ -117,6 +126,9 @@ export default function AgentGroupPanel({
           />
         </span>
         <span className="sched-hint">窗内每账号随机错峰执行</span>
+        {RESET_HINT[provider.id] ? (
+          <span className="sched-hint warn">{RESET_HINT[provider.id]}</span>
+        ) : null}
 
         <span className="sched-label">预警</span>
         <span className="sched-win">

@@ -142,6 +142,8 @@ pub struct AgentScheduleView {
     pub account_count: usize,
     pub today_claimed: usize,
     pub today_claimable: usize,
+    /// 该 agent 的数据自动同步间隔（分钟）
+    pub refresh_interval_minutes: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -152,12 +154,16 @@ pub struct Overview {
     pub today_points: i64,
     pub claimed_count: usize,
     pub total_count: usize,
-    /// 总闸
+    /// 签到总闸
     pub scheduler_enabled: bool,
+    /// 自动同步（积分 / 状态 / 资料）总开关
+    pub sync_enabled: bool,
     /// 每个 agent 自己的调度配置（前端按 agent 渲染各自的开关）
     pub agents: BTreeMap<String, AgentScheduleView>,
     /// 每个账号今天的计划执行时刻（分钟）
     pub plans: BTreeMap<String, u32>,
+    /// 应用数据目录（账号池 / 配置 / 日志都在这里）
+    pub data_dir: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -202,6 +208,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
     let mut accounts = Vec::new();
     let mut today_points = 0i64;
     let mut claimed_count = 0usize;
+    // 需要改成真实昵称的账号（循环里只收集，最后统一落盘）
+    let mut relabel: Vec<Account> = Vec::new();
 
     for account in store.list() {
         let provider = match state.provider(&account.provider) {
@@ -214,7 +222,19 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             Err(_) => continue,
         };
 
-        let (status, error) = match provider.status(&account, &cred).await {
+        // 兜底 label（`Qoder 01a1348c-3fc` 这种 id 前缀）才去换真实昵称，
+        // 避免每 45 秒给每个账号多打一次资料接口。换到就落盘，之后不用再查。
+        let mut display_account = account.clone();
+        if account.label_is_fallback() {
+            if let Ok(Some(profile)) = provider.profile(&account, &cred).await {
+                if let Some(name) = profile.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                    display_account.label = name.to_string();
+                    relabel.push(display_account.clone());
+                }
+            }
+        }
+
+        let (status, error) = match provider.status(&display_account, &cred).await {
             Ok(s) => {
                 if s.state == ClaimState::Claimed {
                     claimed_count += 1;
@@ -226,7 +246,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         };
 
         // 积分与签到是两个独立请求：积分失败不影响签到状态展示
-        let (quota, quota_error) = match provider.quota(&account, &cred).await {
+        let (quota, quota_error) = match provider.quota(&display_account, &cred).await {
             Ok(q) => {
                 // 落一条积分快照（趋势图用）。失败不致命。
                 let _ = quota_history::append(&quota_history::QuotaSnapshot::new(
@@ -275,7 +295,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         accounts.push(AccountView {
             provider_name: provider.display_name().to_string(),
             accent: provider.accent().to_string(),
-            account,
+            account: display_account,
             status,
             quota,
             quota_error,
@@ -289,6 +309,14 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             alert_threshold: threshold,
             trend,
         });
+    }
+
+    // 把换到的真实昵称落盘（只写变化的，且整体一次写完）
+    if !relabel.is_empty() {
+        let mut guard = state.store.lock().unwrap();
+        for account in &relabel {
+            let _ = guard.touch(account.clone());
+        }
     }
 
     let provider_views = state
@@ -331,6 +359,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 account_count: list.len(),
                 today_claimed: claimed,
                 today_claimable: claimable,
+                refresh_interval_minutes: config.refresh_interval_of(provider.id()),
             },
         );
     }
@@ -341,6 +370,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         .map(|(k, v)| (k.clone(), v.scheduled_minute))
         .collect();
 
+    let data_dir = crate::core::paths::data_dir().to_string_lossy().to_string();
+
     Ok(Overview {
         total_count: accounts.len(),
         claimed_count,
@@ -348,8 +379,10 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         accounts,
         providers: provider_views,
         scheduler_enabled: config.scheduler.enabled,
+        sync_enabled: config.scheduler.sync_enabled,
         agents: agents_view,
         plans,
+        data_dir,
     })
 }
 
@@ -376,7 +409,8 @@ pub async fn checkin_account(
         .credential(&provider_id, &account_id)
         .map_err(|e| e.to_string())?;
 
-    let result = run_checkin(&app, provider.as_ref(), &account, &cred).await;
+    let result = run_checkin(provider.as_ref(), &account, &cred).await;
+    record_result(&app, &account, &result, true);
 
     // 手动执行后清掉「今日已签」标记，交给调度器重新判定状态。
     if result.status != "failed" {
@@ -404,18 +438,22 @@ pub async fn checkin_all_inner(app: AppHandle, state: &AppState) -> Vec<AccountR
         let cred = match store.credential(&account.provider, &account.id) {
             Ok(c) => c,
             Err(e) => {
-                out.push(AccountResult {
+                let result = AccountResult {
                     account_id: account.id.clone(),
                     provider: account.provider.clone(),
                     label: account.label.clone(),
                     status: "failed".into(),
                     points: 0,
                     message: e.to_string(),
-                });
+                };
+                record_result(&app, &account, &result, true);
+                out.push(result);
                 continue;
             }
         };
-        out.push(run_checkin(&app, provider.as_ref(), &account, &cred).await);
+        let result = run_checkin(provider.as_ref(), &account, &cred).await;
+        record_result(&app, &account, &result, true);
+        out.push(result);
     }
     out
 }
@@ -558,7 +596,15 @@ pub async fn poll_device_auth(
     match qoder.poll_authorization(&session).await {
         Ok(Some((mut account, cred))) => {
             // 账号归属以发起时的 provider 为准（同一台机器可能同时授权多个平台）
-            account.provider = provider_id;
+            account.provider = provider_id.clone();
+            // 设备授权返回的兜底 label 带的是 Qoder 前缀，按实际归属改掉，
+            // 否则千问办公的账号也会显示成 `Qoder 01a1348c-3fc`。
+            if provider_id != "qoder" {
+                let prefix = if provider_id == "qwenwork" { "千问办公" } else { "账号" };
+                account.label = account
+                    .label
+                    .replacen("Qoder ", &format!("{prefix} "), 1);
+            }
             let mut store = state.store.lock().unwrap();
             store.upsert(account.clone(), &cred).map_err(|e| e.to_string())?;
             {
@@ -603,6 +649,9 @@ pub async fn set_config(
     for (id, cfg) in &config.scheduler.agents {
         if !cfg.is_valid() {
             return Err(format!("{id} 的调度时间窗不合法（起必须早于止）"));
+        }
+        if cfg.refresh_interval_minutes == 0 {
+            return Err(format!("{id} 的同步间隔不合法（至少 1 分钟）"));
         }
     }
     let mut guard = state.config.lock().unwrap();
@@ -658,6 +707,68 @@ pub async fn set_scheduler_enabled(
     Ok(guard.clone())
 }
 
+/// 切换「自动同步」总开关（积分 / 签到状态 / 账号资料）。
+#[tauri::command]
+pub async fn set_sync_enabled(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<AppConfig, String> {
+    let mut guard = state.config.lock().unwrap();
+    guard.scheduler.sync_enabled = enabled;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 设置某个 agent 的数据自动同步间隔（分钟）。
+#[tauri::command]
+pub async fn set_refresh_interval(
+    state: State<'_, AppState>,
+    provider_id: String,
+    minutes: u32,
+) -> Result<AppConfig, String> {
+    if !(1..=24 * 60).contains(&minutes) {
+        return Err("同步间隔需在 1–1440 分钟之间".into());
+    }
+    let mut guard = state.config.lock().unwrap();
+    let mut cfg = guard.scheduler.agent(&provider_id);
+    cfg.refresh_interval_minutes = minutes;
+    guard.scheduler.set_agent(&provider_id, cfg);
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 立即同步全部账号（不等间隔）。返回同步过的账号数。
+#[tauri::command]
+pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<usize, String> {
+    let accounts = state.store.lock().unwrap().list();
+    let mut done = 0usize;
+    for account in &accounts {
+        if sync_one(&app, &state, account).await {
+            done += 1;
+        }
+    }
+    let now = chrono::Local::now().timestamp();
+    {
+        let mut sched = state.scheduler.lock().unwrap();
+        for provider in state.providers.iter() {
+            if accounts.iter().any(|a| a.provider == provider.id()) {
+                sched.mark_synced(provider.id(), now);
+            }
+        }
+        let _ = sched.save();
+    }
+    let _ = app.emit("accounts-synced", ());
+    Ok(done)
+}
+
+/// 在文件管理器里打开应用数据目录。
+#[tauri::command]
+pub async fn open_data_dir() -> Result<(), String> {
+    let dir = crate::core::paths::data_dir();
+    crate::core::paths::ensure_dir(&dir).map_err(|e| e.to_string())?;
+    open::that(dir).map_err(|e| e.to_string())
+}
+
 /// 把某个账号设为该 agent 的当前账号（多账号切换）。
 #[tauri::command]
 pub async fn set_active_account(
@@ -701,21 +812,19 @@ pub async fn open_external(url: String) -> Result<(), String> {
 // 内部
 // ---------------------------------------------------------------------------
 
-/// 核心签到流程：查状态 → 需要则领取 → 落流水 → 广播进度。
+/// 核心签到流程：查状态 → 需要则领取。
+///
+/// **只返回结果，不落流水** —— 落不落流水由调用方决定（调度器对
+/// 「上游还没开窗」的重试不落，否则一个时间窗内会刷出几十条没信息量的记录）。
 async fn run_checkin(
-    app: &AppHandle,
     provider: &dyn Provider,
     account: &Account,
     cred: &serde_json::Value,
 ) -> AccountResult {
-    let emit = |result: &AccountResult| {
-        let _ = app.emit("checkin-progress", result);
-    };
-
     let status = match provider.status(account, cred).await {
         Ok(s) => s,
         Err(e) => {
-            let result = AccountResult {
+            return AccountResult {
                 account_id: account.id.clone(),
                 provider: account.provider.clone(),
                 label: account.label.clone(),
@@ -723,21 +832,11 @@ async fn run_checkin(
                 points: 0,
                 message: e.to_string(),
             };
-            let _ = logging::append(&LogEntry::new(
-                &account.provider,
-                &account.id,
-                &account.label,
-                "failed",
-                0,
-                &result.message,
-            ));
-            emit(&result);
-            return result;
         }
     };
 
     if status.state != ClaimState::Claimable {
-        let result = AccountResult {
+        return AccountResult {
             account_id: account.id.clone(),
             provider: account.provider.clone(),
             label: account.label.clone(),
@@ -753,22 +852,12 @@ async fn run_checkin(
                 status.message.clone()
             },
         };
-        let _ = logging::append(&LogEntry::new(
-            &account.provider,
-            &account.id,
-            &account.label,
-            &result.status,
-            result.points,
-            &result.message,
-        ));
-        emit(&result);
-        return result;
     }
 
     let outcome = match provider.claim(account, cred).await {
         Ok(o) => o,
         Err(e) => {
-            let result = AccountResult {
+            return AccountResult {
                 account_id: account.id.clone(),
                 provider: account.provider.clone(),
                 label: account.label.clone(),
@@ -776,20 +865,10 @@ async fn run_checkin(
                 points: 0,
                 message: e.to_string(),
             };
-            let _ = logging::append(&LogEntry::new(
-                &account.provider,
-                &account.id,
-                &account.label,
-                "failed",
-                0,
-                &result.message,
-            ));
-            emit(&result);
-            return result;
         }
     };
 
-    let result = AccountResult {
+    AccountResult {
         account_id: account.id.clone(),
         provider: account.provider.clone(),
         label: account.label.clone(),
@@ -800,20 +879,78 @@ async fn run_checkin(
         },
         points: outcome.points,
         message: outcome.message.clone(),
-    };
-    let _ = logging::append(&LogEntry::new(
-        &account.provider,
-        &account.id,
-        &account.label,
-        &result.status,
-        result.points,
-        &result.message,
-    ));
-    emit(&result);
-    result
+    }
 }
 
-/// 调度器后台循环：每 30 秒检查一次是否有到点的账号。
+/// 落一条签到流水 + 广播进度给前端。
+///
+/// `record == false` 时两者都不做 —— 调度器对「上游还没开窗」的重试用它，
+/// 否则一个时间窗内会刷出几十条没有信息量的记录。
+fn record_result(app: &AppHandle, account: &Account, result: &AccountResult, record: bool) {
+    if record {
+        let _ = logging::append(&LogEntry::new(
+            &account.provider,
+            &account.id,
+            &account.label,
+            &result.status,
+            result.points,
+            &result.message,
+        ));
+    }
+    let _ = app.emit("checkin-progress", result);
+}
+
+/// 同步一个账号：刷新签到状态 + 积分（落快照）+ 账号资料（补真实昵称）。
+///
+/// 单个账号失败不影响其他账号，返回是否成功取到过数据。
+async fn sync_one(app: &AppHandle, state: &AppState, account: &Account) -> bool {
+    let Some(provider) = state.provider(&account.provider) else {
+        return false;
+    };
+    let store = state.store.lock().unwrap().clone();
+    let Ok(cred) = store.credential(&account.provider, &account.id) else {
+        return false;
+    };
+
+    // 签到状态（失败不致命，UI 里仍以 overview 的结果为准）
+    let _ = provider.status(account, &cred).await;
+
+    // 积分 + 落一条快照（趋势图用）
+    if let Ok(q) = provider.quota(account, &cred).await {
+        let _ = quota_history::append(&quota_history::QuotaSnapshot::new(
+            &account.provider,
+            &account.id,
+            &account.label,
+            q.total_remaining,
+            q.total_granted,
+            q.total_consumed,
+        ));
+    }
+
+    // 账号资料：只有兜底 label 才去换真实昵称
+    if account.label_is_fallback() {
+        if let Ok(Some(profile)) = provider.profile(account, &cred).await {
+            if let Some(name) = profile.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                let mut renamed = account.clone();
+                renamed.label = name.to_string();
+                let mut guard = state.store.lock().unwrap();
+                let _ = guard.touch(renamed);
+            }
+        }
+    }
+
+    let _ = app.emit("account-synced", (&account.provider, &account.id));
+    true
+}
+
+/// 调度器后台循环。
+///
+/// 每 30 秒一轮，做三件事：
+///   1. 跨天时重排计划（各 agent 用自己的时间窗）；
+///   2. 到点的账号执行签到（受「签到总闸」控制）；
+///   3. 按 agent 自己的间隔自动同步积分 / 签到状态 / 账号资料
+///      （受「自动同步」开关控制）。**跨天时不看间隔，强制同步一次**，
+///      这样「今天已签 / 今天可签」不会停在昨天的状态。
 pub async fn scheduler_loop(app: AppHandle) {
     loop {
         tokio::time::sleep(std::time::Duration::from_secs(30)).await;
@@ -824,12 +961,10 @@ pub async fn scheduler_loop(app: AppHandle) {
         };
 
         let config = state.config.lock().unwrap().clone();
-        if !config.scheduler.enabled {
-            continue;
-        }
 
         let today = scheduler::today();
         let now_minute = scheduler::now_minute();
+        let now_ts = chrono::Local::now().timestamp();
 
         // 按 agent 分组：每个 agent 有自己独立的时间窗
         let accounts = state.store.lock().unwrap().list();
@@ -847,6 +982,12 @@ pub async fn scheduler_loop(app: AppHandle) {
             .map(|a| AccountStore::key(&a.provider, &a.id))
             .collect();
 
+        // 跨天检测：计划日期不是今天就说明过了一天
+        let day_changed = {
+            let sched = state.scheduler.lock().unwrap();
+            sched.date != today
+        };
+
         // 跨天重排计划（各 agent 用自己的时间窗）
         {
             let mut sched = state.scheduler.lock().unwrap();
@@ -863,64 +1004,123 @@ pub async fn scheduler_loop(app: AppHandle) {
             let _ = sched.save();
         }
 
-        for account in accounts {
-            // 每个 agent 自己管自己的开关
-            let agent_cfg = config.scheduler.agent(&account.provider);
-            if !agent_cfg.enabled || !agent_cfg.is_valid() {
-                continue;
-            }
-
-            let key = AccountStore::key(&account.provider, &account.id);
-            let (done, minute) = {
-                let sched = state.scheduler.lock().unwrap();
-                (
-                    sched.is_done(&key, &today),
-                    sched.minute_of(&key).unwrap_or(u32::MAX),
-                )
-            };
-            if done || minute == u32::MAX || now_minute < minute {
-                continue;
-            }
-            // 只在计划分钟之后的第一个 tick 执行，避免同一分钟内重复触发
-            if now_minute > minute + 1 {
-                continue;
-            }
-
-            let Some(provider) = state.provider(&account.provider) else {
-                continue;
-            };
-            let cred = match state.store.lock().unwrap().credential(&account.provider, &account.id)
-            {
-                Ok(c) => c,
-                Err(e) => {
-                    let result = AccountResult {
-                        account_id: account.id.clone(),
-                        provider: account.provider.clone(),
-                        label: account.label.clone(),
-                        status: "failed".into(),
-                        points: 0,
-                        message: e.to_string(),
-                    };
-                    let _ = logging::append(&LogEntry::new(
-                        &account.provider,
-                        &account.id,
-                        &account.label,
-                        "failed",
-                        0,
-                        &result.message,
-                    ));
-                    let _ = app.emit("checkin-progress", &result);
+        // ---- 到点签到（受「签到总闸」控制）----
+        if config.scheduler.enabled {
+            for account in accounts.clone() {
+                // 每个 agent 自己管自己的开关
+                let agent_cfg = config.scheduler.agent(&account.provider);
+                if !agent_cfg.enabled || !agent_cfg.is_valid() {
                     continue;
                 }
+
+                let key = AccountStore::key(&account.provider, &account.id);
+                let (done, minute) = {
+                    let sched = state.scheduler.lock().unwrap();
+                    (
+                        sched.is_done(&key, &today),
+                        sched.minute_of(&key).unwrap_or(u32::MAX),
+                    )
+                };
+                if done || minute == u32::MAX || now_minute < minute {
+                    continue;
+                }
+                // 时间窗内「补跑」：计划分钟已经过了但今天还没处理过，就现在做。
+                // 这样晚启动（比如 10:20 才打开软件）也不会整天漏签。
+                if now_minute > agent_cfg.end_minute {
+                    continue;
+                }
+
+                let Some(provider) = state.provider(&account.provider) else {
+                    continue;
+                };
+                let cred = match state.store.lock().unwrap().credential(&account.provider, &account.id)
+                {
+                    Ok(c) => c,
+                    Err(e) => {
+                        let result = AccountResult {
+                            account_id: account.id.clone(),
+                            provider: account.provider.clone(),
+                            label: account.label.clone(),
+                            status: "failed".into(),
+                            points: 0,
+                            message: e.to_string(),
+                        };
+                        let _ = logging::append(&LogEntry::new(
+                            &account.provider,
+                            &account.id,
+                            &account.label,
+                            "failed",
+                            0,
+                            &result.message,
+                        ));
+                        let _ = app.emit("checkin-progress", &result);
+                        continue;
+                    }
+                };
+
+                let result = run_checkin(provider.as_ref(), &account, &cred).await;
+
+                // 「skipped」= 上游今天还没开窗。既**不能标记成已处理**
+                //（否则一整天都不再重试），也不值得落流水 / 广播 ——
+                // 否则一个时间窗内会刷出几十条没有信息量的记录。
+                let opened = result.status == "success" || result.status == "already";
+                record_result(&app, &account, &result, opened);
+
+                let mut sched = state.scheduler.lock().unwrap();
+                if opened {
+                    sched.mark_done(&key, &today);
+                }
+                let _ = sched.save();
+            }
+        }
+
+        // ---- 自动同步（积分 / 状态 / 资料）----
+        if config.scheduler.sync_enabled {
+            // 每个 agent 距上次同步多久了
+            let last_sync: BTreeMap<String, i64> = {
+                let sched = state.scheduler.lock().unwrap();
+                state
+                    .providers
+                    .iter()
+                    .map(|p| {
+                        (
+                            p.id().to_string(),
+                            sched.last_sync_of(p.id()).unwrap_or(0),
+                        )
+                    })
+                    .collect()
             };
 
-            let result = run_checkin(&app, provider.as_ref(), &account, &cred).await;
-
-            let mut sched = state.scheduler.lock().unwrap();
-            if result.status != "failed" {
-                sched.mark_done(&key, &today);
+            let mut synced_providers: Vec<String> = Vec::new();
+            for provider in state.providers.iter() {
+                let list: Vec<Account> = accounts
+                    .iter()
+                    .filter(|a| a.provider == provider.id())
+                    .cloned()
+                    .collect();
+                if list.is_empty() {
+                    continue;
+                }
+                let interval_secs = config.refresh_interval_of(provider.id()) as i64 * 60;
+                let elapsed = now_ts - last_sync.get(provider.id()).copied().unwrap_or(0);
+                // 跨天强制同步；否则按各自间隔
+                if !day_changed && elapsed < interval_secs {
+                    continue;
+                }
+                for account in &list {
+                    sync_one(&app, &state, account).await;
+                }
+                synced_providers.push(provider.id().to_string());
             }
-            let _ = sched.save();
+
+            if !synced_providers.is_empty() {
+                let mut sched = state.scheduler.lock().unwrap();
+                for pid in &synced_providers {
+                    sched.mark_synced(pid, now_ts);
+                }
+                let _ = sched.save();
+                let _ = app.emit("accounts-synced", ());
+            }
         }
     }
 }

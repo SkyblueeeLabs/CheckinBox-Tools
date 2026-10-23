@@ -83,6 +83,8 @@ export interface AgentScheduleView {
   todayClaimed: number;
   todayClaimable: number;
   alertThreshold?: number;
+  /** 该 agent 的数据自动同步间隔（分钟） */
+  refreshIntervalMinutes: number;
 }
 
 export interface Overview {
@@ -91,12 +93,16 @@ export interface Overview {
   todayPoints: number;
   claimedCount: number;
   totalCount: number;
-  /** 总闸 */
+  /** 签到总闸 */
   schedulerEnabled: boolean;
+  /** 自动同步（积分 / 状态 / 资料）总开关 */
+  syncEnabled: boolean;
   /** 每个 agent 自己的调度配置 */
   agents: Record<string, AgentScheduleView>;
   /** 每个账号今天的计划执行时刻（分钟） */
   plans: Record<string, number>;
+  /** 应用数据目录 */
+  dataDir: string;
 }
 
 export interface AgentGroup {
@@ -134,10 +140,14 @@ export interface AgentScheduleConfig {
   enabled: boolean;
   startMinute: number;
   endMinute: number;
+  /** 该 agent 的数据自动同步间隔（分钟） */
+  refreshIntervalMinutes: number;
 }
 
 export interface SchedulerConfig {
   enabled: boolean;
+  /** 自动同步（积分 / 签到状态 / 账号资料）总开关 */
+  syncEnabled: boolean;
   agents: Record<string, AgentScheduleConfig>;
 }
 

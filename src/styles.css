@@ -369,6 +369,9 @@ button:disabled {
   font-size: 11px;
   color: var(--text-3);
 }
+.sched-hint.warn {
+  color: var(--warn);
+}
 
 /* ---------- 开关 ---------- */
 .switch {
@@ -1002,4 +1005,198 @@ button:disabled {
 .sched-threshold:focus {
   outline: none;
   border-color: var(--accent);
+}
+
+/* ==========================================================================
+   设置页
+   ========================================================================== */
+.set-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(400px, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.set-block {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 13px 15px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+}
+
+.set-block-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.set-block-head h3 {
+  margin: 0;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
+
+.set-hint {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.7;
+  color: var(--text-2);
+}
+
+.set-path {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--text-3);
+  word-break: break-all;
+}
+
+.set-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 11.5px;
+}
+.set-table th,
+.set-table td {
+  padding: 6px 8px;
+  text-align: left;
+  border-top: 1px solid var(--line);
+  vertical-align: middle;
+}
+.set-table th {
+  border-top: none;
+  color: var(--text-3);
+  font-weight: 500;
+  font-size: 9.5px;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+.set-table .r {
+  text-align: right;
+}
+.set-table .c {
+  text-align: center;
+}
+.set-table td.r {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+}
+
+.set-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  margin-right: 8px;
+}
+
+.set-table input[type="number"] {
+  width: 64px;
+  height: 25px;
+  padding: 0 7px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+.set-table input[type="number"]:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.set-table input[type="checkbox"] {
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 3px;
+  border: 1px solid var(--line-2);
+  background: var(--bg);
+  cursor: pointer;
+  position: relative;
+  vertical-align: middle;
+}
+.set-table input[type="checkbox"]:checked {
+  background: var(--ok);
+  border-color: var(--ok);
+}
+.set-table input[type="checkbox"]:checked::after {
+  content: "";
+  position: absolute;
+  left: 4px;
+  top: 1px;
+  width: 4px;
+  height: 8px;
+  border: solid #06281b;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.set-win {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.set-win input {
+  width: 52px;
+  height: 24px;
+  padding: 0 6px;
+  background: var(--bg);
+  border: 1px solid var(--line-2);
+  border-radius: 4px;
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 11.5px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+.set-win input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+/* ---------- 侧边栏设置入口 ---------- */
+.sidebar-foot {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.side-settings {
+  width: 100%;
+  justify-content: flex-start;
+}
+.settings-dot {
+  background: var(--text-3);
+}
+
+/* ---------- 记录：单 agent / 全部 ---------- */
+.logs-list.single .log-row {
+  grid-template-columns: 128px 150px 1fr 52px 60px;
+}
+.logs-list.all .log-row {
+  grid-template-columns: 128px 96px 150px 1fr 52px 60px;
+}
+.log-provider {
+  color: var(--text-3);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.log-label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

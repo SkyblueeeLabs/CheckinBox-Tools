@@ -23,12 +23,15 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::core::provider::{Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota};
+use crate::core::provider::{
+    Account, AccountProfile, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+};
 
 const OPENAPI_BASE: &str = "https://openapi.qoder.com.cn";
 const STATUS_PATH: &str = "/sash/api/v1/me/daily-check-in/status";
 const CLAIM_PATH: &str = "/sash/api/v1/me/daily-check-in/claim";
 const USAGE_PATH: &str = "/sash/api/v2/me/usage";
+const USERINFO_PATH: &str = "/api/v1/userinfo";
 const USER_AGENT: &str = "QoderWork";
 
 pub struct QwenWorkProvider {
@@ -254,5 +257,37 @@ impl Provider for QwenWorkProvider {
             items,
             message: format!("剩余 {remaining:.0} / 共 {granted:.0} Credits"),
         })
+    }
+
+    /// 账号真实资料（与 Qoder 共用同一个网关的用户信息接口）。
+    async fn profile(&self, _account: &Account, cred: &Value) -> Result<Option<AccountProfile>> {
+        let token = cred["access_token"].as_str().unwrap_or("");
+        if token.is_empty() {
+            return Ok(None);
+        }
+        let url = format!("{OPENAPI_BASE}{USERINFO_PATH}");
+        let resp = self
+            .http
+            .get(url)
+            .headers(self.sash_headers(cred))
+            .send()
+            .await?;
+
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            return Ok(None);
+        }
+        let name = body["name"].as_str().map(str::to_string);
+        let email = body["email"].as_str().map(str::to_string);
+        let avatar = body["avatar"].as_str().map(str::to_string);
+        if name.is_none() && email.is_none() {
+            return Ok(None);
+        }
+        Ok(Some(AccountProfile {
+            name,
+            email,
+            avatar,
+        }))
     }
 }

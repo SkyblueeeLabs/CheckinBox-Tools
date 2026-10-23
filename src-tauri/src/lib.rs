@@ -26,9 +26,13 @@ pub fn run() {
             commands::set_config,
             commands::set_agent_schedule,
             commands::set_scheduler_enabled,
+            commands::set_sync_enabled,
+            commands::set_refresh_interval,
             commands::set_active_account,
             commands::set_alert_threshold,
             commands::launch_client,
+            commands::sync_now,
+            commands::open_data_dir,
             commands::get_logs,
             commands::open_external,
         ])

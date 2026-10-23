@@ -46,6 +46,12 @@ export const api = {
     }),
   setSchedulerEnabled: (enabled: boolean) =>
     invoke<AppConfig>("set_scheduler_enabled", { enabled }),
+  setSyncEnabled: (enabled: boolean) =>
+    invoke<AppConfig>("set_sync_enabled", { enabled }),
+  setRefreshInterval: (providerId: string, minutes: number) =>
+    invoke<AppConfig>("set_refresh_interval", { providerId, minutes }),
+  syncNow: () => invoke<number>("sync_now"),
+  openDataDir: () => invoke<void>("open_data_dir"),
   setActiveAccount: (providerId: string, accountId: string) =>
     invoke<AppConfig>("set_active_account", { providerId, accountId }),
   setAlertThreshold: (providerId: string, value: number) =>
@@ -60,6 +66,11 @@ export function onCheckinProgress(
   handler: (result: AccountResult) => void
 ): Promise<UnlistenFn> {
   return listen<AccountResult>("checkin-progress", (event) => handler(event.payload));
+}
+
+/** 后台自动同步跑完一轮（跨天强制同步 / 到间隔同步） */
+export function onAccountsSynced(handler: () => void): Promise<UnlistenFn> {
+  return listen("accounts-synced", () => handler());
 }
 
 /** 分钟数 -> HH:MM */

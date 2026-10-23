@@ -5,13 +5,17 @@ interface Props {
   groups: AgentGroup[];
   selected: string;
   onSelect: (id: string) => void;
+  onOpenSettings: () => void;
 }
+
+/** 设置页的虚拟 id（不是真实 provider）。 */
+export const SETTINGS_ID = "__settings__";
 
 /**
  * 左侧 agent 列表。
  * 每行：强调色小方块 + 名称 + 账号数/状态角标 + 右侧剩余积分（等宽数字）。
  */
-export default function Sidebar({ groups, selected, onSelect }: Props) {
+export default function Sidebar({ groups, selected, onSelect, onOpenSettings }: Props) {
   return (
     <aside className="sidebar">
       <div className="sidebar-head">
@@ -56,6 +60,16 @@ export default function Sidebar({ groups, selected, onSelect }: Props) {
       </nav>
 
       <div className="sidebar-foot">
+        <button
+          className={`side-item side-settings ${selected === SETTINGS_ID ? "active" : ""}`}
+          onClick={onOpenSettings}
+        >
+          <span className="side-dot settings-dot" />
+          <span className="side-body">
+            <span className="side-name">设置</span>
+            <span className="side-sub">同步 / 调度 / 数据</span>
+          </span>
+        </button>
         <p>积分仅用于平台内 AI 任务消耗</p>
       </div>
     </aside>
