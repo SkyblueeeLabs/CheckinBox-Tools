@@ -52,12 +52,19 @@ impl MiaoshouProvider {
         serde_json::from_str(&raw).ok()
     }
 
-    fn current_token(cred: &Value) -> Result<String> {
-        // 优先读本机客户端的实时登录态（客户端会自动续期）
+    /// 取当前可用的 access token。
+    ///
+    /// 优先读本机客户端的实时登录态（客户端会自动续期）。但客户端是**单账号**的：
+    /// 只有文件里的 uid 就是这个账号时才能用文件里的 token —— 否则会拿别人的
+    /// token 发请求，把别的账号的积分当成自己的展示（数据串号）。
+    fn current_token(account: &Account, cred: &Value) -> Result<String> {
         if let Some(auth) = Self::local_auth() {
-            if let Some(t) = auth["auth"]["accessToken"].as_str() {
-                if !t.is_empty() {
-                    return Ok(t.to_string());
+            let uid = auth["account"]["uid"].as_str().unwrap_or("");
+            if !uid.is_empty() && uid == account.id {
+                if let Some(t) = auth["auth"]["accessToken"].as_str() {
+                    if !t.is_empty() {
+                        return Ok(t.to_string());
+                    }
                 }
             }
         }
@@ -133,9 +140,9 @@ impl Provider for MiaoshouProvider {
         })
     }
 
-    async fn claim(&self, _account: &Account, cred: &Value) -> Result<ClaimOutcome> {
+    async fn claim(&self, account: &Account, cred: &Value) -> Result<ClaimOutcome> {
         // 幂等的注册奖励：新用户拿奖励，老用户返回「用户已注册」。
-        let token = Self::current_token(cred)?;
+        let token = Self::current_token(account, cred)?;
         let mut headers = reqwest::header::HeaderMap::new();
         let value = token.parse::<reqwest::header::HeaderValue>().unwrap();
         headers.insert("X-Auth-Token", value.clone());
@@ -176,8 +183,8 @@ impl Provider for MiaoshouProvider {
         }
     }
 
-    async fn quota(&self, _account: &Account, cred: &Value) -> Result<Quota> {
-        let token = Self::current_token(cred)?;
+    async fn quota(&self, account: &Account, cred: &Value) -> Result<Quota> {
+        let token = Self::current_token(account, cred)?;
         let mut headers = reqwest::header::HeaderMap::new();
         let value = token.parse::<reqwest::header::HeaderValue>().unwrap();
         headers.insert("X-Auth-Token", value.clone());

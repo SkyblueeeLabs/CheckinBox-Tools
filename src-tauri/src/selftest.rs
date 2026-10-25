@@ -196,6 +196,58 @@ pub fn run() {
     println!("    根目录 = {}", crate::core::paths::data_dir().display());
     println!("    账号文件 = {}", crate::core::paths::accounts_file().display());
 
+    // ---- 7. 客户端定位 + 进程检测 ----
+    println!("\n[7] 客户端定位与进程检测");
+    for provider in ["minimax", "qoder", "miaoshou"] {
+        let exe = crate::core::launcher::client_exe(provider);
+        match exe {
+            Some(p) => println!("    {provider}: {}", p.display()),
+            None => println!("    {provider}: 未找到客户端 exe"),
+        }
+        println!("      正在运行 = {}", crate::core::launcher::is_running(provider));
+    }
+
+    // ---- 8. Qoder OSCrypt（换号的核心链路）----
+    // 对真实客户端文件做「解密 → 再加密 → 再解密」的内存 roundtrip，
+    // 验证 DPAPI 密钥读取和 v10 加解密与客户端格式互通。不写任何文件。
+    println!("\n[8] Qoder safeStorage roundtrip");
+    {
+        use crate::core::{client_switch, os_crypt};
+        match client_switch::detect("qoder") {
+            Ok(Some(d)) => println!("    客户端登录账号：{}（id {}）", d.label, d.account_id),
+            Ok(None) => println!("    客户端未登录 / 读不到登录态"),
+            Err(e) => println!("    登录态读取失败：{e}"),
+        }
+
+        let appdata = std::env::var("APPDATA").unwrap_or_default();
+        let dir = std::path::PathBuf::from(appdata).join("com.qodercn.app.stable");
+        let local_state = dir.join("Local State");
+        let auth_file = dir.join("auth.v1.dat");
+        if !auth_file.is_file() {
+            println!("    没有 auth.v1.dat（客户端没登录过），跳过 roundtrip");
+        } else {
+            match os_crypt::read_key(&local_state).and_then(|key| {
+                let raw = std::fs::read(&auth_file)?;
+                let plain = os_crypt::decrypt(&key, &raw)?;
+                let blob = os_crypt::encrypt(&key, &plain)?;
+                let back = os_crypt::decrypt(&key, &blob)?;
+                Ok((plain, back))
+            }) {
+                Ok((plain, back)) => {
+                    let ok = plain == back;
+                    let is_json = serde_json::from_slice::<serde_json::Value>(&plain).is_ok();
+                    println!(
+                        "    解密 {} · 重加密后解回 {} · 内容是 JSON {}",
+                        if is_json { "✓" } else { "✗" },
+                        if ok { "一致 ✓" } else { "不一致 ✗" },
+                        if is_json { "✓" } else { "✗" }
+                    );
+                }
+                Err(e) => println!("    roundtrip 失败：{e}"),
+            }
+        }
+    }
+
     let _ = Value::Null;
     println!("\n=== 自检完成 ===");
 }

@@ -32,7 +32,7 @@ export default function QuotaCard({
       <div className="quota quota-error">
         <div className="quota-top">
           <div className="quota-remaining">
-            <span className="q-label">Credits</span>
+            <span className="q-label">剩余总积分</span>
             <span className="q-value">—</span>
           </div>
           {onRefresh && (
@@ -51,7 +51,7 @@ export default function QuotaCard({
       <div className="quota quota-empty">
         <div className="quota-top">
           <div className="quota-remaining">
-            <span className="q-label">Credits</span>
+            <span className="q-label">剩余总积分</span>
             <span className="q-value" style={{ color: "var(--text-3)" }}>
               —
             </span>
@@ -69,7 +69,7 @@ export default function QuotaCard({
     <div className="quota">
       <div className="quota-top">
         <div className="quota-remaining">
-          <span className="q-label">剩余</span>
+          <span className="q-label">剩余总积分</span>
           <span className="q-value" style={isLow ? { color: "var(--err)" } : undefined}>
             {fmtPoints(totalRemaining)}
           </span>
@@ -82,7 +82,7 @@ export default function QuotaCard({
             <span className="q-sub">{usedPct.toFixed(0)}%</span>
           </div>
           <div className="qstat">
-            <span className="q-label">发放</span>
+            <span className="q-label">累计发放总积分</span>
             <span className="q-value">{fmtPoints(totalGranted)}</span>
           </div>
           {onRefresh && (

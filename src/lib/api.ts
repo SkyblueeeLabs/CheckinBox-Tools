@@ -34,6 +34,8 @@ export const api = {
     invoke<Account[]>("remove_account", { providerId, accountId }),
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (config: AppConfig) => invoke<AppConfig>("set_config", { config }),
+  setAgentOrder: (order: string[]) =>
+    invoke<AppConfig>("set_agent_order", { order }),
   setAgentSchedule: (
     providerId: string,
     enabled: boolean,
@@ -62,6 +64,8 @@ export const api = {
     invoke<string>("launch_client", { providerId }),
   detectClientAccount: (providerId: string) =>
     invoke<ClientAccountView | null>("detect_client_account", { providerId }),
+  clientRunning: (providerId: string) =>
+    invoke<boolean>("client_running", { providerId }),
   switchClientAccount: (providerId: string, accountId: string) =>
     invoke<SwitchOutcome>("switch_client_account", { providerId, accountId }),
   getLogs: (days = 7) => invoke<LogEntry[]>("get_logs", { days }),

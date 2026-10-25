@@ -42,7 +42,7 @@ fn main() {
         let provider = args.get(pos + 1).cloned().unwrap_or_default();
         let account = args.get(pos + 2).cloned().unwrap_or_default();
         if provider.is_empty() || account.is_empty() {
-            eprintln!("用法：--switch-client <minimax|miaoshou> <account_id>");
+            eprintln!("用法：--switch-client <minimax|qoder|miaoshou> <account_id>");
             std::process::exit(1);
         }
         if let Err(e) = commands::cli_switch_client(&provider, &account) {

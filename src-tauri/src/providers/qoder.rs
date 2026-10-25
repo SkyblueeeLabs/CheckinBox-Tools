@@ -29,7 +29,6 @@ use chrono::Timelike;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
 
 use crate::core::provider::{
     Account, AccountProfile, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
@@ -57,6 +56,9 @@ pub struct AuthSession {
     pub nonce: String,
     pub machine_id: String,
     pub created_at: i64,
+    /// 各平台自己的附加信息（如 MiniMax 设备码轮询的参数名 / 间隔）
+    #[serde(default)]
+    pub extra: Value,
 }
 
 pub struct QoderProvider {
@@ -95,6 +97,7 @@ impl QoderProvider {
             nonce,
             machine_id,
             created_at: chrono::Utc::now().timestamp(),
+            extra: Value::Null,
         })
     }
 
@@ -172,6 +175,12 @@ impl QoderProvider {
             .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
             .map(|dt| dt.timestamp_millis())
             .unwrap_or(0);
+        // refresh token 的有效期：不一定下发，有就存下来
+        //（「切换客户端账号」写 auth.v1.dat 时需要，见 core/client_switch.rs）
+        let refresh_expires_at = lookup(&["refreshTokenExpiresAt", "refresh_token_expires_at"])
+            .and_then(|s| chrono::DateTime::parse_from_rfc3339(&s).ok())
+            .map(|dt| dt.timestamp_millis())
+            .unwrap_or(0);
 
         let label = if user_id.is_empty() {
             "Qoder 账号".to_string()
@@ -193,6 +202,7 @@ impl QoderProvider {
             "refresh_token_id": refresh_id,
             "user_id": user_id,
             "expires_at": expires_at,
+            "refresh_expires_at": refresh_expires_at,
             "machine_id": session.machine_id,
             "region": "cn",
         });
@@ -791,44 +801,22 @@ fn machine_hostname() -> String {
 }
 
 /// 客户端版本号（`Cosy-Version` 头）。
+///
+/// 从本机能定位到的所有 Qoder 安装根里的 `.qoder-versions\<版本>\` 目录取
+/// 语义化版本最高的（定位逻辑见 `core/launcher.rs`）。
 fn client_version() -> String {
-    // Qoder 的安装布局是 `<root>/.qoder-versions/<version>/`，取其中语义化最高的。
-    let mut candidates: Vec<(u64, u64, u64, String)> = Vec::new();
-    let roots = [
-        PathBuf::from(r"D:\Programs\Qoder CN"),
-        PathBuf::from(r"C:\Program Files\Qoder"),
-        PathBuf::from(r"C:\Program Files\Qoder CN"),
-    ];
-    if let Some(local) = dirs::data_local_dir() {
-        candidates_root(&local.join("Qoder CN"), &mut candidates);
-    }
-    for root in roots {
-        candidates_root(&root, &mut candidates);
-    }
-    if let Some(appdata) = std::env::var("APPDATA").ok() {
-        candidates_root(&PathBuf::from(appdata).join("Qoder CN"), &mut candidates);
-    }
-
-    candidates
+    crate::core::launcher::qoder_versions()
         .into_iter()
+        .filter_map(|v| {
+            let mut parts = v.split('.');
+            let a = parts.next().and_then(|x| x.parse::<u64>().ok())?;
+            let b = parts.next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+            let c = parts.next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+            Some((a, b, c, v))
+        })
         .max()
         .map(|(_, _, _, v)| v)
         .unwrap_or_else(|| "0.4.9".to_string())
-}
-
-fn candidates_root(root: &std::path::Path, out: &mut Vec<(u64, u64, u64, String)>) {
-    let versions_dir = root.join(".qoder-versions");
-    let Ok(entries) = std::fs::read_dir(&versions_dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let name = entry.file_name().to_string_lossy().to_string();
-        let mut parts = name.split('.');
-        let a = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-        let b = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-        let c = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-        out.push((a, b, c, name));
-    }
 }
 
 // ---------------------------------------------------------------------------

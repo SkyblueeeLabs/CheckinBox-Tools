@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { api, onAccountsSynced, onCheckinProgress } from "./lib/api";
+import { buildGroups } from "./lib/groups";
 import type {
   AccountResult,
-  AgentGroup,
   AppConfig,
   LogEntry,
   Overview,
@@ -16,37 +16,6 @@ interface Toast {
   id: number;
   kind: "ok" | "warn" | "err";
   text: string;
-}
-
-/** 把 overview 折成侧边栏/面板要用的分组 */
-function buildGroups(overview: Overview): AgentGroup[] {
-  return overview.providers.map((provider) => {
-    const accounts = overview.accounts.filter(
-      (a) => a.account.provider === provider.id
-    );
-    return {
-      provider,
-      accounts,
-      totalRemaining: accounts.reduce((s, a) => s + (a.quota?.totalRemaining ?? 0), 0),
-      totalGranted: accounts.reduce((s, a) => s + (a.quota?.totalGranted ?? 0), 0),
-      claimableCount: accounts.filter((a) => a.status?.state === "claimable").length,
-      claimedToday: accounts.filter((a) => a.status?.state === "claimed").length,
-      schedule: {
-        ...(overview.agents[provider.id] ?? {
-          enabled: true,
-          startMinute: 6 * 60,
-          endMinute: 8 * 60,
-          accountCount: accounts.length,
-          todayClaimed: 0,
-          todayClaimable: 0,
-          refreshIntervalMinutes: 10,
-        }),
-        alertThreshold: overview.accounts
-          .find((a) => a.account.provider === provider.id)
-          ?.alertThreshold,
-      },
-    };
-  });
 }
 
 export default function App() {
@@ -170,14 +139,23 @@ export default function App() {
   const discover = async (providerId: string) => {
     setBusy(true);
     try {
-      const found = await api.discoverAccounts();
-      const hit = found.find((f) => f.provider === providerId);
-      if (!hit) {
+      const found = (await api.discoverAccounts()).filter((f) => f.provider === providerId);
+      if (found.length === 0) {
         pushToast("warn", "没有找到本机客户端登录态");
         return;
       }
       await api.addDiscoveredAccount(providerId);
-      pushToast("ok", `已导入：${hit.account.label}`);
+      // 已在池里的账号这次不会重复入库；一个新账号都没有时，
+      // 大概率是「客户端登录的还是老号」—— 直接告诉用户该怎么做
+      const fresh = found.filter((f) => !f.alreadyAdded);
+      if (fresh.length > 0) {
+        pushToast("ok", `已导入 ${fresh.length} 个账号：${fresh.map((f) => f.account.label).join("、")}`);
+      } else {
+        pushToast(
+          "warn",
+          `客户端当前登录的是「${found[0].account.label}」，已在账号池里。要导入新账号，请先在客户端登录它，再点「从本机导入」`
+        );
+      }
     } catch (e) {
       pushToast("err", `导入失败：${e}`);
     } finally {
@@ -270,22 +248,22 @@ export default function App() {
   };
 
   /**
-   * 把客户端切换成这个账号：备份客户端当前登录态 → 写入这个账号的凭据 → 启动客户端。
-   * 借鉴 Cockpit Tools 的做法（Cockpit 靠换凭据文件实现切账号）。
+   * 把客户端切换成这个账号：**关闭客户端 → 备份登录态 → 写入这个账号的凭据 →
+   * 以它重启客户端**，一条龙（借鉴 Cockpit 的 launch_on_switch）。
+   * 客户端在运行也没关系，后端会先自动收掉它；当前登录的账号切走前会被捕获进池。
    */
   const switchClient = async (providerId: string, accountId: string) => {
-    const label =
-      overview?.accounts.find(
-        (a) => a.account.provider === providerId && a.account.id === accountId
-      )?.account.label ?? accountId;
+    const view = overview?.accounts.find(
+      (a) => a.account.provider === providerId && a.account.id === accountId
+    );
+    const label = view?.account.label ?? accountId;
     setBusy(true);
     try {
       const result = await api.switchClientAccount(providerId, accountId);
       pushToast(
         "ok",
-        `${label}：已切换客户端账号并启动${result.backup ? "（原登录态已备份）" : ""}`
+        `${label}：已切换客户端账号并重启，同时设为当前账号${result.backup ? "（原登录态已备份）" : ""}`
       );
-      pushToast("warn", "如果客户端之前开着，请先完全退出（含托盘）再切换");
       await refresh();
     } catch (e) {
       pushToast("err", `切换失败：${e}`);
@@ -416,6 +394,11 @@ export default function App() {
   const providerNames = Object.fromEntries(
     overview.providers.map((p) => [p.id, p.name])
   );
+  // 账号 id → 当前名字：签到记录按 id 解析「现在叫什么」，
+  // 不用写入时的快照（账号改名/换人用旧名后，历史名字会误导）
+  const accountNames = Object.fromEntries(
+    overview.accounts.map((a) => [`${a.account.provider}:${a.account.id}`, a.account.label])
+  );
 
   return (
     <div className="shell">
@@ -424,13 +407,33 @@ export default function App() {
         selected={selected}
         onSelect={setSelected}
         onOpenSettings={() => setSelected(SETTINGS_ID)}
+        onReorder={(order) => {
+          // 乐观更新本地顺序，落盘失败再回滚刷新
+          setOverview((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  providers: order
+                    .map((id) => prev.providers.find((p) => p.id === id))
+                    .filter((p): p is NonNullable<typeof p> => !!p),
+                }
+              : prev
+          );
+          void api
+            .setAgentOrder(order)
+            .then((cfg) => setConfig(cfg))
+            .catch((e) => {
+              pushToast("err", `保存顺序失败：${e}`);
+              void refresh();
+            });
+        }}
       />
 
       <div className="main">
         {authSession && authUrl && (
           <div className="auth-banner">
             <div className="auth-text">
-              <strong>等待 Qoder 授权</strong>
+              <strong>等待 {providerNames[authProvider ?? ""] ?? "平台"} 授权</strong>
               <span>
                 已在浏览器打开授权页。
                 <button className="link" onClick={() => api.openExternal(authUrl)}>
@@ -508,7 +511,7 @@ export default function App() {
             onAlertChange={patchAlert}
           />
         ) : (
-          <div className="empty">
+          <div className="empty-state">
             <p>还没有任何 agent 分组。先在左侧选择一个平台添加账号。</p>
           </div>
         )}
@@ -518,6 +521,7 @@ export default function App() {
           providerId={current?.provider.id ?? null}
           providerName={current?.provider.name ?? "全部"}
           providerNames={providerNames}
+          accountNames={accountNames}
           visible={logsOpen}
           onToggle={() => setLogsOpen((v) => !v)}
         />

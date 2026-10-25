@@ -1,6 +1,6 @@
 import type { AgentGroup } from "../lib/types";
 import { fmtPoints, formatMinute, parseMinute } from "../lib/api";
-import { agentIcon } from "../lib/agentIcons";
+import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import AccountCard from "./AccountCard";
 
 interface Props {
@@ -70,7 +70,12 @@ export default function AgentGroupPanel({
       <header className="panel-head">
         <div className="panel-title">
           <span className="panel-mark">
-            <img src={panelIcon} alt="" className="mark-img" draggable={false} />
+            <img
+              src={panelIcon}
+              alt=""
+              className={`mark-img ${iconNeedsPad(provider.id) ? "pad" : ""}`}
+              draggable={false}
+            />
           </span>
           <div>
             <h2>{provider.name}</h2>
@@ -103,7 +108,7 @@ export default function AgentGroupPanel({
               从本机导入
             </button>
           )}
-          {provider.id === "qoder" ? (
+          {provider.supportsOAuth && (
             <button
               className="btn small"
               onClick={() => onAddAccount(provider.id)}
@@ -111,7 +116,7 @@ export default function AgentGroupPanel({
             >
               {authPending ? "等待授权…" : "添加账号"}
             </button>
-          ) : null}
+          )}
         </div>
       </header>
 
@@ -166,7 +171,7 @@ export default function AgentGroupPanel({
       </div>
 
       {accounts.length === 0 ? (
-        <div className="empty">
+        <div className="empty-state">
           <p>
             还没有账号。
             {provider.supportsDiscovery
@@ -178,12 +183,12 @@ export default function AgentGroupPanel({
         <>
           <div className="quota-stats summary">
             <div className="qstat">
-              <span className="q-label">剩余积分</span>
-              <span className="q-value lg">{fmtPoints(group.totalRemaining)}</span>
+              <span className="q-label">累计发放总积分</span>
+              <span className="q-value lg">{fmtPoints(group.totalGranted)}</span>
             </div>
             <div className="qstat">
-              <span className="q-label">累计发放</span>
-              <span className="q-value lg">{fmtPoints(group.totalGranted)}</span>
+              <span className="q-label">剩余总积分</span>
+              <span className="q-value lg">{fmtPoints(group.totalRemaining)}</span>
             </div>
             <div className="qstat">
               <span className="q-label">今日已签</span>
@@ -193,7 +198,7 @@ export default function AgentGroupPanel({
             </div>
           </div>
 
-          <div className="acct-list">
+          <div className="acct-grid">
             {accounts.map((view) => (
               <AccountCard
                 key={`${view.account.provider}:${view.account.id}`}

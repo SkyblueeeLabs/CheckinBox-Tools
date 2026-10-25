@@ -46,6 +46,8 @@ export interface AccountView {
   todayLog?: LogEntry | null;
   /** 是否为该 agent 的当前账号 */
   isActive: boolean;
+  /** 客户端当前实际登录的是不是这个账号 */
+  isClientLogin: boolean;
   /** 客户端数据目录 */
   dataDir?: string | null;
   projectCount: number;
@@ -69,6 +71,8 @@ export interface ProviderView {
   accent: string;
   docsUrl: string;
   supportsDiscovery: boolean;
+  /** 支持浏览器授权导入账号（设备码 / OAuth 页） */
+  supportsOAuth: boolean;
   configured: boolean;
   hasClient: boolean;
   clientExe?: string | null;

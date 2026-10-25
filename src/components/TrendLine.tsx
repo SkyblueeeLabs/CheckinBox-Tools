@@ -51,6 +51,12 @@ export default function TrendLine({ points, threshold, height = 30 }: Props) {
         )}
         <path d={path} className="trend-path" />
         <circle cx={x(points.length - 1).toFixed(1)} cy={y(last.remaining).toFixed(1)} r={2.2} />
+        {/* 悬浮数值：每个点一个透明命中区，title 显示时间和剩余积分 */}
+        {points.map((p, i) => (
+          <circle key={i} className="trend-hit" cx={x(i)} cy={y(p.remaining)} r={5}>
+            <title>{`${p.timestamp.slice(5)} · 剩余 ${Math.round(p.remaining)}`}</title>
+          </circle>
+        ))}
       </svg>
 
       <div className="trend-meta">

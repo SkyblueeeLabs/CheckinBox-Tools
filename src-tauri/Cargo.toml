@@ -31,6 +31,12 @@ reqwest = { version = "0.12", default-features = false, features = [
 chrono = { version = "0.4", features = ["serde", "clock"] }
 base64 = "0.22"
 sha2 = "0.10"
+# Electron safeStorage（OSCrypt v10）加解密：Qoder 客户端登录态 auth.v1.dat
+aes-gcm = "0.10"
+# 读 App Paths 注册表定位客户端 exe（W 版 API，中文路径无编码问题）
+winreg = "0.55"
+# 读 WorkBuddy（CodeBuddy）的 state.vscdb（SQLite）里的 safeStorage 凭据
+rusqlite = { version = "0.31", features = ["bundled"] }
 getrandom = "0.2"
 uuid = { version = "1", features = ["v4"] }
 anyhow = "1"

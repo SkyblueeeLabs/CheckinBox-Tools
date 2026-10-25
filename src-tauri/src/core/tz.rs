@@ -9,28 +9,24 @@
 
 use std::sync::OnceLock;
 
+#[cfg(windows)]
 fn windows_tz_key_name() -> Option<String> {
-    let out = std::process::Command::new("reg")
-        .args([
-            "query",
-            r"HKLM\SYSTEM\CurrentControlSet\Control\TimeZoneInformation",
-            "/v",
-            "TimeZoneKeyName",
-        ])
-        .output()
+    // 直接读注册表（winreg），不起 reg.exe 子进程 —— 既是 GUI 无控制台应用，
+    // 起控制台子进程会闪 cmd 窗，而且 reg 输出还有控制台编码问题
+    use winreg::enums::HKEY_LOCAL_MACHINE;
+    use winreg::RegKey;
+
+    let hklm = RegKey::predef(HKEY_LOCAL_MACHINE);
+    let key = hklm
+        .open_subkey(r"SYSTEM\CurrentControlSet\Control\TimeZoneInformation")
         .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let text = String::from_utf8_lossy(&out.stdout);
-    for line in text.lines() {
-        if let Some((_, value)) = line.split_once("REG_SZ") {
-            let value = value.trim();
-            if !value.is_empty() {
-                return Some(value.to_string());
-            }
-        }
-    }
+    let value: String = key.get_value("TimeZoneKeyName").ok()?;
+    let value = value.trim();
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+#[cfg(not(windows))]
+fn windows_tz_key_name() -> Option<String> {
     None
 }
 

@@ -21,25 +21,36 @@ pub struct AppState {
     pub scheduler: Mutex<SchedulerState>,
     pub auth_sessions: Mutex<BTreeMap<String, AuthSession>>,
     pub providers: Vec<Arc<dyn Provider>>,
-    /// Qoder 适配器的具体类型（设备授权不走通用 trait，需要单独拿到）
+    /// 各平台适配器的具体类型（浏览器授权导入不走通用 trait，需要单独拿到）
     pub qoder: Arc<crate::providers::qoder::QoderProvider>,
+    pub minimax: Arc<crate::providers::minimax::MiniMaxProvider>,
+    pub workbuddy: Arc<crate::providers::workbuddy::WorkBuddyProvider>,
 }
 
 impl AppState {
     pub fn new() -> Self {
+        let minimax = Arc::new(crate::providers::minimax::MiniMaxProvider::new());
         let qoder = Arc::new(crate::providers::qoder::QoderProvider::new());
+        let workbuddy = Arc::new(crate::providers::workbuddy::WorkBuddyProvider::new());
         let list: Vec<Arc<dyn Provider>> = vec![
-            Arc::new(crate::providers::minimax::MiniMaxProvider::new()),
+            minimax.clone(),
             qoder.clone(),
             Arc::new(crate::providers::miaoshou::MiaoshouProvider::new()),
+            workbuddy.clone(),
         ];
+        let mut store = AccountStore::load().unwrap_or_default();
+        // 旧版本把 MiniMax 登录态记录键的 hash 当账号 id（设备级，换号不变），
+        // 会造成「导入新号覆盖旧号」。启动时把池里的旧时代条目归位一次（幂等）。
+        crate::providers::minimax::migrate_device_key_ids(&mut store);
         Self {
-            store: Mutex::new(AccountStore::load().unwrap_or_default()),
+            store: Mutex::new(store),
             config: Mutex::new(AppConfig::load().unwrap_or_default()),
             scheduler: Mutex::new(SchedulerState::load().unwrap_or_default()),
             auth_sessions: Mutex::new(load_pending_auth()),
             providers: list,
             qoder,
+            minimax,
+            workbuddy,
         }
     }
 
@@ -88,6 +99,10 @@ pub struct ProviderView {
     pub docs_url: String,
     /// 是否支持从本机客户端自动发现账号
     pub supports_discovery: bool,
+    /// 是否支持浏览器授权导入账号（设备码 / OAuth 页）
+    /// （显式 rename：serde 的 camelCase 会把它转成 supportsOauth，不是 OAuth）
+    #[serde(rename = "supportsOAuth")]
+    pub supports_oauth: bool,
     /// 是否已配置账号
     pub configured: bool,
     /// 本机是否装了该 agent 的客户端
@@ -109,6 +124,8 @@ pub struct AccountView {
     pub today_log: Option<LogEntry>,
     /// 是否为该 agent 的当前账号
     pub is_active: bool,
+    /// 客户端当前实际登录的是不是这个账号
+    pub is_client_login: bool,
     /// 客户端数据目录（项目/会话都在这里）
     pub data_dir: Option<String>,
     /// 本地项目数
@@ -226,6 +243,32 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
     // 需要改成真实昵称的账号（循环里只收集，最后统一落盘）
     let mut relabel: Vec<Account> = Vec::new();
 
+    // 客户端当前实际登录的账号（只读检测；先算好，账号行与 agent 视图共用，
+    // 避免每个账号重复解一次客户端登录态文件）。
+    // ⚠️ MiniMax 走 token 实测（client_session）：客户端配置里的 sharedUser
+    // 在外部切换后是陈旧的，信它会把身份判错、污染账号池（2026-10-25 踩坑）。
+    let mut client_login: BTreeMap<String, Option<ClientAccountView>> = BTreeMap::new();
+    for provider in state.providers.iter() {
+        let detected = if provider.id() == "minimax" {
+            crate::providers::minimax::client_session()
+                .await
+                .map(|(id, name, _)| (id, name))
+        } else {
+            crate::core::client_switch::detect(provider.id())
+                .ok()
+                .flatten()
+                .map(|d| (d.account_id, d.label))
+        };
+        client_login.insert(
+            provider.id().to_string(),
+            detected.map(|(account_id, label)| ClientAccountView {
+                in_pool: store.contains(provider.id(), &account_id),
+                account_id,
+                label,
+            }),
+        );
+    }
+
     for account in store.list() {
         let provider = match state.provider(&account.provider) {
             Some(p) => p,
@@ -236,6 +279,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             // 单个账号凭据损坏不应让整个界面空白：跳过它，其余照常展示
             Err(_) => continue,
         };
+        // 多账号状态保存：当前登录的捕获最新 token，非当前登录的临过期自动刷新
+        let cred = ensure_fresh_cred(&state, &account, &cred).await;
 
         // 兜底 label（`Qoder 01a1348c-3fc` 这种 id 前缀）才去换真实昵称，
         // 避免每 45 秒给每个账号多打一次资料接口。换到就落盘，之后不用再查。
@@ -283,6 +328,11 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             .cloned();
 
         let is_active = config.active_of(&account.provider).as_deref() == Some(account.id.as_str());
+        let is_client_login = client_login
+            .get(&account.provider)
+            .and_then(|c| c.as_ref())
+            .map(|c| c.account_id == account.id)
+            .unwrap_or(false);
         let (data_dir, project_count, session_count) = match crate::core::launcher::account_stats(&account.provider) {
             Some((p, s)) => (
                 crate::core::launcher::data_dir(&account.provider)
@@ -317,6 +367,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             error,
             today_log,
             is_active,
+            is_client_login,
             data_dir,
             project_count,
             session_count,
@@ -334,9 +385,14 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         }
     }
 
-    let provider_views = state
-        .providers
+    // 平台按用户拖拽的自定义顺序排列（未配置的按注册顺序排在后面）
+    let ordered_ids = config.sort_provider_ids(
+        state.providers.iter().map(|p| p.id().to_string()).collect(),
+    );
+
+    let provider_views = ordered_ids
         .iter()
+        .filter_map(|id| state.provider(id))
         .map(|p| {
             let exe = crate::core::launcher::client_exe(p.id());
             ProviderView {
@@ -344,7 +400,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 name: p.display_name().to_string(),
                 accent: p.accent().to_string(),
                 docs_url: p.docs_url().to_string(),
-                supports_discovery: matches!(p.id(), "minimax" | "miaoshou"),
+                supports_discovery: matches!(p.id(), "minimax" | "miaoshou" | "workbuddy"),
+                supports_oauth: matches!(p.id(), "qoder" | "minimax" | "workbuddy"),
                 configured: !store.list_of(p.id()).is_empty(),
                 has_client: exe.is_some(),
                 client_exe: exe.map(|p| p.to_string_lossy().to_string()),
@@ -376,14 +433,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 today_claimable: claimable,
                 refresh_interval_minutes: config.refresh_interval_of(provider.id()),
                 // 客户端当前登录的账号（只读，读不到就是 None）
-                client_account: crate::core::client_switch::detect(provider.id())
-                    .ok()
-                    .flatten()
-                    .map(|d| ClientAccountView {
-                        in_pool: store.contains(&provider.id(), &d.account_id),
-                        account_id: d.account_id,
-                        label: d.label,
-                    }),
+                client_account: client_login.get(provider.id()).cloned().flatten(),
                 switchable: crate::core::client_switch::is_switchable(provider.id()),
             },
         );
@@ -433,6 +483,7 @@ pub async fn checkin_account(
     let cred = store
         .credential(&provider_id, &account_id)
         .map_err(|e| e.to_string())?;
+    let cred = ensure_fresh_cred(&state, &account, &cred).await;
 
     let result = run_checkin(provider.as_ref(), &account, &cred).await;
     record_result(&app, &account, &result, true);
@@ -476,6 +527,7 @@ pub async fn checkin_all_inner(app: AppHandle, state: &AppState) -> Vec<AccountR
                 continue;
             }
         };
+        let cred = ensure_fresh_cred(state, &account, &cred).await;
         let result = run_checkin(provider.as_ref(), &account, &cred).await;
         record_result(&app, &account, &result, true);
         out.push(result);
@@ -561,19 +613,54 @@ pub async fn add_discovered_account(
     Ok(store.list())
 }
 
-/// 发起设备授权：返回一个需要在浏览器里确认的地址。
+/// 发起浏览器授权导入（Qoder / MiniMax / WorkBuddy）：返回一个需要在浏览器里确认的地址。
 #[tauri::command]
 pub async fn begin_device_auth(
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<AuthChallenge, String> {
-    if provider_id != "qoder" {
-        return Err(format!("{provider_id} 不支持设备授权"));
-    }
-    let qoder = state.qoder.clone();
-    let session = qoder
-        .begin_authorization(&provider_id)
-        .map_err(|e| e.to_string())?;
+    let now = chrono::Utc::now().timestamp();
+    let session = match provider_id.as_str() {
+        "qoder" => state
+            .qoder
+            .begin_authorization(&provider_id)
+            .map_err(|e| e.to_string())?,
+        "minimax" => {
+            let d = state
+                .minimax
+                .begin_device_authorization()
+                .await
+                .map_err(|e| e.to_string())?;
+            AuthSession {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: provider_id.clone(),
+                auth_url: d.auth_url,
+                verifier: d.code_verifier,
+                nonce: d.poll_code,
+                machine_id: String::new(),
+                created_at: now,
+                extra: serde_json::json!({ "poll_param": d.poll_param, "interval": d.interval_secs }),
+            }
+        }
+        "workbuddy" => {
+            let (st, url) = state
+                .workbuddy
+                .begin_authorization()
+                .await
+                .map_err(|e| e.to_string())?;
+            AuthSession {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: provider_id.clone(),
+                auth_url: url,
+                verifier: String::new(),
+                nonce: st,
+                machine_id: String::new(),
+                created_at: now,
+                extra: serde_json::Value::Null,
+            }
+        }
+        other => return Err(format!("{other} 不支持浏览器授权导入")),
+    };
     let challenge = AuthChallenge {
         session_id: session.id.clone(),
         auth_url: session.auth_url.clone(),
@@ -601,7 +688,7 @@ pub async fn pending_auth(state: State<'_, AppState>) -> Result<Vec<AuthChalleng
         .collect())
 }
 
-/// 轮询设备授权结果；`None` 表示用户还没确认。
+/// 轮询浏览器授权结果；`None` 表示用户还没确认。
 #[tauri::command]
 pub async fn poll_device_auth(
     state: State<'_, AppState>,
@@ -615,9 +702,21 @@ pub async fn poll_device_auth(
     let Some(session) = session else {
         return Err("授权会话已过期，请重新发起".into());
     };
-    let qoder = state.qoder.clone();
 
-    match qoder.poll_authorization(&session).await {
+    let polled = match session.provider.as_str() {
+        "qoder" => state.qoder.poll_authorization(&session).await,
+        "minimax" => {
+            let poll_param = session.extra["poll_param"].as_str().unwrap_or("device_code");
+            state
+                .minimax
+                .poll_device_authorization(&session.verifier, &session.nonce, poll_param)
+                .await
+        }
+        "workbuddy" => state.workbuddy.poll_authorization(&session.nonce).await,
+        other => return Err(format!("{other} 不支持浏览器授权导入")),
+    };
+
+    match polled {
         Ok(Some((mut account, cred))) => {
             // 账号归属以发起时的 provider 为准
             account.provider = provider_id.clone();
@@ -647,6 +746,28 @@ pub async fn remove_account(
         .remove(&provider_id, &account_id)
         .map_err(|e| e.to_string())?;
     Ok(store.list())
+}
+
+/// 保存侧栏 agent 的拖拽顺序（校验：必须是已注册平台的排列）。
+#[tauri::command]
+pub async fn set_agent_order(
+    state: State<'_, AppState>,
+    order: Vec<String>,
+) -> Result<AppConfig, String> {
+    let known: Vec<&str> = state.providers.iter().map(|p| p.id()).collect();
+    for id in &order {
+        if !known.contains(&id.as_str()) {
+            return Err(format!("未知平台：{id}"));
+        }
+    }
+    let unique = order.len() == order.iter().collect::<std::collections::BTreeSet<_>>().len();
+    if !unique {
+        return Err("顺序里有重复的平台".into());
+    }
+    let mut guard = state.config.lock().unwrap();
+    guard.agent_order = order;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
 }
 
 /// 读取配置。
@@ -817,10 +938,39 @@ pub async fn detect_client_account(
     crate::core::client_switch::detect(&provider_id).map_err(|e| e.to_string())
 }
 
+/// 把客户端**当前登录**的账号捕获进账号池（借鉴 Cockpit 的切换保护）。
+///
+/// 「切换客户端账号」切走前调用：客户端同一时刻只能登一个号，切走后它的
+/// 凭据就不再更新 —— 先捕获，谁都不丢，且池里留的是客户端续期过的最新凭据。
+/// MiniMax / 妙手走 `discover`（读明文登录态）；Qoder 解密 auth.v1.dat。
+async fn capture_client_login(state: &AppState, provider_id: &str) {
+    if provider_id == "qoder" {
+        if let Some((account, cred)) = crate::core::client_switch::qoder_client_login() {
+            let mut store = state.store.lock().unwrap();
+            let _ = store.upsert(account, &cred);
+        }
+        return;
+    }
+    let Some(provider) = state.provider(provider_id) else {
+        return;
+    };
+    let Ok(found) = provider.discover().await else {
+        return;
+    };
+    let mut store = state.store.lock().unwrap();
+    for (account, cred) in found {
+        let _ = store.upsert(account, &cred);
+    }
+}
+
 /// 把客户端切换成指定账号，然后启动客户端。
 ///
-/// ⚠️ 会改写客户端的登录态文件（先备份）。客户端必须在切换前完全退出，
-/// 否则它内存里的旧登录态会覆盖我们写进去的文件。
+/// ⚠️ 会改写客户端的登录态文件（先备份）。**客户端在运行时会被拒绝**
+/// （`client_switch::switch` 入口统一拦截），否则它内存里的旧登录态
+/// 会覆盖我们写进去的文件。
+///
+/// 切换成功后顺手把这个账号设为该 agent 的「当前账号」——
+/// 客户端登的是谁，工具里的当前账号就应该是谁，两边保持一致。
 #[tauri::command]
 pub async fn switch_client_account(
     state: State<'_, AppState>,
@@ -840,8 +990,27 @@ pub async fn switch_client_account(
         .credential(&provider_id, &account_id)
         .map_err(|e| e.to_string())?;
 
-    crate::core::client_switch::switch(&provider_id, &cred, &account_id, &account.label)
-        .map_err(|e| e.to_string())
+    // 切走前先把客户端当前登录的账号捕获进池 —— 谁都不丢，
+    // 池里留下的还是客户端续期过的最新凭据（借鉴 Cockpit）
+    capture_client_login(&state, &provider_id).await;
+
+    let outcome =
+        crate::core::client_switch::switch(&provider_id, &cred, &account_id, &account.label)
+            .map_err(|e| e.to_string())?;
+
+    // 客户端已经登录这个账号了，工具里的「当前账号」跟着同步
+    {
+        let mut config = state.config.lock().unwrap();
+        config.set_active(&provider_id, &account_id);
+        config.save().map_err(|e| e.to_string())?;
+    }
+    Ok(outcome)
+}
+
+/// 客户端是否正在运行（前端在「切换客户端账号」前先问一次，给个友好的拦截提示）。
+#[tauri::command]
+pub async fn client_running(provider_id: String) -> Result<bool, String> {
+    Ok(crate::core::launcher::is_running(&provider_id))
 }
 
 /// 读取最近若干天的签到流水。
@@ -862,6 +1031,51 @@ pub async fn open_external(url: String) -> Result<(), String> {
 // ---------------------------------------------------------------------------
 // 内部
 // ---------------------------------------------------------------------------
+
+/// 让账号凭据保持新鲜 —— **多账号状态保存的核心**（方案借鉴 Cockpit Tools）：
+///
+/// * 客户端**当前登录**的账号 → 从客户端登录态**捕获**最新 token 回写池
+///   （客户端开着会自动续期；捕获不动客户端的 refresh token，现场安全）。
+/// * **不在客户端里**的账号 → token 临过期时用 refresh token 走 OAuth 刷新。
+///   MiniMax 的 RT 每次刷新都会轮换，新 RT 回写池 —— 所以池里的账号即使
+///   长期不是当前登录，也能一直活着、正常签到。
+///
+/// 刷新失败（RT 被吊销等）返回原凭据，调用方按普通错误如实展示。
+async fn ensure_fresh_cred(state: &AppState, account: &Account, cred: &serde_json::Value) -> serde_json::Value {
+    if account.provider != "minimax" {
+        return cred.clone();
+    }
+
+    // 当前登录：捕获客户端里的最新凭据（只在变化时写盘）
+    if let Some(fresh) = crate::providers::minimax::capture_current_cred(account).await {
+        let changed = fresh.get("access_token").and_then(|v| v.as_str())
+            != cred.get("access_token").and_then(|v| v.as_str());
+        if changed {
+            let mut store = state.store.lock().unwrap();
+            let _ = store.upsert(account.clone(), &fresh);
+        }
+        return fresh;
+    }
+
+    // 非当前登录：还有 5 分钟以上有效期就不动，临过期才刷新
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+    if expires > now_ms + 5 * 60_000 {
+        return cred.clone();
+    }
+
+    let Some(provider) = state.provider("minimax") else {
+        return cred.clone();
+    };
+    match provider.refresh(account, cred).await {
+        Ok(Some(fresh)) => {
+            let mut store = state.store.lock().unwrap();
+            let _ = store.upsert(account.clone(), &fresh);
+            fresh
+        }
+        _ => cred.clone(),
+    }
+}
 
 /// 核心签到流程：查状态 → 需要则领取。
 ///
@@ -962,6 +1176,7 @@ async fn sync_one(app: &AppHandle, state: &AppState, account: &Account) -> bool 
     let Ok(cred) = store.credential(&account.provider, &account.id) else {
         return false;
     };
+    let cred = ensure_fresh_cred(state, account, &cred).await;
 
     // 签到状态（失败不致命，UI 里仍以 overview 的结果为准）
     let _ = provider.status(account, &cred).await;
@@ -1108,6 +1323,9 @@ pub async fn scheduler_loop(app: AppHandle) {
                         continue;
                     }
                 };
+                // 自动签到多在早上跑，非当前登录账号的 token（1 小时寿命）必然已过期 ——
+                // 签到前先刷新凭据，否则永远签不上
+                let cred = ensure_fresh_cred(&state, &account, &cred).await;
 
                 let result = run_checkin(provider.as_ref(), &account, &cred).await;
 
@@ -1193,7 +1411,7 @@ pub fn cli_import_local() -> Result<(), String> {
         let providers: Vec<Arc<dyn Provider>> = state
             .providers
             .iter()
-            .filter(|p| matches!(p.id(), "minimax" | "miaoshou"))
+            .filter(|p| matches!(p.id(), "minimax" | "miaoshou" | "workbuddy"))
             .cloned()
             .collect();
 

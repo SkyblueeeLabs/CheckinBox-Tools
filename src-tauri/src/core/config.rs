@@ -132,6 +132,10 @@ pub struct AppConfig {
     /// 借鉴 Cockpit Tools 的 `*_quota_alert_threshold`。
     #[serde(default)]
     pub alert_thresholds: BTreeMap<String, u32>,
+    /// 侧栏 agent 的显示顺序（拖拽调序后落盘）。
+    /// 没列出的平台排在最后（按注册顺序）。
+    #[serde(default)]
+    pub agent_order: Vec<String>,
 }
 
 impl AppConfig {
@@ -184,5 +188,49 @@ impl AppConfig {
             .agent(provider)
             .refresh_interval_minutes
             .max(1)
+    }
+
+    /// 按用户自定义顺序排序平台 id（未配置的按原顺序排在后面）。
+    pub fn sort_provider_ids(&self, ids: Vec<String>) -> Vec<String> {
+        let mut rank_of = |id: &str| self.agent_order.iter().position(|x| x == id);
+        let mut sorted = ids;
+        sorted.sort_by_key(|id| match rank_of(id) {
+            Some(i) => (i as u32, 0u32),
+            None => (u32::MAX, 0),
+        });
+        sorted
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 按配置顺序排序_未配置的排在后面() {
+        let mut cfg = AppConfig::default();
+        cfg.agent_order = vec!["qoder".into(), "minimax".into()];
+        let sorted = cfg.sort_provider_ids(vec![
+            "miaoshou".into(),
+            "minimax".into(),
+            "qoder".into(),
+            "workbuddy".into(),
+        ]);
+        assert_eq!(sorted, vec!["qoder", "minimax", "miaoshou", "workbuddy"]);
+    }
+
+    #[test]
+    fn 没有配置时保持原顺序() {
+        let cfg = AppConfig::default();
+        let ids = vec!["a".to_string(), "b".to_string()];
+        assert_eq!(cfg.sort_provider_ids(ids.clone()), ids);
+    }
+
+    #[test]
+    fn 配置里有多余项不影响排序() {
+        let mut cfg = AppConfig::default();
+        cfg.agent_order = vec!["gone".into(), "b".into(), "a".into()];
+        let sorted = cfg.sort_provider_ids(vec!["a".into(), "b".into()]);
+        assert_eq!(sorted, vec!["b", "a"]);
     }
 }
