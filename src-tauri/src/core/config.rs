@@ -192,7 +192,7 @@ impl AppConfig {
 
     /// 按用户自定义顺序排序平台 id（未配置的按原顺序排在后面）。
     pub fn sort_provider_ids(&self, ids: Vec<String>) -> Vec<String> {
-        let mut rank_of = |id: &str| self.agent_order.iter().position(|x| x == id);
+        let rank_of = |id: &str| self.agent_order.iter().position(|x| x == id);
         let mut sorted = ids;
         sorted.sort_by_key(|id| match rank_of(id) {
             Some(i) => (i as u32, 0u32),

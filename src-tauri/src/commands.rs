@@ -64,6 +64,10 @@ impl AppState {
 // ---------------------------------------------------------------------------
 
 /// 读回上次没完成的设备授权会话（应用重启后恢复轮询用）。
+///
+/// 超过 30 分钟的会话直接丢弃：上游的设备码 / 授权 state 本身只有十几分钟
+/// 有效期，留着的会话永远等不到确认，还会让启动时出现一条无意义的
+/// 「等待授权」横幅（实测残留）。
 fn load_pending_auth() -> BTreeMap<String, AuthSession> {
     let path = crate::core::paths::auth_pending_file();
     let Ok(raw) = std::fs::read_to_string(&path) else {
@@ -72,7 +76,21 @@ fn load_pending_auth() -> BTreeMap<String, AuthSession> {
     let Ok(map) = serde_json::from_str::<BTreeMap<String, AuthSession>>(&raw) else {
         return BTreeMap::new();
     };
-    map
+    let now = chrono::Utc::now().timestamp();
+    let live: BTreeMap<String, AuthSession> = map
+        .clone()
+        .into_iter()
+        .filter(|(_, s)| now - s.created_at < 30 * 60)
+        .collect();
+    if live.len() != map.len() {
+        // 有过期会话被清掉，顺手把落盘文件也更新
+        if live.is_empty() {
+            let _ = std::fs::remove_file(&path);
+        } else if let Ok(text) = serde_json::to_string_pretty(&live) {
+            let _ = crate::core::paths::atomic_write(&path, text.as_bytes());
+        }
+    }
+    live
 }
 
 fn save_pending_auth(sessions: &BTreeMap<String, AuthSession>) {
@@ -554,7 +572,17 @@ pub async fn refresh_quota(
         .into_iter()
         .find(|a| a.id == account_id)
         .ok_or_else(|| format!("账号不存在：{account_id}"))?;
-    provider.quota(&account, &cred).await.map_err(|e| e.to_string())
+    let quota = provider.quota(&account, &cred).await.map_err(|e| e.to_string())?;
+    // 用户主动刷新看到的最新积分也应该进趋势图，否则曲线和界面显示对不上
+    let _ = quota_history::append(&quota_history::QuotaSnapshot::new(
+        &account.provider,
+        &account.id,
+        &account.label,
+        quota.total_remaining,
+        quota.total_granted,
+        quota.total_consumed,
+    ));
+    Ok(quota)
 }
 
 /// 刷新全部账号的积分。
@@ -741,11 +769,22 @@ pub async fn remove_account(
     provider_id: String,
     account_id: String,
 ) -> Result<Vec<Account>, String> {
-    let mut store = state.store.lock().unwrap();
-    store
-        .remove(&provider_id, &account_id)
-        .map_err(|e| e.to_string())?;
-    Ok(store.list())
+    {
+        let mut store = state.store.lock().unwrap();
+        store
+            .remove(&provider_id, &account_id)
+            .map_err(|e| e.to_string())?;
+    }
+    // 删掉的是「当前账号」的话，同步清掉引用 —— 否则 config 里留下指向
+    // 已删账号的野指针，界面的「当前账号」徽标永远匹配不上
+    {
+        let mut config = state.config.lock().unwrap();
+        if config.active_of(&provider_id).as_deref() == Some(account_id.as_str()) {
+            config.active_accounts.remove(&provider_id);
+            config.save().map_err(|e| e.to_string())?;
+        }
+    }
+    Ok(state.store.lock().unwrap().list())
 }
 
 /// 保存侧栏 agent 的拖拽顺序（校验：必须是已注册平台的排列）。
@@ -1042,29 +1081,40 @@ pub async fn open_external(url: String) -> Result<(), String> {
 ///
 /// 刷新失败（RT 被吊销等）返回原凭据，调用方按普通错误如实展示。
 async fn ensure_fresh_cred(state: &AppState, account: &Account, cred: &serde_json::Value) -> serde_json::Value {
-    if account.provider != "minimax" {
-        return cred.clone();
-    }
-
-    // 当前登录：捕获客户端里的最新凭据（只在变化时写盘）
-    if let Some(fresh) = crate::providers::minimax::capture_current_cred(account).await {
-        let changed = fresh.get("access_token").and_then(|v| v.as_str())
-            != cred.get("access_token").and_then(|v| v.as_str());
-        if changed {
-            let mut store = state.store.lock().unwrap();
-            let _ = store.upsert(account.clone(), &fresh);
+    // MiniMax 特殊路径：当前登录账号从客户端捕获（不触发 OAuth 刷新，保护客户端现场）
+    if account.provider == "minimax" {
+        if let Some(fresh) = crate::providers::minimax::capture_current_cred(account).await {
+            let changed = fresh.get("access_token").and_then(|v| v.as_str())
+                != cred.get("access_token").and_then(|v| v.as_str());
+            if changed {
+                let mut store = state.store.lock().unwrap();
+                let _ = store.upsert(account.clone(), &fresh);
+            }
+            return fresh;
         }
-        return fresh;
     }
 
-    // 非当前登录：还有 5 分钟以上有效期就不动，临过期才刷新
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    if expires > now_ms + 5 * 60_000 {
-        return cred.clone();
+    // MiniMax 非当前登录：还有 5 分钟以上有效期就不动，临过期才刷新
+    if account.provider == "minimax" {
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+        if expires > now_ms + 5 * 60_000 {
+            return cred.clone();
+        }
+    } else {
+        // 其他平台：凭据里带过期时间且还没到（1 小时缓冲）就不动；
+        // 没带过期时间的（如 WorkBuddy 部分凭据）交给各平台 refresh 自行判断
+        let now_ms = chrono::Utc::now().timestamp_millis();
+        let expires = cred.get("expires_at")
+            .and_then(|v| v.as_i64())
+            .or_else(|| cred.get("expires_at_ms").and_then(|v| v.as_i64()))
+            .unwrap_or(0);
+        if expires > now_ms + 60 * 60_000 {
+            return cred.clone();
+        }
     }
 
-    let Some(provider) = state.provider("minimax") else {
+    let Some(provider) = state.provider(&account.provider) else {
         return cred.clone();
     };
     match provider.refresh(account, cred).await {
@@ -1073,6 +1123,7 @@ async fn ensure_fresh_cred(state: &AppState, account: &Account, cred: &serde_jso
             let _ = store.upsert(account.clone(), &fresh);
             fresh
         }
+        // 刷新失败（RT 吊销等）返回原凭据，调用方按普通错误如实展示
         _ => cred.clone(),
     }
 }
