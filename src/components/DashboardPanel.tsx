@@ -24,7 +24,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent }: Props)
   const claimableCount = groups.reduce((s, g) => s + g.claimableCount, 0);
 
   const stats = [
-    { label: "剩余总积分", value: fmtPoints(totalRemaining), accent: true },
+    { label: "剩余总积分", value: fmtPoints(totalRemaining) },
     { label: "累计发放总积分", value: fmtPoints(totalGranted) },
     { label: "账号总数", value: String(accountCount), sub: `${groups.length} 个平台` },
     {
@@ -50,7 +50,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent }: Props)
       {/* ---------- 全局关键指标 ---------- */}
       <div className="dash-stats">
         {stats.map((s) => (
-          <div key={s.label} className={`dash-stat ${s.accent ? "accent" : ""}`}>
+          <div key={s.label} className="dash-stat">
             <span className="dash-stat-label">{s.label}</span>
             <span className="dash-stat-value">{s.value}</span>
             {s.sub && <span className="dash-stat-sub">{s.sub}</span>}

@@ -1584,17 +1584,6 @@ button:disabled {
   flex-direction: column;
   gap: 4px;
 }
-.dash-stat.accent {
-  background: var(--accent);
-  color: #fff;
-}
-.dash-stat.accent .dash-stat-label,
-.dash-stat.accent .dash-stat-sub {
-  color: color-mix(in srgb, #fff 72%, transparent);
-}
-.dash-stat.accent .dash-stat-value {
-  color: #fff;
-}
 .dash-stat-label {
   font-size: 12px;
   font-weight: 500;
