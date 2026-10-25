@@ -101,7 +101,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent }: Props)
                   <strong>{g.provider.name}</strong>
                   <span className={`dash-agent-state ${stateTone}`}>{stateText}</span>
                 </span>
-                <span className="dash-agent-count">{g.accounts.length} 号</span>
+                <span className="dash-agent-count">{g.accounts.length} 个账号</span>
               </header>
               <div className="dash-agent-stats">
                 <span className="dash-agent-stat">
