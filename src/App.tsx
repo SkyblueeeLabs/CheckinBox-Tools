@@ -381,11 +381,70 @@ export default function App() {
     }
   };
 
+  // 首屏骨架：不等 overview（它要等各平台网络请求，3 秒级）。
+  // 立即渲染界面结构 + 骨架占位，数据到了自动填充（45s 轮询 / 事件驱动）。
   if (!overview || !config) {
     return (
-      <div className="loading">
-        <div className="loading-mark" />
-        <p>加载中…</p>
+      <div className="shell">
+        <aside className="sidebar">
+          <div className="side-item side-home active">
+            <span className="side-mark home-mark">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <path d="M3 10.5 12 3l9 7.5" />
+                <path d="M5 9.5V21h14V9.5" />
+                <path d="M9.5 21v-6h5v6" />
+              </svg>
+            </span>
+            <span className="side-body">
+              <span className="side-name">首页</span>
+              <span className="side-sub">总览 · 关键指标</span>
+            </span>
+          </div>
+          <div className="sidebar-head">
+            <span className="sidebar-title">Agents</span>
+          </div>
+          <nav className="sidebar-list">
+            {[0, 1, 2, 3].map((i) => (
+              <div key={i} className="side-item skeleton-item">
+                <span className="skeleton skeleton-mark" />
+                <span className="side-body">
+                  <span className="skeleton skeleton-line" />
+                  <span className="skeleton skeleton-line short" />
+                </span>
+              </div>
+            ))}
+          </nav>
+        </aside>
+        <div className="main">
+          <header className="topbar">
+            <div className="brand">
+              <span className="brand-name">{selected === SETTINGS_ID ? "设置" : selected === HOME_ID ? "总览" : "CheckinBox"}</span>
+            </div>
+          </header>
+          <section className="panel dash">
+            <div className="dash-stats">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="dash-stat">
+                  <span className="skeleton skeleton-line" />
+                  <span className="skeleton skeleton-value" />
+                </div>
+              ))}
+            </div>
+            <div className="dash-agents">
+              {[0, 1, 2, 3].map((i) => (
+                <div key={i} className="dash-agent skeleton-item">
+                  <span className="skeleton skeleton-mark" />
+                  <span className="skeleton skeleton-line" />
+                  <span className="skeleton skeleton-line short" />
+                </div>
+              ))}
+            </div>
+          </section>
+          <div className="loading-hint">
+            <div className="loading-mark" />
+            <p>正在加载账号与积分…</p>
+          </div>
+        </div>
       </div>
     );
   }

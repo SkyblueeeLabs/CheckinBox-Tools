@@ -255,7 +255,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
     let scheduler = state.scheduler.lock().unwrap().clone();
     let logs = logging::recent(1).unwrap_or_default();
 
-    let mut accounts = Vec::new();
+    let mut accounts: Vec<AccountView> = Vec::new();
     let mut today_points = 0i64;
     let mut claimed_count = 0usize;
     // 需要改成真实昵称的账号（循环里只收集，最后统一落盘）
@@ -287,58 +287,99 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         );
     }
 
+    // 网络部分并发化：每个账号一个任务（凭据保鲜 + 昵称 + 状态 + 积分同时进行），
+    // 7 个账号 14 次串行请求（3-4 秒）变成「最慢的一个账号」的时间（~400ms）。
+    // 单个账号失败不影响其他账号。
+    struct Fetched {
+        account: Account,
+        display_label: Option<String>,
+        status: Option<CheckinStatus>,
+        error: Option<String>,
+        quota: Option<Quota>,
+        quota_error: Option<String>,
+    }
+    let mut fetch_tasks = Vec::new();
     for account in store.list() {
-        let provider = match state.provider(&account.provider) {
-            Some(p) => p,
-            None => continue,
+        let Some(provider) = state.provider(&account.provider) else {
+            continue;
         };
         let cred = match store.credential(&account.provider, &account.id) {
             Ok(c) => c,
             // 单个账号凭据损坏不应让整个界面空白：跳过它，其余照常展示
             Err(_) => continue,
         };
-        // 多账号状态保存：当前登录的捕获最新 token，非当前登录的临过期自动刷新
-        let cred = ensure_fresh_cred(&state, &account, &cred).await;
+        fetch_tasks.push(tokio::spawn(async move {
+            // 多账号状态保存：当前登录的捕获最新 token，非当前登录的临过期自动刷新
+            let cred = ensure_fresh_cred_minimax_only(&account, &cred).await;
 
-        // 兜底 label（`Qoder 01a1348c-3fc` 这种 id 前缀）才去换真实昵称，
-        // 避免每 45 秒给每个账号多打一次资料接口。换到就落盘，之后不用再查。
-        let mut display_account = account.clone();
-        if account.label_is_fallback() {
-            if let Ok(Some(profile)) = provider.profile(&account, &cred).await {
-                if let Some(name) = profile.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
-                    display_account.label = name.to_string();
-                    relabel.push(display_account.clone());
+            // 兜底 label（`Qoder 01a1348c-3fc` 这种 id 前缀）才去换真实昵称，
+            // 避免每 45 秒给每个账号多打一次资料接口。换到就落盘，之后不用再查。
+            let mut display_label: Option<String> = None;
+            if account.label_is_fallback() {
+                if let Ok(Some(profile)) = provider.profile(&account, &cred).await {
+                    if let Some(name) = profile.name.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+                        display_label = Some(name.to_string());
+                    }
                 }
             }
+
+            let (status, error) = match provider.status(&account, &cred).await {
+                Ok(s) => (Some(s), None),
+                Err(e) => (None, Some(e.to_string())),
+            };
+
+            // 积分与签到是两个独立请求：积分失败不影响签到状态展示
+            let (quota, quota_error) = match provider.quota(&account, &cred).await {
+                Ok(q) => (Some(q), None),
+                Err(e) => (None, Some(e.to_string())),
+            };
+
+            Fetched {
+                account,
+                display_label,
+                status,
+                error,
+                quota,
+                quota_error,
+            }
+        }));
+    }
+
+    for task in fetch_tasks {
+        let fetched = match task.await {
+            Ok(f) => f,
+            Err(_) => continue, // 任务 panic（不应发生）：跳过该账号
+        };
+        let account = &fetched.account;
+        let provider = match state.provider(&account.provider) {
+            Some(p) => p,
+            None => continue,
+        };
+
+        let mut display_account = account.clone();
+        if let Some(name) = &fetched.display_label {
+            display_account.label = name.clone();
+            relabel.push(display_account.clone());
         }
 
-        let (status, error) = match provider.status(&display_account, &cred).await {
-            Ok(s) => {
-                if s.state == ClaimState::Claimed {
-                    claimed_count += 1;
-                }
-                today_points += if s.state == ClaimState::Claimed { s.points } else { 0 };
-                (Some(s), None)
+        if let Some(s) = &fetched.status {
+            if s.state == ClaimState::Claimed {
+                claimed_count += 1;
             }
-            Err(e) => (None, Some(e.to_string())),
-        };
+            today_points += if s.state == ClaimState::Claimed { s.points } else { 0 };
+        }
 
-        // 积分与签到是两个独立请求：积分失败不影响签到状态展示
-        let (quota, quota_error) = match provider.quota(&display_account, &cred).await {
-            Ok(q) => {
-                // 落一条积分快照（趋势图用）。失败不致命。
-                let _ = quota_history::append(&quota_history::QuotaSnapshot::new(
-                    &account.provider,
-                    &account.id,
-                    &account.label,
-                    q.total_remaining,
-                    q.total_granted,
-                    q.total_consumed,
-                ));
-                (Some(q), None)
-            }
-            Err(e) => (None, Some(e.to_string())),
-        };
+        // 落一条积分快照（趋势图用）。失败不致命。
+        if let Some(q) = &fetched.quota {
+            let _ = quota_history::append(&quota_history::QuotaSnapshot::new(
+                &account.provider,
+                &account.id,
+                &account.label,
+                q.total_remaining,
+                q.total_granted,
+                q.total_consumed,
+            ));
+        }
 
         let today_log = logs
             .iter()
@@ -370,7 +411,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             })
             .collect();
         // 积分是否低于预警阈值
-        let is_low = quota
+        let is_low = fetched.quota
             .as_ref()
             .map(|q| q.total_remaining < threshold as f64)
             .unwrap_or(false);
@@ -379,10 +420,10 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             provider_name: provider.display_name().to_string(),
             accent: provider.accent().to_string(),
             account: display_account,
-            status,
-            quota,
-            quota_error,
-            error,
+            status: fetched.status,
+            quota: fetched.quota,
+            quota_error: fetched.quota_error,
+            error: fetched.error,
             today_log,
             is_active,
             is_client_login,
@@ -1081,48 +1122,37 @@ pub async fn open_external(url: String) -> Result<(), String> {
 ///
 /// 刷新失败（RT 被吊销等）返回原凭据，调用方按普通错误如实展示。
 async fn ensure_fresh_cred(state: &AppState, account: &Account, cred: &serde_json::Value) -> serde_json::Value {
-    // MiniMax 特殊路径：当前登录账号从客户端捕获（不触发 OAuth 刷新，保护客户端现场）
-    if account.provider == "minimax" {
-        if let Some(fresh) = crate::providers::minimax::capture_current_cred(account).await {
-            let changed = fresh.get("access_token").and_then(|v| v.as_str())
-                != cred.get("access_token").and_then(|v| v.as_str());
-            if changed {
-                let mut store = state.store.lock().unwrap();
-                let _ = store.upsert(account.clone(), &fresh);
-            }
-            return fresh;
-        }
+    let fresh = ensure_fresh_cred_minimax_only(account, cred).await;
+    if fresh != *cred {
+        let mut store = state.store.lock().unwrap();
+        let _ = store.upsert(account.clone(), &fresh);
     }
+    fresh
+}
 
-    // MiniMax 非当前登录：还有 5 分钟以上有效期就不动，临过期才刷新
-    if account.provider == "minimax" {
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-        if expires > now_ms + 5 * 60_000 {
-            return cred.clone();
-        }
-    } else {
-        // 其他平台：凭据里带过期时间且还没到（1 小时缓冲）就不动；
-        // 没带过期时间的（如 WorkBuddy 部分凭据）交给各平台 refresh 自行判断
-        let now_ms = chrono::Utc::now().timestamp_millis();
-        let expires = cred.get("expires_at")
-            .and_then(|v| v.as_i64())
-            .or_else(|| cred.get("expires_at_ms").and_then(|v| v.as_i64()))
-            .unwrap_or(0);
-        if expires > now_ms + 60 * 60_000 {
-            return cred.clone();
-        }
-    }
-
-    let Some(provider) = state.provider(&account.provider) else {
+/// `ensure_fresh_cred` 的纯凭据层：不碰 AppState（可在并发任务里用）。
+/// 返回值与 `cred` 相同表示无需更新。刷新仅在 MiniMax 需要时执行；
+/// 其他平台的保鲜由各自的自动同步覆盖（它们的 token 有效期长）。
+async fn ensure_fresh_cred_minimax_only(account: &Account, cred: &serde_json::Value) -> serde_json::Value {
+    if account.provider != "minimax" {
         return cred.clone();
-    };
+    }
+
+    // 当前登录：捕获客户端里的最新凭据（只在变化时写盘由调用方负责）
+    if let Some(fresh) = crate::providers::minimax::capture_current_cred(account).await {
+        return fresh;
+    }
+
+    // 非当前登录：还有 5 分钟以上有效期就不动，临过期才刷新
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+    if expires > now_ms + 5 * 60_000 {
+        return cred.clone();
+    }
+
+    let provider = crate::providers::minimax::MiniMaxProvider::new();
     match provider.refresh(account, cred).await {
-        Ok(Some(fresh)) => {
-            let mut store = state.store.lock().unwrap();
-            let _ = store.upsert(account.clone(), &fresh);
-            fresh
-        }
+        Ok(Some(fresh)) => fresh,
         // 刷新失败（RT 吊销等）返回原凭据，调用方按普通错误如实展示
         _ => cred.clone(),
     }
