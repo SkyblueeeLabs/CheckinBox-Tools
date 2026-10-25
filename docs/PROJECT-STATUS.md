@@ -3,7 +3,7 @@
 > 这份文档面向**接手这个项目的人或 AI**。目标是：读完它 + `README.md`，就能在没有
 > 原作者在场的情况下继续开发、排查、发布。
 >
-> 最后更新：2026-10-24 · 版本 `0.1.0` · 分支 `master`
+> 最后更新：2026-10-26 · 版本 `0.1.0` · 分支 `master`
 
 ---
 
@@ -56,7 +56,11 @@
 | 客户端 exe 动态定位（App Paths 注册表 + 目录扫描 + 兜底） | ✅ 已实测 | `core/launcher.rs` |
 | 客户端当前登录账号检测（只读） | ✅ 三个平台（Qoder 优先解密 auth.v1.dat） | `core/client_switch.rs::detect` |
 | 系统托盘（显示 / 立即全部签到 / 退出） | ✅ | `tray.rs` |
-| 侧栏 agent 拖拽调序（顺序落盘 config.agentOrder） | ✅ 有单测 | `config.rs::sort_provider_ids`、`Sidebar.tsx` |
+| 首页总览（全局指标卡 + 各 agent 积分卡，默认落地页） | ✅ | `DashboardPanel.tsx` |
+| 侧栏 agent 拖拽调序（pointer 自实现；顺序落盘 config.agentOrder） | ✅ 有单测 | `config.rs::sort_provider_ids`、`Sidebar.tsx` |
+| 浮动卡跟手 DOM 直改（绕过 setState 帧延迟，漂移实测 ±1px） | ✅ | `Sidebar.tsx` |
+| 账号小卡片（收起关键信息 + 点击展开详情） | ✅ 有前端测试 | `AccountCard.tsx` |
+| 签到记录 id 副名字 + 每 agent 打码开关 + 按 id 解析当前名字 | ✅ 有前端测试 | `LogPanel.tsx`、`lib/mask.ts` |
 | 命令行入口（`--selftest` / `--import-local` / `--device-auth` / `--switch-client`） | ✅ | `main.rs` |
 | 独立 exe / NSIS / MSI 打包 | ✅ | 见 README「快速开始」 |
 | 单元测试 | ✅ Rust 15 个（调度 3 + Qoder 活动周期 6 + OSCrypt 4 + 定位/进程 2） | `cargo test` |
