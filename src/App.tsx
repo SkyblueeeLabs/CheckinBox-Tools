@@ -9,8 +9,10 @@ import type {
 } from "./lib/types";
 import Sidebar, { SETTINGS_ID } from "./components/Sidebar";
 import AgentGroupPanel from "./components/AgentGroupPanel";
+import DashboardPanel from "./components/DashboardPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
+import { HOME_ID } from "./lib/types";
 
 interface Toast {
   id: number;
@@ -22,7 +24,7 @@ export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
-  const [selected, setSelected] = useState<string>("");
+  const [selected, setSelected] = useState<string>(HOME_ID);
   const [busy, setBusy] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
@@ -50,9 +52,9 @@ export default function App() {
       setLogs(lg);
       setConfig(cfg);
       setSelected((prev) =>
-        prev === SETTINGS_ID || ov.providers.some((p) => p.id === prev)
+        prev === SETTINGS_ID || prev === HOME_ID || ov.providers.some((p) => p.id === prev)
           ? prev
-          : ov.providers[0]?.id ?? ""
+          : HOME_ID
       );
     } catch (e) {
       pushToast("err", `加载失败：${e}`);
@@ -390,6 +392,7 @@ export default function App() {
 
   const groups = buildGroups(overview);
   const inSettings = selected === SETTINGS_ID;
+  const inHome = selected === HOME_ID;
   const current = groups.find((g) => g.provider.id === selected);
   const providerNames = Object.fromEntries(
     overview.providers.map((p) => [p.id, p.name])
@@ -406,6 +409,7 @@ export default function App() {
         groups={groups}
         selected={selected}
         onSelect={setSelected}
+        onOpenHome={() => setSelected(HOME_ID)}
         onOpenSettings={() => setSelected(SETTINGS_ID)}
         onReorder={(order) => {
           // 乐观更新本地顺序，落盘失败再回滚刷新
@@ -450,7 +454,7 @@ export default function App() {
 
         <header className="topbar">
           <div className="brand">
-            <span className="brand-name">{inSettings ? "设置" : "CheckinBox"}</span>
+            <span className="brand-name">{inHome ? "总览" : inSettings ? "设置" : "CheckinBox"}</span>
             <span className="brand-sub">
               今日已签 <b>{overview.claimedCount}</b> / {overview.totalCount} 个账号
               {overview.todayPoints > 0 ? ` · 今日 +${overview.todayPoints}` : ""}
@@ -480,7 +484,13 @@ export default function App() {
           </div>
         </header>
 
-        {inSettings ? (
+        {inHome ? (
+          <DashboardPanel
+            overview={overview}
+            groups={groups}
+            onOpenAgent={(id) => setSelected(id)}
+          />
+        ) : inSettings ? (
           <SettingsPanel
             overview={overview}
             config={config}

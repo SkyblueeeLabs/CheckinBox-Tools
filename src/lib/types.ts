@@ -140,6 +140,9 @@ export interface AgentGroup {
   schedule: AgentScheduleView;
 }
 
+/** 首页的虚拟 id（不是真实 provider）。 */
+export const HOME_ID = "__home__";
+
 export interface AccountResult {
   accountId: string;
   provider: string;

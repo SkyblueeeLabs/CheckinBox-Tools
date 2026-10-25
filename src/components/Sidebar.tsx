@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { AgentGroup } from "../lib/types";
+import { HOME_ID, type AgentGroup } from "../lib/types";
 import { fmtPoints } from "../lib/api";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 
@@ -7,6 +7,7 @@ interface Props {
   groups: AgentGroup[];
   selected: string;
   onSelect: (id: string) => void;
+  onOpenHome: () => void;
   onOpenSettings: () => void;
   /** 拖拽调序：把完整的新顺序交给上层落盘 */
   onReorder: (order: string[]) => void;
@@ -44,7 +45,7 @@ const DRAG_THRESHOLD = 10;
  *   - 松手浮动卡消失，条目在落位处淡入（scale 1.06 → 1）。
  * 顺序由后端落盘，重启后保持。
  */
-export default function Sidebar({ groups, selected, onSelect, onOpenSettings, onReorder }: Props) {
+export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onReorder }: Props) {
   const drag = useRef<DragState | null>(null);
   const lastDragEndAt = useRef(0);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -165,6 +166,25 @@ export default function Sidebar({ groups, selected, onSelect, onOpenSettings, on
 
   return (
     <aside className="sidebar">
+      <button
+        className={`side-item side-home ${selected === HOME_ID ? "active" : ""}`}
+        onClick={onOpenHome}
+        title="账号与积分总览"
+      >
+        <span className="side-mark home-mark">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M3 10.5 12 3l9 7.5" />
+            <path d="M5 9.5V21h14V9.5" />
+            <path d="M9.5 21v-6h5v6" />
+          </svg>
+        </span>
+        <span className="side-body">
+          <span className="side-name">首页</span>
+          <span className="side-sub">总览 · 关键指标</span>
+        </span>
+        <span className="side-remaining num">{groups.length}</span>
+      </button>
+
       <div className="sidebar-head">
         <span className="sidebar-title">Agents</span>
         <span className="sidebar-count">{groups.length}</span>
