@@ -27,13 +27,35 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": [
+      "nsis",
+      "msi"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "windows": {
+      "nsis": {
+        "installMode": "currentUser",
+        "languages": [
+          "SimpChinese",
+          "English"
+        ],
+        "displayLanguageSelector": false
+      },
+      "wix": {
+        "language": [
+          "zh-CN"
+        ]
+      }
+    },
+    "shortDescription": "把散落在各 AI 编程工具里的每日积分签到收进一个窗口",
+    "longDescription": "CheckinBox 把本机已登录的 AI 编程客户端（MiniMax Code / Qoder CN / WorkBuddy / 妙手）接进来：统一查看各账号积分、按平台活动刷新时刻自动签到、多账号切换客户端登录、签到流水与积分趋势。多账号凭据自动保鲜，不在客户端里的账号也照常签到。",
+    "copyright": "仅供个人学习自用",
+    "category": "DeveloperTool"
   }
 }

@@ -112,7 +112,23 @@ npx tauri build --no-bundle
 npx tauri build
 ```
 
-产物在 `src-tauri/target/release/bundle/`。
+产物在 `src-tauri/target/release/bundle/`：
+
+| 文件 | 大小 | 说明 |
+|---|---|---|
+| `nsis/CheckinBox_0.1.0_x64-setup.exe` | 约 2.1 MB | **推荐**：中文安装向导，用户级安装 |
+| `msi/CheckinBox_0.1.0_x64_zh-CN.msi` | 约 3.5 MB | 企业部署（组策略/批量分发） |
+
+安装行为（遵循标准 Windows 软件流程，参考 Cockpit Tools 的配置）：
+
+- **用户级安装**（`installMode: currentUser`）：不需要管理员权限，
+  装到 `%LOCALAPPDATA%\CheckinBox\`，快捷方式只影响当前用户
+- 开始菜单创建「CheckinBox」快捷方式；卸载入口在
+  **设置 → 应用 → 安装的应用** 和开始菜单里
+- 卸载时会移除程序文件、快捷方式和卸载注册表项；
+  **`%APPDATA%\AgentCheckinTools\` 数据目录会保留**（账号池和签到历史不丢），
+  想彻底清掉手动删除该目录即可
+- 静默安装/卸载：`setup.exe /S`、`uninstall.exe /S`（脚本/批量场景）
 
 ### 命令行入口（不启 GUI）
 
