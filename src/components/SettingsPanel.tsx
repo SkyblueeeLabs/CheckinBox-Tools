@@ -1,5 +1,62 @@
-import type { AppConfig, Overview } from "../lib/types";
+import { useMemo, useState, type ReactNode } from "react";
+import type { AppConfig, CloseAction, Overview } from "../lib/types";
 import { formatMinute } from "../lib/api";
+import BackupPanel from "./BackupPanel";
+
+const CLOSE_OPTIONS: Array<{ value: CloseAction; label: string; desc: string }> = [
+  { value: "ask", label: "每次询问", desc: "弹确认框，自己选最小化还是退出" },
+  { value: "tray", label: "最小化到系统托盘", desc: "后台继续签到和同步" },
+  { value: "exit", label: "直接退出", desc: "关闭窗口即结束程序" },
+];
+
+/** 设置页的可折叠卡片：默认收起，点标题展开。 */
+function SetBlock({
+  title,
+  meta,
+  action,
+  open,
+  onToggle,
+  children,
+}: {
+  title: string;
+  meta?: string;
+  action?: ReactNode;
+  open: boolean;
+  onToggle: () => void;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`set-block ${open ? "open" : ""}`}>
+      <div className="set-block-head">
+        <button
+          type="button"
+          className="set-toggle"
+          aria-expanded={open}
+          onClick={onToggle}
+        >
+          <span className="set-title">{title}</span>
+          {meta && <span className="set-meta">{meta}</span>}
+          <svg
+            className="set-chevron"
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden
+          >
+            <path d="m6 9 6 6 6-6" />
+          </svg>
+        </button>
+        {action}
+      </div>
+      {open && <div className="set-block-body">{children}</div>}
+    </div>
+  );
+}
 
 interface Props {
   overview: Overview;
@@ -15,6 +72,7 @@ interface Props {
   ) => void;
   onSyncNow: () => void;
   onOpenDataDir: () => void;
+  onCloseAction: (action: CloseAction) => void;
 }
 
 /**
@@ -35,18 +93,47 @@ export default function SettingsPanel({
   onScheduleChange,
   onSyncNow,
   onOpenDataDir,
+  onCloseAction,
 }: Props) {
   const providers = overview.providers;
   const agents = overview.agents;
+
+  /** 设置页分 tab：「常规」放同步/调度/数据说明，「历史备份」放换号聊天记录的备份管理。 */
+  const [tab, setTab] = useState<"general" | "backups">("general");
+  /** 展开的卡片（默认全收起）。允许多张同时展开。 */
+  const [openBlocks, setOpenBlocks] = useState<Set<string>>(() => new Set());
+  const toggleBlock = (id: string) =>
+    setOpenBlocks((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  const closeLabel =
+    CLOSE_OPTIONS.find((o) => o.value === config.closeAction)?.label ?? "";
+
+  const providerNames = useMemo(
+    () => Object.fromEntries(providers.map((p) => [p.id, p.name])),
+    [providers]
+  );
+  const providerAccents = useMemo(
+    () => Object.fromEntries(providers.map((p) => [p.id, p.accent])),
+    [providers]
+  );
 
   return (
     <section className="panel settings">
       <header className="panel-head">
         <div className="panel-title">
-          <span className="panel-mark" />
+          <span className="panel-mark settings-panel-mark">
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <circle cx="12" cy="12" r="3" />
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            </svg>
+          </span>
           <div>
             <h2>设置</h2>
-            <p className="panel-sub">同步 / 调度 / 数据目录</p>
+            <p className="panel-sub">同步 / 调度 / 数据目录 / 历史备份</p>
           </div>
         </div>
         <div className="panel-actions">
@@ -59,11 +146,35 @@ export default function SettingsPanel({
         </div>
       </header>
 
-      <div className="set-grid">
+      <div className="set-tabs" role="tablist">
+        <button
+          role="tab"
+          aria-selected={tab === "general"}
+          className={`set-tab ${tab === "general" ? "active" : ""}`}
+          onClick={() => setTab("general")}
+        >
+          常规
+        </button>
+        <button
+          role="tab"
+          aria-selected={tab === "backups"}
+          className={`set-tab ${tab === "backups" ? "active" : ""}`}
+          onClick={() => setTab("backups")}
+        >
+          历史备份
+        </button>
+      </div>
+
+      {tab === "backups" ? (
+        <BackupPanel providerNames={providerNames} providerAccents={providerAccents} />
+      ) : (
+        <div className="set-grid">
         {/* ---------- 自动同步 ---------- */}
-        <div className="set-block">
-          <div className="set-block-head">
-            <h3>自动同步</h3>
+        <SetBlock
+          title="自动同步"
+          open={openBlocks.has("sync")}
+          onToggle={() => toggleBlock("sync")}
+          action={
             <label className="switch">
               <input
                 type="checkbox"
@@ -72,7 +183,8 @@ export default function SettingsPanel({
               />
               <span>{config.scheduler.syncEnabled ? "已开启" : "已关闭"}</span>
             </label>
-          </div>
+          }
+        >
           <p className="set-hint">
             后台按下面的间隔刷新每个平台的积分、签到状态和账号资料。
             跨天时会无视间隔强制同步一次，保证「今日已签 / 今日可签」是新的一天的状态。
@@ -118,12 +230,14 @@ export default function SettingsPanel({
               })}
             </tbody>
           </table>
-        </div>
+        </SetBlock>
 
         {/* ---------- 自动签到调度 ---------- */}
-        <div className="set-block">
-          <div className="set-block-head">
-            <h3>自动签到调度</h3>
+        <SetBlock
+          title="自动签到调度"
+          open={openBlocks.has("schedule")}
+          onToggle={() => toggleBlock("schedule")}
+          action={
             <label className="switch">
               <input
                 type="checkbox"
@@ -132,7 +246,8 @@ export default function SettingsPanel({
               />
               <span>{config.scheduler.enabled ? "已开启" : "已关闭"}</span>
             </label>
-          </div>
+          }
+        >
           <p className="set-hint">
             总闸关掉后所有平台都不再自动签到。每个平台有自己独立的时间窗，
             窗内给每个账号随机分配一个错峰分钟。
@@ -199,31 +314,67 @@ export default function SettingsPanel({
               })}
             </tbody>
           </table>
-        </div>
+        </SetBlock>
+
+        {/* ---------- 关闭窗口 ---------- */}
+        <SetBlock
+          title="关闭窗口"
+          meta={closeLabel}
+          open={openBlocks.has("close")}
+          onToggle={() => toggleBlock("close")}
+        >
+          <p className="set-hint">
+            点右上角 × 时的行为。最小化到托盘后，自动签到和后台同步会继续运行；
+            要彻底结束程序，用托盘右键菜单里的「退出」。
+          </p>
+          <div className="close-choices">
+            {CLOSE_OPTIONS.map((opt) => (
+              <label
+                key={opt.value}
+                className={`close-choice ${config.closeAction === opt.value ? "active" : ""}`}
+              >
+                <input
+                  type="radio"
+                  name="close-action"
+                  value={opt.value}
+                  checked={config.closeAction === opt.value}
+                  onChange={() => onCloseAction(opt.value)}
+                />
+                <span className="close-choice-text">
+                  <span className="close-choice-label">{opt.label}</span>
+                  <span className="close-choice-desc">{opt.desc}</span>
+                </span>
+              </label>
+            ))}
+          </div>
+        </SetBlock>
 
         {/* ---------- 数据 ---------- */}
-        <div className="set-block">
-          <div className="set-block-head">
-            <h3>数据</h3>
-          </div>
+        <SetBlock
+          title="数据"
+          open={openBlocks.has("data")}
+          onToggle={() => toggleBlock("data")}
+        >
           <p className="set-hint">
             账号池、配置、调度计划和签到流水都存在这里。凭据用 Windows DPAPI 加密后落盘，
             明文只存在于内存，不会写进日志。
           </p>
           <p className="set-path">{overview.dataDir}</p>
-        </div>
+        </SetBlock>
 
         {/* ---------- 说明 ---------- */}
-        <div className="set-block">
-          <div className="set-block-head">
-            <h3>说明</h3>
-          </div>
+        <SetBlock
+          title="说明"
+          open={openBlocks.has("about")}
+          onToggle={() => toggleBlock("about")}
+        >
           <p className="set-hint">
             本工具调用的是各客户端的非公开内部接口，仅用于把自己的多个账号聚合到一处管理，
             请遵守各平台的服务条款。接口随时可能变更，变更后这里的显示可能不准确。
           </p>
+        </SetBlock>
         </div>
-      </div>
+      )}
     </section>
   );
 }

@@ -3,7 +3,7 @@
 //! 借鉴 Tokdash / syrtis 的做法：每次刷新积分时落一条快照，
 //! 用来画趋势、看「这个号每天掉多少」。
 //!
-//! 存储：`%APPDATA%\AgentCheckinTools\quota_history.jsonl`，只保留最近 N 天。
+//! 存储：`%APPDATA%\CheckinBox\quota_history.jsonl`，只保留最近 N 天。
 
 use anyhow::Result;
 use chrono::Local;

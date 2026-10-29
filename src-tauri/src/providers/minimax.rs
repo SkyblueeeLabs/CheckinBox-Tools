@@ -170,6 +170,36 @@ fn file_token_prefix() -> Option<String> {
 /// 身份缓存：`(token 前缀, userID, 昵称)`。token 轮换后前缀变化，自动失效重探。
 static IDENTITY_CACHE: Mutex<Option<(String, String, String)>> = Mutex::new(None);
 
+// ---------------------------------------------------------------------------
+// 凭据落盘钩子（commands 层注入，避免 providers → commands 循环依赖）
+// ---------------------------------------------------------------------------
+
+/// 401 抢救刷新后的回写/读取钩子。账号池是唯一权威：刷新必须成对落盘，
+/// 否则轮换掉的 RT 就永久丢了（2026-10-26 那次「1 小时必死」的根因）。
+static PERSIST_HOOK: Mutex<Option<fn(&str, &str, &Value)>> = Mutex::new(None);
+static FETCH_HOOK: Mutex<Option<fn(&str, &str) -> Option<Value>>> = Mutex::new(None);
+
+/// 应用启动时注入一次。
+pub fn set_cred_hooks(
+    persist: fn(&str, &str, &Value),
+    fetch: fn(&str, &str) -> Option<Value>,
+) {
+    *PERSIST_HOOK.lock().unwrap() = Some(persist);
+    *FETCH_HOOK.lock().unwrap() = Some(fetch);
+}
+
+fn persist_cred(provider_id: &str, account_id: &str, cred: &Value) {
+    if let Some(f) = PERSIST_HOOK.lock().unwrap().as_ref() {
+        f(provider_id, account_id, cred);
+    }
+}
+
+fn fetch_cred(provider_id: &str, account_id: &str) -> Option<Value> {
+    let guard = FETCH_HOOK.lock().unwrap();
+    let f = guard.as_ref()?;
+    f(provider_id, account_id)
+}
+
 /// 用 access token 调客户端自用的用户信息接口，拿**真实账号身份**。
 ///
 /// 协议来自 app.asar 的 `fetchIdentity`（本机实测）：
@@ -285,6 +315,11 @@ impl MiniMaxProvider {
     /// MiniMax 的 token 约 1 小时过期，客户端会在到期前后续期，中间有几十秒空窗。
     /// 空窗内请求会拿到 401，所以 **401/403 时多重试几次**（间隔递增），
     /// 其他错误只重试一次。
+    ///
+    /// 401 还有第二种来头（2026-10-27 实测）：**上游提前吊销** —— 客户端切号/
+    /// 重新登录会把旧会话作废，池里的 token 明明 `expires_at_ms` 未到却已被拒。
+    /// 这种等是等不来的，所以**非当前登录**的账号 401 时立即强制走一次 RT 刷新
+    /// （并落盘）再用新 token 重试；刷新也救不回来才如实报错。
     async fn request_with_retry(
         &self,
         url: &str,
@@ -296,9 +331,13 @@ impl MiniMaxProvider {
         let backoff = [2000u64, 5000, 10000];
         let mut last_err = anyhow!("请求失败");
         let mut attempt = 0usize;
+        // 可变副本：401 抢救刷新后换成新凭据继续本次请求
+        let mut cred = cred.clone();
+        // 每次请求链最多抢救一次，避免刷新风暴
+        let mut rescued = false;
 
         loop {
-            let token = current_token(account, cred)?;
+            let token = current_token(account, &cred)?;
             let result = if is_post {
                 self.http
                     .post(url)
@@ -325,13 +364,31 @@ impl MiniMaxProvider {
                 Ok(resp) => {
                     let code = resp.status().as_u16();
                     if code == 401 || code == 403 {
-                        // 客户端当前登录的不是这个账号 → 凭据快照不会再续期，直接判死，
-                        // 不再白等十几秒退避 —— 并告诉用户该怎么办
+                        // 客户端当前登录的不是这个账号 → 凭据快照不会再被客户端续期。
+                        // 但别急着判死：先强制走一次 RT 刷新抢救（见函数头注释），
+                        // 救不回来才把「该怎么办」说清楚。
                         if !client_login_is(account) {
-                            return Err(anyhow!(
-                                "凭据已失效（HTTP {code}）：客户端当前登录的不是这个账号。\
-                                 在客户端登录此账号后重新导入，或用「切换客户端账号」切过去"
-                            ));
+                            if rescued {
+                                return Err(anyhow!(
+                                    "凭据已失效（HTTP {code}）：自动刷新后仍被拒绝。\
+                                     请在客户端登录此账号后重新导入，或用「切换客户端账号」切过去"
+                                ));
+                            }
+                            rescued = true;
+                            match self.force_refresh_cred(account, &cred).await {
+                                Some(fresh) => {
+                                    cred = fresh;
+                                    attempt += 1;
+                                    continue; // 立刻用新 token 重试，不退避
+                                }
+                                None => {
+                                    return Err(anyhow!(
+                                        "凭据已失效（HTTP {code}）：自动刷新也没能恢复 —— \
+                                         refresh token 可能已被吊销（此账号曾在客户端登录后又切走）。\
+                                         请在客户端登录此账号后重新导入，或用「切换客户端账号」切过去"
+                                    ));
+                                }
+                            }
                         }
                         // 客户端根本没在运行 → 没人续期 token，退避重试只是白等。
                         // 快速失败，把「该怎么办」说清楚（这也是首屏加载慢的常见原因）。
@@ -366,6 +423,26 @@ impl MiniMaxProvider {
         }
 
         Err(last_err)
+    }
+
+    /// 401 时的抢救：先看账号池里有没有别的任务刚刷新出的新凭据（避免重复
+    /// 轮换 RT），没有才强制走一次 OAuth 刷新并**立即落盘**。
+    /// 返回 None = RT 也死了，只能重新导入。
+    async fn force_refresh_cred(&self, account: &Account, cred: &Value) -> Option<Value> {
+        let my_token = cred.get("access_token").and_then(|v| v.as_str()).unwrap_or("");
+        if let Some(pool) = fetch_cred(&account.provider, &account.id) {
+            let pool_token = pool.get("access_token").and_then(|v| v.as_str()).unwrap_or("");
+            if !pool_token.is_empty() && pool_token != my_token {
+                return Some(pool); // 别人刚刷新过：直接采纳，不再轮换
+            }
+        }
+        match self.refresh(account, cred).await {
+            Ok(Some(fresh)) => {
+                persist_cred(&account.provider, &account.id, &fresh);
+                Some(fresh)
+            }
+            _ => None,
+        }
     }
 }
 

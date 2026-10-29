@@ -1,7 +1,9 @@
 //! 签到流水。
 //!
-//! 每次签到（含「今日已签」和失败）都落一条 JSONL，按月分文件：
-//! `logs/checkin-2026-10.jsonl`。UI 读最近 N 天。
+//! 只落两类（2026-10-26 起按需求调整）：**成功**（当天每账号一条）和
+//! **失败**（可重复，方便排查）；「今日已签」和「未开窗跳过」不落——
+//! 没有信息量只会刷屏。按月分文件：`logs/checkin-2026-10.jsonl`。
+//! UI 读最近 N 天（历史文件里的 already 存量在读取时过滤）。
 
 use anyhow::Result;
 use chrono::Local;
@@ -22,7 +24,7 @@ pub struct LogEntry {
     pub provider: String,
     pub account_id: String,
     pub label: String,
-    /// `success` / `already` / `failed`
+    /// `success` / `failed`（`already` 只存在于历史文件，读取时会被过滤）
     pub status: String,
     pub points: i64,
     pub message: String,
@@ -107,6 +109,11 @@ pub fn recent(days: i64) -> Result<Vec<LogEntry>> {
             if entry.date < oldest_str || entry.date > today_str {
                 continue;
             }
+            // 「今日已签」从 2026-10-26 起不再落盘；过滤掉历史文件里的存量，
+            // 免得流水面板里继续刷屏（磁盘原始数据保留，随时可回退）
+            if entry.status == "already" {
+                continue;
+            }
             if seen.insert(entry.id.clone()) {
                 out.push(entry);
             }
@@ -115,4 +122,33 @@ pub fn recent(days: i64) -> Result<Vec<LogEntry>> {
 
     out.sort_by(|a, b| b.timestamp.cmp(&a.timestamp));
     Ok(out)
+}
+
+/// 今天该账号是否已经落过一条成功签到（用于当天成功记录去重）。
+pub fn has_success_today(provider: &str, account_id: &str) -> bool {
+    let Ok(entries) = recent(1) else {
+        return false;
+    };
+    entries
+        .iter()
+        .any(|e| e.provider == provider && e.account_id == account_id && e.status == "success")
+}
+
+/// 最近 `minutes` 分钟内该账号是否已落过失败流水。
+///
+/// 调度器在时间窗内每 ~30 秒重试一次失败账号（等上游恢复），不设节流的话
+/// 一个死账号一小时能刷出 240 条相同失败（2026-10-27 实测 16 分钟 32 条）。
+pub fn has_recent_failure(provider: &str, account_id: &str, minutes: i64) -> bool {
+    let Ok(entries) = recent(1) else {
+        return false;
+    };
+    let cutoff = (Local::now() - chrono::Duration::minutes(minutes))
+        .format("%Y-%m-%d %H:%M:%S")
+        .to_string();
+    entries.iter().any(|e| {
+        e.provider == provider
+            && e.account_id == account_id
+            && e.status == "failed"
+            && e.timestamp.as_str() >= cutoff.as_str()
+    })
 }

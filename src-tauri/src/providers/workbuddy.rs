@@ -107,13 +107,14 @@ pub fn user_data_dir() -> Option<std::path::PathBuf> {
     dir.is_dir().then_some(dir)
 }
 
-/// state.vscdb 里 safeStorage 密文的键名。
-fn secret_key() -> String {
+/// state.vscdb 里 safeStorage 密文的键名（换号写回时也要用）。
+pub fn secret_key() -> String {
     r#"secret://{"extensionId":"tencent-cloud.coding-copilot","key":"planning-genie.new.accessToken"}"#.to_string()
 }
 
 /// 读出并解密客户端当前登录的凭据 JSON（只读，不写任何文件）。
-fn read_local_secret() -> Option<Value> {
+/// 换号（`core/client_switch.rs::switch_workbuddy`）也用它拿模板和判身份。
+pub fn read_local_secret() -> Option<Value> {
     let dir = user_data_dir()?;
     let key = os_crypt::read_key(&dir.join("Local State")).ok()?;
     let conn = rusqlite::Connection::open(

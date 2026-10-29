@@ -23,6 +23,8 @@ interface Props {
   /** 把客户端切换成这个账号（改写客户端凭据文件） */
   onSwitchClient: (providerId: string, accountId: string) => void;
   onAlertChange: (providerId: string, value: number) => void;
+  /** 改「换号同步聊天记录」开关（仅 WorkBuddy / Qoder 显示） */
+  onChatSyncChange: (providerId: string, enabled: boolean) => void;
 }
 
 /**
@@ -32,6 +34,23 @@ interface Props {
 const RESET_HINT: Record<string, string> = {
   qoder: "Qoder 的每日活动 10:00（UTC+8）才刷新，时间窗要放在 10:00 之后",
 };
+
+/**
+ * 「换号同步聊天记录」的说明（借鉴 Cockpit 的 share_sessions_on_switch）。
+ * 两个客户端的存储形态不同，措辞分开写：
+ *   * WorkBuddy 会话按账号 uid 分目录 —— 开关做的是「合并到目标账号名下」；
+ *   * Qoder 的聊天库是本机全局的 —— 开关做的是「按账号归档/回填」。
+ */
+const CHAT_SYNC_HINT: Record<string, string> = {
+  workbuddy:
+    "开启后，切换客户端账号时会把当前账号的本地会话合并进目标账号；关闭则不碰聊天记录，各账号只看到自己名下的会话",
+  qoder:
+    "开启后，切换客户端账号时把当前聊天记录归档给原账号、带回该账号的历史会话；目标账号没有归档时以空白会话启动。关闭则不同步",
+};
+
+/** 与 MiniMax 自动同步的关系说明（开关只在 WorkBuddy / Qoder 上渲染）。 */
+const CHAT_SYNC_MINIMAX_NOTE =
+  "MiniMax 不受此开关影响：它的会话存在服务端，客户端登录即自动同步，优先于本地记录";
 
 /**
  * 单个 agent 的面板。
@@ -54,6 +73,7 @@ export default function AgentGroupPanel({
   onSwitchClient,
   onAlertChange,
   onScheduleChange,
+  onChatSyncChange,
 }: Props) {
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
@@ -119,6 +139,24 @@ export default function AgentGroupPanel({
           )}
         </div>
       </header>
+
+      {/* 换号同步聊天记录（仅 WorkBuddy / Qoder 这类会话存本地的客户端显示） */}
+      {schedule.chatSyncSupported && (
+        <div className="chat-sync">
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={schedule.chatSyncEnabled}
+              onChange={(e) => onChatSyncChange(provider.id, e.target.checked)}
+            />
+            <span>换号同步聊天记录</span>
+          </label>
+          <span className="chat-sync-hint" title={CHAT_SYNC_MINIMAX_NOTE}>
+            {CHAT_SYNC_HINT[provider.id] ?? "切换客户端账号时保留各账号的本地会话"}
+            <em className="chat-sync-note"> · {CHAT_SYNC_MINIMAX_NOTE}</em>
+          </span>
+        </div>
+      )}
 
       {/* 这个 agent 自己的自动签到 */}
       <div className="sched">

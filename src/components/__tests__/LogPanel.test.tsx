@@ -53,6 +53,22 @@ describe("LogPanel", () => {
     expect(screen.getByText("Qoder CN")).toBeInTheDocument();
   });
 
+  it("收起时只保留标题和条数，不渲染记录行", () => {
+    render(
+      <LogPanel
+        logs={logs}
+        providerId={null}
+        providerName="全部"
+        providerNames={{ minimax: "MiniMax Code", qoder: "Qoder CN" }}
+        accountNames={{}}
+        visible={false}
+        onToggle={() => {}}
+      />
+    );
+    expect(screen.getByText(/近 7 天 · 2 条/)).toBeInTheDocument();
+    expect(screen.queryByText("+400 积分")).not.toBeInTheDocument();
+  });
+
   it("没有记录时显示空态文案", () => {
     render(
       <LogPanel

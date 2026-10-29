@@ -1,3 +1,10 @@
+> 历史文档：项目曾用内部名 `agent-checkin-tools`、数据目录 `AgentCheckinTools`；
+> 2026-10-29 已统一为 crate `checkinbox` / 目录 `%APPDATA%\CheckinBox\`
+> （旧目录首次启动自动复制迁移）。以下正文保留当时原文，以代码和
+> `docs/PROJECT-STATUS.md` 为准。
+
+---
+
 # CheckinBox 设计规格
 
 - 日期：2026-10-22

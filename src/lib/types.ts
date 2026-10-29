@@ -1,5 +1,8 @@
 export type ClaimState = "claimable" | "claimed" | "notAvailable" | "unknown";
 
+/** 点窗口右上角 × 时的行为 */
+export type CloseAction = "ask" | "tray" | "exit";
+
 export interface CheckinStatus {
   state: ClaimState;
   points: number;
@@ -93,6 +96,10 @@ export interface AgentScheduleView {
   clientAccount?: ClientAccountView;
   /** 能不能靠「写凭据文件」给这个客户端换账号 */
   switchable: boolean;
+  /** 换号时是否同步客户端本地聊天记录 */
+  chatSyncEnabled: boolean;
+  /** 这个平台的客户端是否支持聊天记录同步（决定开关显不显示） */
+  chatSyncSupported: boolean;
 }
 
 /** 客户端当前登录的账号 */
@@ -110,6 +117,15 @@ export interface SwitchOutcome {
   /** 写入的凭据文件 */
   targetFile: string;
   clientExe: string;
+  /** 聊天记录同步结果（开关没开就是 undefined） */
+  chatSync?: {
+    action: string;
+    detail: string;
+    files: number;
+    bytes: number;
+    added: number;
+    replaced: number;
+  };
 }
 
 export interface Overview {
@@ -170,6 +186,22 @@ export interface AgentScheduleConfig {
   endMinute: number;
   /** 该 agent 的数据自动同步间隔（分钟） */
   refreshIntervalMinutes: number;
+  /** 换号时是否同步客户端本地聊天记录 */
+  chatSyncEnabled?: boolean;
+}
+
+/** 一条换号聊天记录备份（设置页「历史备份」） */
+export interface ChatBackupEntry {
+  /** workbuddy / qoder */
+  provider: string;
+  /** 操作 id（`<毫秒时间戳>-<进程号>`） */
+  opId: string;
+  /** 备份时间（毫秒时间戳；0 = 解析不出来） */
+  createdAtMs: number;
+  files: number;
+  bytes: number;
+  /** 顶层内容（main.sqlite / history 等） */
+  items: string[];
 }
 
 export interface SchedulerConfig {
@@ -184,6 +216,8 @@ export interface AppConfig {
   /** 每个 agent 当前激活的账号 id */
   activeAccounts: Record<string, string>;
   alertThresholds: Record<string, number>;
+  /** 关闭主窗口时的行为（默认每次询问） */
+  closeAction: CloseAction;
 }
 
 export interface DiscoveredAccount {

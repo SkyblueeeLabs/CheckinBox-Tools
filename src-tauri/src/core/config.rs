@@ -31,6 +31,15 @@ pub struct AgentScheduleConfig {
     /// 跨天时不看间隔，强制同步一次。
     #[serde(default = "default_refresh_interval")]
     pub refresh_interval_minutes: u32,
+    /// 换号时是否同步客户端本地聊天记录（借鉴 Cockpit 的
+    /// `share_sessions_on_switch`）。
+    ///
+    /// 只对聊天记录**存本地**的客户端有意义（WorkBuddy / Qoder CN）：
+    /// 勾选后每次「切换客户端账号」把会话记录带给目标账号；
+    /// 不勾选则完全不碰聊天数据（与旧版行为一致）。
+    /// MiniMax 的会话在服务端自动同步，此开关对它不存在。
+    #[serde(default)]
+    pub chat_sync_enabled: bool,
 }
 
 fn default_refresh_interval() -> u32 {
@@ -44,6 +53,7 @@ impl Default for AgentScheduleConfig {
             start_minute: 6 * 60,
             end_minute: 8 * 60,
             refresh_interval_minutes: default_refresh_interval(),
+            chat_sync_enabled: false,
         }
     }
 }
@@ -69,6 +79,7 @@ impl AgentScheduleConfig {
             start_minute,
             end_minute,
             refresh_interval_minutes: default_refresh_interval(),
+            chat_sync_enabled: false,
         }
     }
 }
@@ -118,6 +129,19 @@ impl SchedulerConfig {
     }
 }
 
+/// 点窗口右上角 × 时的行为。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CloseAction {
+    /// 每次关闭都弹确认框，由用户选择最小化还是退出
+    #[default]
+    Ask,
+    /// 最小化到系统托盘，后台继续签到 / 同步
+    Tray,
+    /// 直接退出应用
+    Exit,
+}
+
 /// 应用配置。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -136,6 +160,9 @@ pub struct AppConfig {
     /// 没列出的平台排在最后（按注册顺序）。
     #[serde(default)]
     pub agent_order: Vec<String>,
+    /// 关闭主窗口时的行为（默认每次询问）。
+    #[serde(default)]
+    pub close_action: CloseAction,
 }
 
 impl AppConfig {
@@ -232,5 +259,29 @@ mod tests {
         cfg.agent_order = vec!["gone".into(), "b".into(), "a".into()];
         let sorted = cfg.sort_provider_ids(vec!["a".into(), "b".into()]);
         assert_eq!(sorted, vec!["b", "a"]);
+    }
+
+    #[test]
+    fn 关闭行为默认每次询问() {
+        assert_eq!(AppConfig::default().close_action, CloseAction::Ask);
+    }
+
+    #[test]
+    fn 旧配置缺少关闭行为字段时默认询问() {
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{"scheduler":{"enabled":true,"syncEnabled":true,"agents":{}},"activeAccounts":{},"alertThresholds":{},"agentOrder":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.close_action, CloseAction::Ask);
+    }
+
+    #[test]
+    fn 关闭行为按camelCase落盘并可回读() {
+        let mut cfg = AppConfig::default();
+        cfg.close_action = CloseAction::Tray;
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"closeAction\":\"tray\""));
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.close_action, CloseAction::Tray);
     }
 }

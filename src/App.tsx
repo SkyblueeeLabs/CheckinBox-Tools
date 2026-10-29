@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, onAccountsSynced, onCheckinProgress } from "./lib/api";
+import { api, onAccountsSynced, onCheckinProgress, onCloseRequested } from "./lib/api";
 import { buildGroups } from "./lib/groups";
 import type {
   AccountResult,
   AppConfig,
+  CloseAction,
   LogEntry,
   Overview,
 } from "./lib/types";
@@ -12,6 +13,7 @@ import AgentGroupPanel from "./components/AgentGroupPanel";
 import DashboardPanel from "./components/DashboardPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
+import CloseConfirmDialog from "./components/CloseConfirmDialog";
 import { HOME_ID } from "./lib/types";
 
 interface Toast {
@@ -32,7 +34,8 @@ export default function App() {
   const [authSession, setAuthSession] = useState<string | null>(null);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [authProvider, setAuthProvider] = useState<string | null>(null);
-  const [logsOpen, setLogsOpen] = useState(true);
+  const [logsOpen, setLogsOpen] = useState(false);
+  const [closePrompt, setClosePrompt] = useState(false);
   const toastSeq = useRef(0);
 
   const pushToast = useCallback((kind: Toast["kind"], text: string) => {
@@ -74,9 +77,12 @@ export default function App() {
     const unlistenSync = onAccountsSynced(() => {
       void refresh();
     });
+    // 点了窗口 ×、关闭行为是「每次询问」时，后端会拦下关闭并通知这里
+    const unlistenClose = onCloseRequested(() => setClosePrompt(true));
     return () => {
       void unlisten.then((fn) => fn());
       void unlistenSync.then((fn) => fn());
+      void unlistenClose.then((fn) => fn());
     };
   }, [refresh, pushToast]);
 
@@ -262,9 +268,10 @@ export default function App() {
     setBusy(true);
     try {
       const result = await api.switchClientAccount(providerId, accountId);
+      const chatNote = result.chatSync ? `；${result.chatSync.detail}` : "";
       pushToast(
         "ok",
-        `${label}：已切换客户端账号并重启，同时设为当前账号${result.backup ? "（原登录态已备份）" : ""}`
+        `${label}：已切换客户端账号并重启，同时设为当前账号${result.backup ? "（原登录态已备份）" : ""}${chatNote}`
       );
       await refresh();
     } catch (e) {
@@ -273,6 +280,29 @@ export default function App() {
       setBusy(false);
     }
   };
+
+  /** 改某个 agent 的「同步聊天记录」开关（乐观更新 + 后端落盘，重启后保持） */
+  const patchChatSync = useCallback(
+    (providerId: string, enabled: boolean) => {
+      setOverview((prev) => {
+        if (!prev) return prev;
+        const cur = prev.agents[providerId];
+        if (!cur) return prev;
+        return {
+          ...prev,
+          agents: {
+            ...prev.agents,
+            [providerId]: { ...cur, chatSyncEnabled: enabled },
+          },
+        };
+      });
+      void api
+        .setChatSync(providerId, enabled)
+        .then((cfg) => setConfig(cfg))
+        .catch((e) => pushToast("err", `保存失败：${e}`));
+    },
+    [pushToast]
+  );
 
   /** 改某个 agent 的积分预警阈值 */
   const patchAlert = useCallback((providerId: string, value: number) => {
@@ -372,6 +402,35 @@ export default function App() {
       setSyncing(false);
     }
   };
+
+  /** 设置页里改「关闭窗口」行为（落盘，重启后保持） */
+  const changeCloseAction = useCallback(
+    async (action: CloseAction) => {
+      try {
+        const cfg = await api.setCloseAction(action);
+        setConfig(cfg);
+      } catch (e) {
+        pushToast("err", `保存失败：${e}`);
+      }
+    },
+    [pushToast]
+  );
+
+  /** 关闭确认框的选择结果：执行一次；勾了「记住」才写进配置 */
+  const resolveClose = useCallback(
+    async (action: "tray" | "exit", remember: boolean) => {
+      setClosePrompt(false);
+      try {
+        await api.resolveCloseAction(action, remember);
+        if (remember) {
+          setConfig((prev) => (prev ? { ...prev, closeAction: action } : prev));
+        }
+      } catch (e) {
+        pushToast("err", `关闭失败：${e}`);
+      }
+    },
+    [pushToast]
+  );
 
   const openDataDir = async () => {
     try {
@@ -561,6 +620,7 @@ export default function App() {
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
             onSyncNow={syncNow}
             onOpenDataDir={openDataDir}
+            onCloseAction={(action) => void changeCloseAction(action)}
           />
         ) : current ? (
           <AgentGroupPanel
@@ -578,6 +638,7 @@ export default function App() {
             onAddAccount={(id: string) => { void startDeviceAuth(id); }}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
             onAlertChange={patchAlert}
+            onChatSyncChange={patchChatSync}
           />
         ) : (
           <div className="empty-state">
@@ -602,6 +663,13 @@ export default function App() {
             </div>
           ))}
         </div>
+
+        {closePrompt && (
+          <CloseConfirmDialog
+            onCancel={() => setClosePrompt(false)}
+            onResolve={(action, remember) => void resolveClose(action, remember)}
+          />
+        )}
       </div>
     </div>
   );

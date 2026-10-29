@@ -28,7 +28,7 @@ const STATE_TEXT: Record<string, string> = {
 /** 小卡片上的一句话状态摘要 */
 function summaryText(view: AccountView): string {
   const s = view.status;
-  if (view.error) return "状态读取失败";
+  if (view.error) return "状态读取失败，点「重试」或重新导入";
   if (!s) return "正在读取…";
   switch (s.state) {
     case "claimable":
@@ -60,14 +60,18 @@ export default function AccountCard({
   onRemove,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const { status, error, account } = view;
+  const { status, error, quotaError, account } = view;
   const state = status?.state ?? "unknown";
   const remaining = view.quota?.totalRemaining;
+  // 账号凭据失效这类错误会把卡片撑高 —— 收起态也要能一眼看出异常
+  const hasError = !!error;
+  // 积分和签到状态常报同一个错（同一个 401）：只显示一次，别把卡片撑高
+  const shownQuotaError = quotaError && quotaError !== error ? quotaError : null;
   // 账号 id 副名字（与签到记录共用的打码开关）
   const masked = useMasked(account.provider);
 
   return (
-    <article className={`acct-card ${state} ${open ? "open" : ""}`}>
+    <article className={`acct-card ${state} ${hasError ? "error" : ""} ${open ? "open" : ""}`}>
       {/* ---------- 收起态：关键信息 ---------- */}
       <button
         className="acct-mini"
@@ -86,7 +90,9 @@ export default function AccountCard({
             <span className="acct-badges">
               {view.isClientLogin && <span className="chip-client">客户端登录</span>}
               {view.isActive && <span className="chip-active">当前账号</span>}
-              <span className={`acct-badge ${state}`}>{STATE_TEXT[state] ?? state}</span>
+              <span className={`acct-badge ${hasError ? "error" : state}`}>
+                {hasError ? "读取失败" : STATE_TEXT[state] ?? state}
+              </span>
             </span>
           </span>
         </span>
@@ -112,7 +118,7 @@ export default function AccountCard({
 
           <QuotaCard
             quota={view.quota}
-            error={view.quotaError}
+            error={shownQuotaError}
             loading={quotaLoading}
             onRefresh={onRefreshQuota}
             alertThreshold={view.alertThreshold}
@@ -123,7 +129,9 @@ export default function AccountCard({
           <div className="acct-signin">
             <div style={{ minWidth: 0 }}>
               {error ? (
-                <p className="acct-error">{error}</p>
+                <p className="acct-error" title={error}>
+                  {error}
+                </p>
               ) : status ? (
                 <p className="acct-status-msg">{status.message}</p>
               ) : (
@@ -144,9 +152,10 @@ export default function AccountCard({
             <button
               className="btn small primary"
               onClick={onCheckin}
-              disabled={busy || state !== "claimable"}
+              disabled={busy || (state !== "claimable" && !hasError)}
+              title={hasError ? "重新拉取状态并尝试签到" : undefined}
             >
-              {state === "claimable" ? "签到" : "已处理"}
+              {state === "claimable" ? "签到" : hasError ? "重试" : "已处理"}
             </button>
           </div>
 

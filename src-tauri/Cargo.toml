@@ -1,5 +1,5 @@
 [package]
-name = "agent-checkin-tools"
+name = "checkinbox"
 version = "0.1.0"
 description = "聚合 AI 编程工具每日签到"
 authors = ["Skyblueee"]
@@ -7,7 +7,7 @@ edition = "2021"
 rust-version = "1.77"
 
 [lib]
-name = "agent_checkin_tools_lib"
+name = "checkinbox_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 # 可执行文件名（窗口标题/托盘/安装包同名）
@@ -44,6 +44,14 @@ thiserror = "2"
 async-trait = "0.1"
 dirs = "6"
 open = "5"
+
+[features]
+# 生产构建必带：启用后 `generate_context!` 才会把 ../dist 的界面嵌入 exe；
+# 不带的话 exe 会去连 devUrl（http://localhost:5173）的开发服务器，
+# 没开 `npm run dev` 就会显示「localhost 拒绝连接」。
+# ⚠️ tauri-cli 2.12+ 不再自动带这个特性（实测 2.12.4），命令要显式写：
+#   npx tauri build --no-bundle --features custom-protocol
+custom-protocol = ["tauri/custom-protocol"]
 
 [profile.release]
 codegen-units = 1

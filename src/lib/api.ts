@@ -5,7 +5,9 @@ import type {
   AccountResult,
   AppConfig,
   AuthChallenge,
+  ChatBackupEntry,
   ClientAccountView,
+  CloseAction,
   DiscoveredAccount,
   LogEntry,
   Overview,
@@ -34,6 +36,10 @@ export const api = {
     invoke<Account[]>("remove_account", { providerId, accountId }),
   getConfig: () => invoke<AppConfig>("get_config"),
   setConfig: (config: AppConfig) => invoke<AppConfig>("set_config", { config }),
+  setCloseAction: (action: CloseAction) =>
+    invoke<AppConfig>("set_close_action", { action }),
+  resolveCloseAction: (action: CloseAction, remember: boolean) =>
+    invoke<void>("resolve_close_action", { action, remember }),
   setAgentOrder: (order: string[]) =>
     invoke<AppConfig>("set_agent_order", { order }),
   setAgentSchedule: (
@@ -60,6 +66,13 @@ export const api = {
     invoke<AppConfig>("set_active_account", { providerId, accountId }),
   setAlertThreshold: (providerId: string, value: number) =>
     invoke<AppConfig>("set_alert_threshold", { providerId, value }),
+  setChatSync: (providerId: string, enabled: boolean) =>
+    invoke<AppConfig>("set_chat_sync", { providerId, enabled }),
+  listChatBackups: () => invoke<ChatBackupEntry[]>("list_chat_backups"),
+  deleteChatBackup: (provider: string, opId: string) =>
+    invoke<ChatBackupEntry[]>("delete_chat_backup", { provider, opId }),
+  deleteOldChatBackups: (days: number) =>
+    invoke<ChatBackupEntry[]>("delete_old_chat_backups", { days }),
   launchClient: (providerId: string) =>
     invoke<string>("launch_client", { providerId }),
   detectClientAccount: (providerId: string) =>
@@ -81,6 +94,11 @@ export function onCheckinProgress(
 /** 后台自动同步跑完一轮（跨天强制同步 / 到间隔同步） */
 export function onAccountsSynced(handler: () => void): Promise<UnlistenFn> {
   return listen("accounts-synced", () => handler());
+}
+
+/** 用户点了窗口 ×，且关闭行为是「每次询问」 */
+export function onCloseRequested(handler: () => void): Promise<UnlistenFn> {
+  return listen("close-requested", () => handler());
 }
 
 /** 分钟数 -> HH:MM */
@@ -114,4 +132,23 @@ export function fmtDate(ms: number): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
     d.getDate()
   ).padStart(2, "0")}`;
+}
+
+/** 毫秒时间戳 -> YYYY-MM-DD HH:mm */
+export function fmtDateTime(ms: number): string {
+  if (!ms) return "时间未知";
+  const d = new Date(ms);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(
+    d.getHours()
+  )}:${p(d.getMinutes())}`;
+}
+
+/** 字节数 -> 人类可读（KB/MB，1024 进制） */
+export function fmtBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "0 B";
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+  return `${(bytes / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }

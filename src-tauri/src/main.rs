@@ -1,13 +1,13 @@
 // Windows release 构建时不弹控制台窗口
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use agent_checkin_tools_lib::commands;
+use checkinbox_lib::commands;
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
 
     if args.iter().any(|a| a == "--selftest") {
-        agent_checkin_tools_lib::selftest::run();
+        checkinbox_lib::selftest::run();
         return;
     }
 
@@ -52,5 +52,5 @@ fn main() {
         return;
     }
 
-    agent_checkin_tools_lib::run()
+    checkinbox_lib::run()
 }

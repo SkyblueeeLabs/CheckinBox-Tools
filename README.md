@@ -36,7 +36,7 @@
 |---|---|---|---|---|---|
 | **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取，连签有额外加成 | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 浏览器设备授权 |
-| **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | — | 本机导入 / **Cockpit Tools 账号库**（多账号） |
+| **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / **Cockpit Tools 账号库**（多账号） |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（只有注册奖励） | ✅ | ✅ | 本机导入 |
 
 > 上游接口都是**非公开的**，随时可能变。**核心原则：失败就如实报错**——本工具宁可显示
@@ -55,6 +55,46 @@
 - **切换客户端账号**：一条龙——自动关闭客户端 → 捕获当前登录 → 备份 → 写入目标凭据
   → 以目标账号重启，全程不用你手动退出
 
+### 换号同步聊天记录（WorkBuddy / Qoder）
+
+借鉴 Cockpit Tools 的 `share_sessions_on_switch`：MiniMax 的会话存在**服务端**，
+换号后客户端登录即自动拉取历史；而 WorkBuddy 和 Qoder CN 的会话/聊天记录存在
+**本地**，换号不会跟着账号走。为此两个 agent 面板顶部各有一个
+**「换号同步聊天记录」**开关（默认关，落盘 config.json 重启保持）：
+
+- **勾选**：每次「切换客户端账号」时把会话记录带给目标账号——
+  - WorkBuddy：会话正文按账号 uid 分目录
+    （`%LOCALAPPDATA%\CodeBuddyExtension\Data\<uid>\…\history\`），切换时把来源
+    账号的会话**合并**进目标账号名下（同 id 比 `lastMessageAt` 新者胜，目标已有
+    的不丢），机制与上游 Cockpit 的会话迁移一致；
+  - Qoder CN：聊天库 `main.sqlite` 是本机全局的（表里没有账号字段），切换时把
+    当前聊天库**归档**给原账号、**回填**目标账号的归档；目标没有归档则以空白
+    会话启动。归档存 `%APPDATA%\CheckinBox\chat_history\qoder\<账号id>\`。
+- **不勾选**：换号完全不碰聊天数据（与旧版行为一致）。
+- **与 MiniMax 的关系**：MiniMax 不显示也不需要这个开关——它的同步是客户端
+  自己做的（服务端按账号下发），始终生效、优先于任何本地处理；本开关只管
+  WorkBuddy / Qoder 的本地记录。
+- 安全措施（**每次同步都先备份，宁可不同步也不丢数据**）：
+  - 动手前把涉及的现有文件完整备份到 `chat_history\<平台>\_backups\<操作id>\`
+    （每次一个独立目录，不覆盖旧备份、不自动清理）；
+  - Qoder 的现场聊天库还会归档一份到 `chat_history\qoder\<账号id>\payload\`，
+    同一份历史至少同时存在「当次备份 + 账号归档」两份；
+  - WorkBuddy 只读来源账号，目标账号的会话**只增不删**；替换任何会话/索引前
+    先把原目录/原文件整个移进备份；
+  - sqlite 主库与 `-wal`/`-shm` 成组搬；归档用 staging + rename（旧归档先改名
+    让位再删），回填失败自动把现场移回，进程任何时刻被强杀都留有一份完整数据；
+  - 客户端运行中拒绝执行；同步失败**不阻塞**换号本身，结果如实显示在切换提示里。
+- **出问题怎么恢复**：到 `%APPDATA%\CheckinBox\chat_history\` 下找
+  对应平台的 `_backups\<操作id>\`（时间戳最新的那次），把里面的文件复制回客户端
+  数据目录即可（Qoder 是 `%APPDATA%\com.qodercn.app.stable\`，WorkBuddy 是
+  `%LOCALAPPDATA%\CodeBuddyExtension\Data\`）。操作前请先完全退出客户端。
+- **备份管理**：设置页新增「历史备份」tab，按平台列出每次换号备份的时间、大小、
+  文件数和内容，可逐条删除或按「保留最近 N 天」批量清理（删除不可撤销，均有确认）。
+  账号归档（`<账号id>\payload`）是同步功能的数据源，不在列表里、也不允许删除。
+- 附带把 **WorkBuddy 的客户端换号**补齐了（此前为「—」）：解密 state.vscdb 的
+  safeStorage 登录态 → 以当前文件为模板改写身份与 token → 重新加密写回。首次
+  真机换号时留意一下客户端登录结果（有 `.bak` 备份兜底）。
+
 ### 自动签到
 
 - 每个平台**独立的时间窗**（如 Qoder 是 10:00–11:00，其他默认 06:00–08:00），
@@ -63,6 +103,14 @@
 - 自动同步：按平台各自的间隔刷新积分 / 状态 / 昵称；**跨天强制同步**，"今日已签"
   不会停在昨天的状态
 - 系统托盘常驻：左键显示窗口，右键菜单「立即全部签到 / 退出」
+
+### 关闭窗口 / 后台驻留
+
+- 点右上角 × 默认弹确认框：**最小化到系统托盘**（后台继续签到和同步）或**直接退出**，
+  可勾选「记住我的选择，下次不再询问」
+- 设置页「关闭窗口」随时可改成三选一：每次询问 / 最小化到托盘 / 直接退出；
+  选择落盘 config.json，重启后保持
+- 最小化后仍由托盘常驻：左键恢复窗口，右键「退出」彻底结束程序
 
 ### 积分与趋势
 
@@ -91,20 +139,30 @@ npm install                 # 前端依赖
 npm run tauri:dev           # 开发模式运行
 ```
 
-### 打包独立 exe（免装环境，约 4.3 MB）
+### 打包独立 exe（免装环境，约 5 MB）
 
 ```bash
-npx tauri build --no-bundle
+npx tauri build --no-bundle --features custom-protocol
 ```
 
 产物：`src-tauri/target/release/CheckinBox.exe`。
 
-> ⚠️ 三个坑（都踩过）：
-> 1. 直接 `cargo build --release` **不会**走 Tauri 的前端嵌入流程，产物会加载
->    `devUrl`（localhost）而白屏——必须用 `tauri build`。
-> 2. `npm run tauri build -- --no-bundle` 里的 `--no-bundle` 会被 npm 吃掉，用 `npx`。
-> 3. shell 里找不到 `cargo` 时把 `%USERPROFILE%\.cargo\bin` 加进 PATH；
+> ⚠️ 四个坑（都踩过）：
+> 1. 直接 `cargo build --release` **不会**嵌入前端界面，产物运行时会去连
+>    `devUrl`（http://localhost:5173），窗口显示「localhost 拒绝连接」
+>    （ERR_CONNECTION_REFUSED）错误页——必须用 `tauri build`，或手动加
+>    `--features custom-protocol`。现在 `lib.rs` 有编译期护栏：忘带特性时
+>    release 构建直接编译失败，不会再产出能跑但白屏的 exe。
+> 2. **tauri-cli 2.12+ 不再自动带 `custom-protocol`**（实测 2.12.4：
+>    `npx tauri build --no-bundle` 会直接撞上编译护栏），命令要显式写
+>    `--features custom-protocol`。
+> 3. `npm run tauri build -- --no-bundle` 里的 `--no-bundle` 会被 npm 吃掉，用 `npx`。
+> 4. shell 里找不到 `cargo` 时把 `%USERPROFILE%\.cargo\bin` 加进 PATH；
 >    构建前**关掉正在运行的 CheckinBox**（占用 exe 会静默失败）。
+>    另外关窗口的行为可在设置里配：默认弹确认框（最小化到托盘 / 退出），
+>    也可固定为「最小化到托盘」后台常驻。若进程仍在托盘运行，直接双击新 exe
+>    会因 WebView2 用户数据目录被占用而静默退出（0x800700AA）——先从托盘
+>    右键「退出」再开。
 
 ### 打包安装程序（NSIS / MSI）
 
@@ -126,7 +184,7 @@ npx tauri build
 - 开始菜单创建「CheckinBox」快捷方式；卸载入口在
   **设置 → 应用 → 安装的应用** 和开始菜单里
 - 卸载时会移除程序文件、快捷方式和卸载注册表项；
-  **`%APPDATA%\AgentCheckinTools\` 数据目录会保留**（账号池和签到历史不丢），
+  **`%APPDATA%\CheckinBox\` 数据目录会保留**（账号池和签到历史不丢），
   想彻底清掉手动删除该目录即可
 - 静默安装/卸载：`setup.exe /S`、`uninstall.exe /S`（脚本/批量场景）
 
@@ -149,8 +207,8 @@ npx tauri build
 ### 测试
 
 ```bash
-cd src-tauri && cargo test   # Rust 单测：调度 / Qoder 活动周期 / OSCrypt / 客户端定位
-npm test                     # 前端测试：分组聚合 / 账号卡 / 签到记录
+cd src-tauri && cargo test   # Rust 单测：调度 / Qoder 活动周期 / OSCrypt / 客户端定位 / 聊天同步 / 数据目录迁移
+npm test                     # 前端测试：分组聚合 / 账号卡 / 签到记录 / 设置页 / 备份管理
 ```
 
 ## 用法
@@ -163,6 +221,8 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
 4. **切换客户端账号**：点账号卡里的「切换并打开客户端」，一条龙完成（客户端在运行
    也会被自动关闭再重启）。切走之前，当前登录的账号会被自动捕获进账号池，谁都不丢。
 5. **首页总览**：侧栏顶部「首页」，所有平台的积分和签到状态一屏看全。
+6. **关闭窗口**：首次点 × 会询问「最小化到托盘 / 退出」，可记住选择；
+   之后在设置页「关闭窗口」里修改。托盘常驻时后台照常签到。
 
 ## 实现要点
 
@@ -211,18 +271,20 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
 ## 数据目录
 
 ```
-%APPDATA%\AgentCheckinTools\
-  ├── config.json              应用配置（各平台调度/间隔/阈值/侧栏顺序）
+%APPDATA%\CheckinBox\
+  ├── config.json              应用配置（各平台调度/间隔/阈值/侧栏顺序/聊天同步开关/关闭行为）
   ├── accounts.json            账号池（凭据 DPAPI 加密后 base64）
   ├── scheduler_state.json     当日调度计划（每账号随机分钟偏移 + 今日已处理标记）
   ├── auth_pending.json        未完成的浏览器授权会话（重启后恢复轮询）
   ├── quota_history.jsonl      积分快照（趋势图数据源，最多 4000 条）
+  ├── chat_history\            换号同步的聊天记录归档（WorkBuddy 合并备份 / Qoder 每账号一份聊天库）
   └── logs\
       └── checkin-2026-10.jsonl  签到流水，按月分文件
 ```
 
-> ⚠️ 目录名仍是 `AgentCheckinTools`（旧的内部名），**不是** `CheckinBox`——改名会让
-> 已有账号池读不到。迁移方案见 `docs/PROJECT-STATUS.md`。
+> 旧版本的数据目录叫 `%APPDATA%\AgentCheckinTools\`。新版首次启动时会把它**整目录复制**
+> 到 `%APPDATA%\CheckinBox\`（新目录已存在则不动，绝不覆盖），旧目录原样保留作备份；
+> 确认新目录数据正常后可手动删除旧目录。
 
 ## 项目结构
 
@@ -230,7 +292,8 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
 src/                        React 前端
   App.tsx                   全局状态 + 命令调用 + 轮询
   components/               DashboardPanel / Sidebar / AgentGroupPanel / AccountCard
-                            QuotaCard / TrendLine / LogPanel / SettingsPanel
+                            QuotaCard / TrendLine / LogPanel / SettingsPanel / BackupPanel
+                            CloseConfirmDialog
   lib/api.ts                invoke 封装 + 事件订阅
   lib/groups.ts             overview → 分组（多账号排序）
   lib/mask.ts               账号 id 打码（卡片与记录共用）
@@ -247,7 +310,8 @@ src-tauri/src/
 │   ├── quota_history.rs    积分快照
 │   ├── paths.rs            数据目录布局 + 原子写
 │   ├── launcher.rs         客户端 exe 动态定位 + 进程检测 + 关闭/启动
-│   ├── client_switch.rs    改写客户端登录态实现换号（三平台）
+│   ├── client_switch.rs    改写客户端登录态实现换号（四平台）
+│   ├── chat_sync.rs        换号同步聊天记录（WorkBuddy 合并 / Qoder 归档回填 + 备份管理）
 │   └── tz.rs               Windows 时区名 → IANA
 ├── providers/              minimax.rs / qoder.rs / miaoshou.rs / workbuddy.rs
 ├── commands.rs             Tauri 命令层 + 调度器后台循环

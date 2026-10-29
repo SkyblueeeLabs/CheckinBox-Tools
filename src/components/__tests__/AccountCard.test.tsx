@@ -23,6 +23,10 @@ function view(over: Partial<AccountView> = {}): AccountView {
 
 const noop = vi.fn();
 
+/** 凭据失效（HTTP 401）的典型文案，来自 MiniMax provider */
+const ERR =
+  "凭据已失效（HTTP 401）：客户端当前登录的不是这个账号。在客户端登录此账号后重新导入，或用「切换客户端账号」切过去";
+
 function renderCard(over: Partial<AccountView> = {}, switchable = true) {
   return render(
     <AccountCard
@@ -116,5 +120,27 @@ describe("AccountCard（小卡片 + 点击展开）", () => {
     expect(screen.getByText("正在读取…")).toBeInTheDocument();
     expand();
     expect(screen.getByText("已处理")).toBeDisabled();
+  });
+
+  it("凭据失效时收起态显示红色徽标和异常摘要", () => {
+    renderCard({ error: ERR });
+    expect(screen.getByText("读取失败")).toBeInTheDocument();
+    expect(screen.getByText("状态读取失败，点「重试」或重新导入")).toBeInTheDocument();
+    expect(document.querySelector(".acct-card.error")).toBeInTheDocument();
+  });
+
+  it("同一个 401 错误只显示一次（积分和状态不重复），展开后按钮变为可用的「重试」", () => {
+    renderCard({ error: ERR, quotaError: ERR });
+    expand();
+    expect(screen.getAllByText(ERR)).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "重试" })).toBeEnabled();
+  });
+
+  it("积分和状态报不同错误时，两条都显示", () => {
+    const quotaErr = "积分接口返回 HTTP 500";
+    renderCard({ error: ERR, quotaError: quotaErr });
+    expand();
+    expect(screen.getByText(ERR)).toBeInTheDocument();
+    expect(screen.getByText(quotaErr)).toBeInTheDocument();
   });
 });

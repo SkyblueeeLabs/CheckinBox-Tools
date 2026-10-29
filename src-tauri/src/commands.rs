@@ -1,12 +1,12 @@
 //! Tauri 命令层：UI 与后端之间的唯一入口。
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::{Arc, Mutex};
 
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, State};
 
-use crate::core::config::AppConfig;
+use crate::core::config::{AppConfig, CloseAction};
 use crate::core::logging::{self, LogEntry};
 use crate::core::provider::{Account, CheckinStatus, ClaimState, Provider, Quota};
 use crate::core::quota_history;
@@ -16,7 +16,9 @@ use crate::providers::qoder::AuthSession;
 
 /// 全局应用状态。
 pub struct AppState {
-    pub store: Mutex<AccountStore>,
+    /// 账号池。Arc 包一层：providers 层 401 抢救路径的落盘钩子（POOL 全局）
+    /// 要和这里持有同一份实例
+    pub store: Arc<Mutex<AccountStore>>,
     pub config: Mutex<AppConfig>,
     pub scheduler: Mutex<SchedulerState>,
     pub auth_sessions: Mutex<BTreeMap<String, AuthSession>>,
@@ -26,6 +28,10 @@ pub struct AppState {
     pub minimax: Arc<crate::providers::minimax::MiniMaxProvider>,
     pub workbuddy: Arc<crate::providers::workbuddy::WorkBuddyProvider>,
 }
+
+/// 账号池的全局句柄。providers 层的 401 抢救路径要读写池子，又不能反向依赖
+/// commands 层（会循环引用），所以启动时把 Arc 挂到这里供钩子使用。
+static POOL: std::sync::OnceLock<Arc<Mutex<AccountStore>>> = std::sync::OnceLock::new();
 
 impl AppState {
     pub fn new() -> Self {
@@ -42,8 +48,12 @@ impl AppState {
         // 旧版本把 MiniMax 登录态记录键的 hash 当账号 id（设备级，换号不变），
         // 会造成「导入新号覆盖旧号」。启动时把池里的旧时代条目归位一次（幂等）。
         crate::providers::minimax::migrate_device_key_ids(&mut store);
+        let store = Arc::new(Mutex::new(store));
+        // 401 抢救路径的凭据读写钩子（见 providers/minimax.rs::set_cred_hooks）
+        crate::providers::minimax::set_cred_hooks(minimax_persist_hook, minimax_fetch_hook);
+        let _ = POOL.set(store.clone());
         Self {
-            store: Mutex::new(store),
+            store,
             config: Mutex::new(AppConfig::load().unwrap_or_default()),
             scheduler: Mutex::new(SchedulerState::load().unwrap_or_default()),
             auth_sessions: Mutex::new(load_pending_auth()),
@@ -57,6 +67,26 @@ impl AppState {
     fn provider(&self, id: &str) -> Option<Arc<dyn Provider>> {
         self.providers.iter().find(|p| p.id() == id).cloned()
     }
+}
+
+/// 401 抢救刷新后的落盘钩子（providers/minimax.rs 经 set_cred_hooks 调进来）：
+/// 只有池里已存在该账号时才回写，绝不凭空造条目。
+fn minimax_persist_hook(provider_id: &str, account_id: &str, cred: &serde_json::Value) {
+    let Some(pool) = POOL.get() else { return };
+    let mut store = pool.lock().unwrap();
+    if let Some(account) = store
+        .list_of(provider_id)
+        .into_iter()
+        .find(|a| a.id == account_id)
+    {
+        let _ = store.upsert(account, cred);
+    }
+}
+
+/// 401 抢救时先看一眼池里有没有别的任务刚刷新出的新凭据。
+fn minimax_fetch_hook(provider_id: &str, account_id: &str) -> Option<serde_json::Value> {
+    let pool = POOL.get()?;
+    pool.lock().unwrap().credential(provider_id, account_id).ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -182,6 +212,10 @@ pub struct AgentScheduleView {
     pub client_account: Option<ClientAccountView>,
     /// 能不能靠「写凭据文件」给这个客户端换账号
     pub switchable: bool,
+    /// 换号时是否同步客户端本地聊天记录（WorkBuddy / Qoder 有此开关）
+    pub chat_sync_enabled: bool,
+    /// 这个平台的客户端是否支持聊天记录同步（决定开关显不显示）
+    pub chat_sync_supported: bool,
 }
 
 /// 客户端当前登录的账号。
@@ -287,9 +321,12 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         );
     }
 
-    // 网络部分并发化：每个账号一个任务（凭据保鲜 + 昵称 + 状态 + 积分同时进行），
+    // 网络部分并发化：每个账号一个任务（昵称 + 状态 + 积分同时进行），
     // 7 个账号 14 次串行请求（3-4 秒）变成「最慢的一个账号」的时间（~400ms）。
     // 单个账号失败不影响其他账号。
+    //
+    // 凭据保鲜（MiniMax 刷新）**不放进任务**：它要读写账号池，必须在主循环里做，
+    // 这样才能「加锁 → 重读池 → 刷新 → 落盘 → 解锁」，让并发调用方拿到新 RT。
     struct Fetched {
         account: Account,
         display_label: Option<String>,
@@ -308,10 +345,10 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             // 单个账号凭据损坏不应让整个界面空白：跳过它，其余照常展示
             Err(_) => continue,
         };
-        fetch_tasks.push(tokio::spawn(async move {
-            // 多账号状态保存：当前登录的捕获最新 token，非当前登录的临过期自动刷新
-            let cred = ensure_fresh_cred_minimax_only(&account, &cred).await;
+        // 当前登录的捕获客户端最新 token；非当前登录的临过期自动刷新（内部落盘）
+        let cred = ensure_fresh_cred(&state, &account, &cred).await;
 
+        fetch_tasks.push(tokio::spawn(async move {
             // 兜底 label（`Qoder 01a1348c-3fc` 这种 id 前缀）才去换真实昵称，
             // 避免每 45 秒给每个账号多打一次资料接口。换到就落盘，之后不用再查。
             let mut display_label: Option<String> = None;
@@ -494,6 +531,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 // 客户端当前登录的账号（只读，读不到就是 None）
                 client_account: client_login.get(provider.id()).cloned().flatten(),
                 switchable: crate::core::client_switch::is_switchable(provider.id()),
+                chat_sync_enabled: cfg.chat_sync_enabled,
+                chat_sync_supported: crate::core::chat_sync::supports(provider.id()),
             },
         );
     }
@@ -545,7 +584,7 @@ pub async fn checkin_account(
     let cred = ensure_fresh_cred(&state, &account, &cred).await;
 
     let result = run_checkin(provider.as_ref(), &account, &cred).await;
-    record_result(&app, &account, &result, true);
+    record_result(&app, &account, &result);
 
     // 手动执行后清掉「今日已签」标记，交给调度器重新判定状态。
     if result.status != "failed" {
@@ -581,14 +620,14 @@ pub async fn checkin_all_inner(app: AppHandle, state: &AppState) -> Vec<AccountR
                     points: 0,
                     message: e.to_string(),
                 };
-                record_result(&app, &account, &result, true);
+                record_result(&app, &account, &result);
                 out.push(result);
                 continue;
             }
         };
         let cred = ensure_fresh_cred(state, &account, &cred).await;
         let result = run_checkin(provider.as_ref(), &account, &cred).await;
-        record_result(&app, &account, &result, true);
+        record_result(&app, &account, &result);
         out.push(result);
     }
     out
@@ -877,6 +916,46 @@ pub async fn set_config(
     Ok(guard.clone())
 }
 
+/// 设置点击窗口 × 时的行为（设置页用）。
+#[tauri::command]
+pub async fn set_close_action(
+    state: State<'_, AppState>,
+    action: CloseAction,
+) -> Result<AppConfig, String> {
+    let mut guard = state.config.lock().unwrap();
+    guard.close_action = action;
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 关闭确认框的选择结果。
+///
+/// `remember` 为 true 时把这次选择写进配置（下次不再询问）；
+/// 否则只执行这一次，配置仍是「每次询问」。
+#[tauri::command]
+pub async fn resolve_close_action(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    action: CloseAction,
+    remember: bool,
+) -> Result<(), String> {
+    if remember {
+        let mut guard = state.config.lock().unwrap();
+        guard.close_action = action;
+        guard.save().map_err(|e| e.to_string())?;
+    }
+    match action {
+        CloseAction::Tray => {
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.hide();
+            }
+        }
+        CloseAction::Exit => app.exit(0),
+        CloseAction::Ask => {}
+    }
+    Ok(())
+}
+
 /// 设置某个 agent 自己的自动签到配置（开关 + 时间窗）。
 #[tauri::command]
 pub async fn set_agent_schedule(
@@ -910,6 +989,55 @@ pub async fn set_alert_threshold(
     guard.set_alert_threshold(&provider_id, value);
     guard.save().map_err(|e| e.to_string())?;
     Ok(guard.clone())
+}
+
+/// 设置某个 agent 的「同步聊天记录」开关（换号时把本地会话带给目标账号）。
+///
+/// 只对聊天记录存本地的客户端（WorkBuddy / Qoder）有意义；开关状态落盘
+/// config.json，重启后保持。
+#[tauri::command]
+pub async fn set_chat_sync(
+    state: State<'_, AppState>,
+    provider_id: String,
+    enabled: bool,
+) -> Result<AppConfig, String> {
+    if !crate::core::chat_sync::supports(&provider_id) {
+        return Err(format!("{provider_id} 不支持聊天记录同步（MiniMax 由客户端自动同步）"));
+    }
+    let mut guard = state.config.lock().unwrap();
+    let mut cfg = guard.scheduler.agent(&provider_id);
+    cfg.chat_sync_enabled = enabled;
+    guard.scheduler.set_agent(&provider_id, cfg);
+    guard.save().map_err(|e| e.to_string())?;
+    Ok(guard.clone())
+}
+
+/// 列出换号聊天记录的备份（设置页「历史备份」）。
+#[tauri::command]
+pub async fn list_chat_backups() -> Result<Vec<crate::core::chat_sync::ChatBackupEntry>, String> {
+    Ok(crate::core::chat_sync::list_backups())
+}
+
+/// 删除指定的一条备份，返回删除后的最新列表。
+#[tauri::command]
+pub async fn delete_chat_backup(
+    provider: String,
+    op_id: String,
+) -> Result<Vec<crate::core::chat_sync::ChatBackupEntry>, String> {
+    crate::core::chat_sync::delete_backup(&provider, &op_id).map_err(|e| e.to_string())?;
+    Ok(crate::core::chat_sync::list_backups())
+}
+
+/// 批量清理早于 N 天的备份，返回删除后的最新列表。
+#[tauri::command]
+pub async fn delete_old_chat_backups(
+    days: u32,
+) -> Result<Vec<crate::core::chat_sync::ChatBackupEntry>, String> {
+    if days == 0 {
+        return Err("保留天数至少为 1 天".into());
+    }
+    crate::core::chat_sync::delete_backups_older_than(days).map_err(|e| e.to_string())?;
+    Ok(crate::core::chat_sync::list_backups())
 }
 
 /// 切换某个 agent 的自动签到总闸（应急用）。
@@ -1022,12 +1150,44 @@ pub async fn detect_client_account(
 ///
 /// 「切换客户端账号」切走前调用：客户端同一时刻只能登一个号，切走后它的
 /// 凭据就不再更新 —— 先捕获，谁都不丢，且池里留的是客户端续期过的最新凭据。
-/// MiniMax / 妙手走 `discover`（读明文登录态）；Qoder 解密 auth.v1.dat。
+/// MiniMax / 妙手走 `discover`（读明文登录态）；Qoder 解密 auth.v1.dat；
+/// WorkBuddy 直接解密 state.vscdb 的 secret 键（`discover` 优先读 Cockpit
+/// 账号库，可能不含客户端现场登录的账号，所以这里单独捕获）。
 async fn capture_client_login(state: &AppState, provider_id: &str) {
     if provider_id == "qoder" {
         if let Some((account, cred)) = crate::core::client_switch::qoder_client_login() {
             let mut store = state.store.lock().unwrap();
             let _ = store.upsert(account, &cred);
+        }
+        return;
+    }
+    if provider_id == "workbuddy" {
+        if let Some(secret) = crate::providers::workbuddy::read_local_secret() {
+            let uid = secret["account"]["uid"].as_str().unwrap_or("");
+            if !uid.is_empty() {
+                let nickname = secret["account"]["nickname"].as_str().unwrap_or("");
+                let account = crate::core::provider::Account {
+                    id: uid.to_string(),
+                    provider: "workbuddy".to_string(),
+                    label: if nickname.is_empty() {
+                        format!("WorkBuddy {}", &uid[..uid.len().min(8)])
+                    } else {
+                        nickname.to_string()
+                    },
+                    created_at: chrono::Utc::now().timestamp(),
+                    last_used: None,
+                    origin: "CodeBuddy 客户端登录态（切换时捕获）".to_string(),
+                };
+                let cred = serde_json::json!({
+                    "access_token": secret["token"].as_str().unwrap_or(""),
+                    "refresh_token": secret["refreshToken"].as_str().unwrap_or(""),
+                    "expires_at": secret["expiresAt"].as_i64().unwrap_or(0),
+                    "uid": uid,
+                    "domain": secret["domain"].as_str().unwrap_or(""),
+                });
+                let mut store = state.store.lock().unwrap();
+                let _ = store.upsert(account, &cred);
+            }
         }
         return;
     }
@@ -1074,9 +1234,20 @@ pub async fn switch_client_account(
     // 池里留下的还是客户端续期过的最新凭据（借鉴 Cockpit）
     capture_client_login(&state, &provider_id).await;
 
-    let outcome =
-        crate::core::client_switch::switch(&provider_id, &cred, &account_id, &account.label)
-            .map_err(|e| e.to_string())?;
+    // 「同步聊天记录」开关：开着且平台支持时，换号会把本地会话记录带给目标账号
+    let chat_sync_enabled = {
+        let config = state.config.lock().unwrap();
+        config.scheduler.agent(&provider_id).chat_sync_enabled
+    };
+
+    let outcome = crate::core::client_switch::switch(
+        &provider_id,
+        &cred,
+        &account_id,
+        &account.label,
+        chat_sync_enabled,
+    )
+    .map_err(|e| e.to_string())?;
 
     // 客户端已经登录这个账号了，工具里的「当前账号」跟着同步
     {
@@ -1120,42 +1291,83 @@ pub async fn open_external(url: String) -> Result<(), String> {
 ///   MiniMax 的 RT 每次刷新都会轮换，新 RT 回写池 —— 所以池里的账号即使
 ///   长期不是当前登录，也能一直活着、正常签到。
 ///
+/// MiniMax 的 RT「用一次就作废」，所以这里有三道防线（对齐官方 MiniMax CLI 的
+/// single-flight 与 Cockpit Tools 的 `prepare_account_tokens_before_exchange`）：
+///   1. **按账号加锁**：同一账号同时只有一个刷新在跑，不同账号互不阻塞；
+///   2. **拿到锁后重读账号池**：别的任务可能刚刷新过，直接采纳它的新 RT，
+///      不拿旧 RT 去撞 `invalid_grant`；
+///   3. **先落盘再解锁**：后面的调用方重读到的就是新 RT，不会踩空。
+///
 /// 刷新失败（RT 被吊销等）返回原凭据，调用方按普通错误如实展示。
 async fn ensure_fresh_cred(state: &AppState, account: &Account, cred: &serde_json::Value) -> serde_json::Value {
-    let fresh = ensure_fresh_cred_minimax_only(account, cred).await;
-    if fresh != *cred {
-        let mut store = state.store.lock().unwrap();
-        let _ = store.upsert(account.clone(), &fresh);
-    }
-    fresh
-}
-
-/// `ensure_fresh_cred` 的纯凭据层：不碰 AppState（可在并发任务里用）。
-/// 返回值与 `cred` 相同表示无需更新。刷新仅在 MiniMax 需要时执行；
-/// 其他平台的保鲜由各自的自动同步覆盖（它们的 token 有效期长）。
-async fn ensure_fresh_cred_minimax_only(account: &Account, cred: &serde_json::Value) -> serde_json::Value {
     if account.provider != "minimax" {
+        // 其他平台的 token 有效期是「天」级，池里的快照直接够用
         return cred.clone();
     }
 
-    // 当前登录：捕获客户端里的最新凭据（只在变化时写盘由调用方负责）
+    let lock = refresh_lock_for(account).await;
+    let _guard = lock.lock().await;
+
+    // 重读账号池：可能刚被别的任务刷新过（它的落盘在释放锁之前完成）
+    let latest = state
+        .store
+        .lock()
+        .unwrap()
+        .credential(&account.provider, &account.id)
+        .unwrap_or_else(|_| cred.clone());
+    if latest != *cred {
+        // 已经有人更新过了（刷新或客户端捕获），直接采纳
+        return latest;
+    }
+
+    // 当前登录：捕获客户端里的最新凭据（不动它的 RT，避免把在线登录顶掉）
     if let Some(fresh) = crate::providers::minimax::capture_current_cred(account).await {
+        if fresh != latest {
+            persist_cred(state, account, &fresh);
+        }
         return fresh;
     }
 
     // 非当前登录：还有 5 分钟以上有效期就不动，临过期才刷新
-    let now_ms = chrono::Utc::now().timestamp_millis();
-    let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
-    if expires > now_ms + 5 * 60_000 {
-        return cred.clone();
+    if !needs_refresh(&latest, chrono::Utc::now().timestamp_millis()) {
+        return latest;
     }
 
     let provider = crate::providers::minimax::MiniMaxProvider::new();
-    match provider.refresh(account, cred).await {
-        Ok(Some(fresh)) => fresh,
+    match provider.refresh(account, &latest).await {
+        Ok(Some(fresh)) => {
+            persist_cred(state, account, &fresh);
+            fresh
+        }
         // 刷新失败（RT 吊销等）返回原凭据，调用方按普通错误如实展示
-        _ => cred.clone(),
+        _ => latest,
     }
+}
+
+/// 临过期（剩余不足 5 分钟）才需要刷新；缺 `expires_at_ms` 字段时一律刷新。
+fn needs_refresh(cred: &serde_json::Value, now_ms: i64) -> bool {
+    let expires = cred.get("expires_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+    expires <= now_ms + 5 * 60_000
+}
+
+fn persist_cred(state: &AppState, account: &Account, cred: &serde_json::Value) {
+    let mut store = state.store.lock().unwrap();
+    let _ = store.upsert(account.clone(), cred);
+}
+
+/// 按账号的刷新锁：MiniMax 的 RT 用一次就作废，并发刷新会让其中一个必然失败
+/// （服务端可能因此吊销整个 token family）。同一账号串行、不同账号并行。
+static REFRESH_LOCKS: std::sync::OnceLock<
+    tokio::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
+> = std::sync::OnceLock::new();
+
+async fn refresh_lock_for(account: &Account) -> Arc<tokio::sync::Mutex<()>> {
+    let map = REFRESH_LOCKS.get_or_init(|| tokio::sync::Mutex::new(HashMap::new()));
+    map.lock()
+        .await
+        .entry(account.id.clone())
+        .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(())))
+        .clone()
 }
 
 /// 核心签到流程：查状态 → 需要则领取。
@@ -1230,10 +1442,18 @@ async fn run_checkin(
 
 /// 落一条签到流水 + 广播进度给前端。
 ///
-/// `record == false` 时两者都不做 —— 调度器对「上游还没开窗」的重试用它，
-/// 否则一个时间窗内会刷出几十条没有信息量的记录。
-fn record_result(app: &AppHandle, account: &Account, result: &AccountResult, record: bool) {
-    if record {
+/// 落流水规则（2026-10-26 按需求调整，10-27 补失败节流）：
+/// * `success` —— 当天每账号只保留一条（`logging::has_success_today` 去重）；
+/// * `failed` —— 可重复，但 10 分钟节流：调度器在窗内每 ~30 秒重试一次
+///   失败账号，不节流的话一个死账号一小时能刷出 240 条相同失败；
+/// * `already` / `skipped` —— 不落：「今日已签」没有信息量只会刷屏，
+///   「未开窗跳过」会在时间窗内反复出现。
+fn record_result(app: &AppHandle, account: &Account, result: &AccountResult) {
+    if should_record_status(
+        &result.status,
+        logging::has_success_today(&account.provider, &account.id),
+        logging::has_recent_failure(&account.provider, &account.id, 10),
+    ) {
         let _ = logging::append(&LogEntry::new(
             &account.provider,
             &account.id,
@@ -1244,6 +1464,15 @@ fn record_result(app: &AppHandle, account: &Account, result: &AccountResult, rec
         ));
     }
     let _ = app.emit("checkin-progress", result);
+}
+
+/// 落流水判定：成功当天去重、失败 10 分钟节流、已签/跳过不落。
+fn should_record_status(status: &str, has_success_today: bool, recent_failure: bool) -> bool {
+    match status {
+        "success" => !has_success_today,
+        "failed" => !recent_failure,
+        _ => false,
+    }
 }
 
 /// 同步一个账号：刷新签到状态 + 积分（落快照）+ 账号资料（补真实昵称）。
@@ -1411,10 +1640,10 @@ pub async fn scheduler_loop(app: AppHandle) {
                 let result = run_checkin(provider.as_ref(), &account, &cred).await;
 
                 // 「skipped」= 上游今天还没开窗。既**不能标记成已处理**
-                //（否则一整天都不再重试），也不值得落流水 / 广播 ——
+                //（否则一整天都不再重试），也不值得落流水 ——
                 // 否则一个时间窗内会刷出几十条没有信息量的记录。
                 let opened = result.status == "success" || result.status == "already";
-                record_result(&app, &account, &result, opened);
+                record_result(&app, &account, &result);
 
                 let mut sched = state.scheduler.lock().unwrap();
                 if opened {
@@ -1536,13 +1765,24 @@ pub fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<(), Stri
         .ok_or_else(|| format!("账号不存在：{account_id}"))?;
     let cred = store.credential(provider_id, account_id).map_err(|e| e.to_string())?;
 
-    let out = crate::core::client_switch::switch(provider_id, &cred, account_id, &account.label)
-        .map_err(|e| e.to_string())?;
+    // CLI 同样尊重配置里的「同步聊天记录」开关
+    let chat_sync_enabled = state.config.lock().unwrap().scheduler.agent(provider_id).chat_sync_enabled;
+    let out = crate::core::client_switch::switch(
+        provider_id,
+        &cred,
+        account_id,
+        &account.label,
+        chat_sync_enabled,
+    )
+    .map_err(|e| e.to_string())?;
 
     println!("已把 {} 的客户端账号切换成 {}", provider_id, account.label);
     println!("  写入凭据: {}", out.target_file);
     if let Some(bak) = out.backup {
         println!("  原登录态备份: {bak}");
+    }
+    if let Some(chat) = out.chat_sync {
+        println!("  聊天记录: {}", chat.detail);
     }
     println!("  客户端: {}", out.client_exe);
     Ok(())
@@ -1554,14 +1794,33 @@ pub fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<(), Stri
 /// 应用启动时会读回来接着轮询（和界面里「等待授权」那条提示是同一条路径）。
 /// 命令行进程在后台容易被收掉，让它长时间轮询不可靠。
 pub fn cli_device_auth(provider_id: &str) -> Result<(), String> {
-    if provider_id != "qoder" {
-        return Err(format!("不支持设备授权：{provider_id}"));
-    }
     let state = AppState::new();
-    let session = state
-        .qoder
-        .begin_authorization(provider_id)
-        .map_err(|e| e.to_string())?;
+    // MiniMax 走 OAuth 设备授权（异步）；Qoder 走自家登录页（同步）。
+    // 之前 CLI 只放行 qoder —— 恢复「RT 已被吊销」的账号时缺一条不依赖客户端
+    // 的路（2026-10-27 补上，与 begin_device_auth 命令的字段映射保持一致）。
+    let session = match provider_id {
+        "minimax" => {
+            let d = tauri::async_runtime::block_on(state.minimax.begin_device_authorization())
+                .map_err(|e| e.to_string())?;
+            AuthSession {
+                id: uuid::Uuid::new_v4().to_string(),
+                provider: provider_id.to_string(),
+                auth_url: d.auth_url,
+                verifier: d.code_verifier,
+                nonce: d.poll_code,
+                machine_id: String::new(),
+                created_at: chrono::Utc::now().timestamp(),
+                extra: serde_json::json!({
+                    "poll_param": d.poll_param, "interval": d.interval_secs
+                }),
+            }
+        }
+        "qoder" => state
+            .qoder
+            .begin_authorization(provider_id)
+            .map_err(|e| e.to_string())?,
+        other => return Err(format!("不支持设备授权：{other}")),
+    };
 
     let mut sessions = load_pending_auth();
     sessions.insert(session.id.clone(), session.clone());
@@ -1569,9 +1828,104 @@ pub fn cli_device_auth(provider_id: &str) -> Result<(), String> {
 
     println!("授权地址：{}", session.auth_url);
     println!(
-        "已登记为待完成会话（provider={}）。启动应用后会显示「等待授权」提示并自动轮询，"
-        , session.provider
+        "已登记为待完成会话（provider={}）。启动应用后会显示「等待授权」提示并自动轮询，",
+        session.provider
     );
     println!("在浏览器里打开上面的地址，用要登录的账号点「确认授权」即可。");
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// 测试
+// ---------------------------------------------------------------------------
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn account(id: &str) -> Account {
+        Account {
+            id: id.to_string(),
+            provider: "minimax".to_string(),
+            label: id.to_string(),
+            created_at: 0,
+            last_used: None,
+            origin: "test".to_string(),
+        }
+    }
+
+    #[test]
+    fn 剩余时间充足就不刷新_临过期才刷() {
+        let now = 1_000_000i64;
+        // 还剩 1 小时 → 不刷
+        assert!(!needs_refresh(&json!({ "expires_at_ms": now + 3_600_000 }), now));
+        // 还剩 4 分钟（< 5 分钟缓冲）→ 刷
+        assert!(needs_refresh(&json!({ "expires_at_ms": now + 4 * 60_000 }), now));
+        // 正好 5 分钟 → 刷
+        assert!(needs_refresh(&json!({ "expires_at_ms": now + 5 * 60_000 }), now));
+        // 已过期 → 刷
+        assert!(needs_refresh(&json!({ "expires_at_ms": now - 1_000 }), now));
+    }
+
+    #[test]
+    fn 凭据里没有过期时间就当已过期处理() {
+        // 老凭据没这个字段时宁可多刷一次，也不要因为"看着没过期"而永远不刷
+        assert!(needs_refresh(&json!({ "access_token": "x" }), 0));
+        assert!(needs_refresh(&serde_json::Value::Null, 0));
+    }
+
+    #[tokio::test]
+    async fn 同一账号共用一把刷新锁_不同账号各一把() {
+        // single-flight 的基础：同一账号的并发刷新必须拿到同一把锁
+        let a1 = refresh_lock_for(&account("a")).await;
+        let a2 = refresh_lock_for(&account("a")).await;
+        assert!(Arc::ptr_eq(&a1, &a2), "同一账号应该复用同一把锁");
+
+        let b = refresh_lock_for(&account("b")).await;
+        assert!(!Arc::ptr_eq(&a1, &b), "不同账号不该共用锁");
+    }
+
+    #[tokio::test]
+    async fn 同一账号的并发刷新会串行_不会同时进临界区() {
+        let lock = refresh_lock_for(&account("race")).await;
+        let entered = Arc::new(std::sync::atomic::AtomicBool::new(false));
+
+        // 先占住锁，第二个任务必须等它释放
+        let first = lock.lock().await;
+        let lock2 = lock.clone();
+        let entered2 = entered.clone();
+        let waiter = tokio::spawn(async move {
+            let _g = lock2.lock().await;
+            entered2.store(true, std::sync::atomic::Ordering::SeqCst);
+        });
+
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+        assert!(
+            !entered.load(std::sync::atomic::Ordering::SeqCst),
+            "锁没释放时不该放第二个进来"
+        );
+
+        drop(first);
+        waiter.await.unwrap();
+        assert!(
+            entered.load(std::sync::atomic::Ordering::SeqCst),
+            "释放锁后第二个任务应该能进来"
+        );
+    }
+
+    #[test]
+    fn 流水规则_成功去重_失败节流_已签跳过不记() {
+        use super::should_record_status as s;
+        // 成功：当天还没有记录 → 记
+        assert!(s("success", false, false));
+        // 成功：当天已经记过 → 去重，不再追加
+        assert!(!s("success", true, false));
+        // 失败：可以记，但 10 分钟内已有失败时节流（调度器 30 秒一试不能刷屏）
+        assert!(s("failed", false, false));
+        assert!(!s("failed", false, true));
+        // 已签 / 跳过：不落流水
+        assert!(!s("already", false, false));
+        assert!(!s("skipped", false, false));
+    }
 }

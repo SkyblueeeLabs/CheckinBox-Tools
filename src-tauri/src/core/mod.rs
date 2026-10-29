@@ -7,6 +7,7 @@
 //!   * `logging`   —— 签到流水
 //!   * `scheduler` —— 时间窗 + 每账号随机分钟偏移的自动调度
 
+pub mod chat_sync;
 pub mod client_switch;
 pub mod config;
 pub mod dpapi;

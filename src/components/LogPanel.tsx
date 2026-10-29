@@ -64,7 +64,7 @@ export default function LogPanel({
   return (
     <section className="logs">
       <div className="logs-head">
-        <button className="logs-title" onClick={onToggle}>
+        <button className="logs-title" onClick={onToggle} aria-expanded={visible}>
           <h3>
             签到记录
             <span className="logs-count">

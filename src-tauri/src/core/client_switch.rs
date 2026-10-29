@@ -15,16 +15,28 @@
 //!     safeStorage 加密（`v10` + AES-256-GCM，密钥在 `Local State` 里由 DPAPI
 //!     保护）。实测同一 Windows 用户可以解出密钥，也就能重新加密写回，
 //!     详见 `core/os_crypt.rs`。
+//!   * WorkBuddy（CodeBuddy）`%APPDATA%\CodeBuddy\User\globalStorage\state.vscdb`
+//!     的 secret 键 —— 同样是 safeStorage 密文，解密后是
+//!     `{account:{uid,nickname,…}, token, refreshToken, …}`，换号 = 用当前文件
+//!     做模板改写后重新加密写回（参考 Cockpit 对 codebuddy_cn 的注入做法）。
 //!
 //! ⚠️ 这会改写客户端的登录凭据。客户端在运行时**先自动关闭再写入**
 //!（`switch` 入口统一处理：优雅关闭 → 超时强制结束 → 写入 → 重启，
 //! 借鉴 Cockpit 的关闭→写入→重启一条龙），全程不需要用户手动退出客户端。
+//!
+//! **聊天记录同步**（`core/chat_sync.rs`，借鉴 Cockpit 的
+//! `share_sessions_on_switch`）：开启开关的 agent（WorkBuddy / Qoder）在
+//! **关客户端之后、写凭据之前**把本地会话记录带给目标账号 —— WorkBuddy 按
+//! uid 合并会话目录，Qoder 整库归档/回填。同步失败不阻塞换号本身，结果
+//! 如实带在 `SwitchOutcome::chat_sync` 里。MiniMax 的会话在服务端自动同步，
+//! 永远不走这条路径。
 
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use serde_json::{json, Map, Value};
 use std::path::PathBuf;
 
+use super::chat_sync::{self, ChatSyncReport};
 use super::os_crypt;
 use crate::core::paths::atomic_write;
 
@@ -46,11 +58,14 @@ pub struct SwitchOutcome {
     pub target_file: String,
     /// 启动的客户端
     pub client_exe: String,
+    /// 聊天记录同步结果（开关没开 = None；同步失败也在里面如实报告）
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub chat_sync: Option<ChatSyncReport>,
 }
 
 /// 这个平台能不能靠「写凭据文件」来切账号。
 pub fn is_switchable(provider: &str) -> bool {
-    matches!(provider, "minimax" | "miaoshou" | "qoder")
+    matches!(provider, "minimax" | "miaoshou" | "qoder" | "workbuddy")
 }
 
 /// 读客户端当前登录的是哪个账号（只读，不改任何东西）。
@@ -59,31 +74,80 @@ pub fn detect(provider: &str) -> Result<Option<DetectedAccount>> {
         "minimax" => detect_minimax(),
         "miaoshou" => detect_miaoshou(),
         "qoder" => Ok(detect_qoder()),
+        "workbuddy" => Ok(detect_workbuddy()),
         _ => Ok(None),
     }
 }
 
 /// 切换客户端登录的账号，然后以新账号启动客户端。
 ///
-/// **关闭 → 写入 → 重启一条龙**（借鉴 Cockpit Tools 的 `launch_on_switch`）：
-/// 客户端在运行时先自动收掉它（优雅关闭，超时强制结束），不再要求用户手动退出。
-/// 客户端退出时会把内存里的登录态写回文件，所以**写凭据之前必须等进程完全退出**，
-/// 否则写入的文件会被它覆盖（这是换号失败最常见的姿势）。
-pub fn switch(provider: &str, cred: &Value, account_id: &str, label: &str) -> Result<SwitchOutcome> {
-    if crate::core::launcher::is_running(provider)
-        && !crate::core::launcher::close_client(provider)
+/// **关闭 → 捕获来源 → 同步聊天记录 → 写入 → 重启一条龙**（借鉴 Cockpit
+/// Tools 的 `launch_on_switch`）：客户端在运行时先自动收掉它（优雅关闭，
+/// 超时强制结束），不再要求用户手动退出。客户端退出时会把内存里的登录态
+/// 写回文件，所以**写凭据之前必须等进程完全退出**，否则写入的文件会被它
+/// 覆盖（这是换号失败最常见的姿势）。
+///
+/// `chat_sync_enabled` 是该 agent 的「同步聊天记录」开关：开着且平台支持时，
+/// 在写凭据**之前**把本地会话记录带给目标账号（来源账号在客户端退出后、
+/// 覆盖凭据前识别）。聊天同步失败**不阻塞**换号本身，结果如实上报。
+pub fn switch(
+    provider: &str,
+    cred: &Value,
+    account_id: &str,
+    label: &str,
+    chat_sync_enabled: bool,
+) -> Result<SwitchOutcome> {
+    if crate::core::launcher::is_running(provider) && !crate::core::launcher::close_client(provider)
     {
         return Err(anyhow!(
             "客户端正在运行且无法自动关闭（可能权限不足）：请手动退出后重试"
         ));
     }
+
+    // 来源账号必须在覆盖凭据**之前**识别（写完凭据文件，detect 读到的就是
+    // 目标账号了）。识别失败 = 聊天记录无法归属，跳过同步（不动数据）。
+    let chat_from = if chat_sync_enabled && chat_sync::supports(provider) {
+        detect(provider).ok().flatten().map(|d| d.account_id)
+    } else {
+        None
+    };
+
+    // 聊天同步放在写凭据之前（与上游 Cockpit 的 prepare_account_switch 同序）；
+    // 失败只记录、不阻塞换号 —— 换号是主功能，聊天同步是增强。
+    let chat_sync_report = match &chat_from {
+        Some(from) => match chat_sync::sync_on_switch(provider, Some(from), account_id) {
+            Ok(report) => Some(report),
+            Err(e) => {
+                let entry = crate::core::logging::LogEntry::new(
+                    provider,
+                    account_id,
+                    label,
+                    "failed",
+                    0,
+                    format!("聊天记录同步失败（不影响换号）：{e}"),
+                );
+                let _ = crate::core::logging::append(&entry);
+                Some(ChatSyncReport {
+                    action: "failed".into(),
+                    detail: format!("聊天记录同步失败（换号本身已完成）：{e}"),
+                    ..Default::default()
+                })
+            }
+        },
+        None => None,
+    };
+
     let outcome = match provider {
         "minimax" => switch_minimax(cred, account_id, label)?,
         "miaoshou" => switch_miaoshou(cred, account_id, label)?,
         "qoder" => switch_qoder(cred, account_id, label)?,
+        "workbuddy" => switch_workbuddy(cred, account_id, label)?,
         other => return Err(anyhow!("{other} 不支持切换客户端账号")),
     };
-    Ok(outcome)
+    Ok(SwitchOutcome {
+        chat_sync: chat_sync_report,
+        ..outcome
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -248,6 +312,7 @@ fn switch_minimax(cred: &Value, _account_id: &str, _label: &str) -> Result<Switc
         backup,
         target_file: path.to_string_lossy().to_string(),
         client_exe: client_exe.to_string_lossy().to_string(),
+        chat_sync: None,
     })
 }
 
@@ -329,6 +394,7 @@ fn switch_miaoshou(cred: &Value, account_id: &str, label: &str) -> Result<Switch
         backup,
         target_file: path.to_string_lossy().to_string(),
         client_exe: client_exe.to_string_lossy().to_string(),
+        chat_sync: None,
     })
 }
 
@@ -540,6 +606,118 @@ fn switch_qoder(cred: &Value, _account_id: &str, label: &str) -> Result<SwitchOu
         backup,
         target_file: auth_file.to_string_lossy().to_string(),
         client_exe: client_exe.to_string_lossy().to_string(),
+        chat_sync: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// WorkBuddy（腾讯 CodeBuddy：state.vscdb 的 safeStorage secret 键）
+// ---------------------------------------------------------------------------
+
+/// WorkBuddy 当前登录的账号：解密 state.vscdb 的 secret 键（只读）。
+fn detect_workbuddy() -> Option<DetectedAccount> {
+    let secret = crate::providers::workbuddy::read_local_secret()?;
+    let uid = secret["account"]["uid"].as_str().filter(|s| !s.is_empty())?;
+    Some(DetectedAccount {
+        account_id: uid.to_string(),
+        label: secret["account"]["nickname"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+    })
+}
+
+/// 备份 sqlite 三件套（主文件 + -wal + -shm）成 `<file>.bak` 系列同名文件。
+///
+/// 与 `backup_file` 的「已有就不覆盖」策略一致：最多留一份我们自己的备份，
+/// 客户端启动后自己也会写 `state.vscdb.backup`，互不干扰。
+fn backup_sqlite(path: &std::path::Path) -> Result<Option<String>> {
+    let mut first = None;
+    for suffix in ["", "-wal", "-shm"] {
+        let mut name = path.as_os_str().to_os_string();
+        name.push(suffix);
+        let src = PathBuf::from(&name);
+        if !src.is_file() {
+            continue;
+        }
+        let mut bak_name = path.as_os_str().to_os_string();
+        bak_name.push(format!("{suffix}.bak"));
+        let bak = PathBuf::from(&bak_name);
+        if !bak.exists() {
+            std::fs::copy(&src, &bak)?;
+        }
+        if first.is_none() {
+            first = Some(bak.to_string_lossy().to_string());
+        }
+    }
+    Ok(first)
+}
+
+fn switch_workbuddy(cred: &Value, _account_id: &str, label: &str) -> Result<SwitchOutcome> {
+    let dir = crate::providers::workbuddy::user_data_dir()
+        .ok_or_else(|| anyhow!("没有找到 CodeBuddy 客户端的数据目录（客户端从未运行过？）"))?;
+    let db_path = dir.join("User").join("globalStorage").join("state.vscdb");
+    if !db_path.is_file() {
+        return Err(anyhow!("没找到 CodeBuddy 的登录态库 state.vscdb"));
+    }
+    let key = os_crypt::read_key(&dir.join("Local State"))?;
+
+    // 以客户端当前的 secret 原文为模板（保留 account.uin 等我们没接管的字段），
+    // 只替换身份与 token。客户端从没登录过就没有模板，如实报错。
+    let current = crate::providers::workbuddy::read_local_secret()
+        .ok_or_else(|| anyhow!("读取 CodeBuddy 当前登录态失败：请先在客户端登录任意账号一次，再使用切换"))?;
+
+    let uid = cred
+        .get("uid")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("账号凭据里没有 uid，无法写入 CodeBuddy 登录态"))?;
+
+    let mut secret = current;
+    let account = secret["account"].as_object().cloned().unwrap_or_default();
+    let mut account = account;
+    account.insert("uid".into(), json!(uid));
+    account.insert("nickname".into(), json!(label));
+    secret["account"] = Value::Object(account);
+    secret["token"] = json!(cred["access_token"].as_str().unwrap_or(""));
+    secret["refreshToken"] = json!(cred["refresh_token"].as_str().unwrap_or(""));
+    if let Some(ms) = cred.get("expires_at").and_then(|v| v.as_i64()) {
+        secret["expiresAt"] = json!(ms);
+    }
+    if let Some(domain) = cred.get("domain").and_then(|v| v.as_str()).filter(|s| !s.is_empty()) {
+        secret["domain"] = json!(domain);
+    }
+
+    // safeStorage 重加密，写回 {type:"Buffer",data:[…]} 形态（与客户端自写格式一致）
+    let plain = serde_json::to_vec(&secret)?;
+    let blob = os_crypt::encrypt(&key, &plain)?;
+    let wrapper = json!({ "type": "Buffer", "data": blob });
+
+    let backup = backup_sqlite(&db_path)?;
+    let conn = rusqlite::Connection::open(&db_path)
+        .map_err(|e| anyhow!("打开 state.vscdb 失败：{e}"))?;
+    conn.execute(
+        "UPDATE ItemTable SET value = ?1 WHERE key = ?2",
+        rusqlite::params![
+            serde_json::to_string(&wrapper)?,
+            crate::providers::workbuddy::secret_key()
+        ],
+    )
+    .map_err(|e| anyhow!("写回登录态失败：{e}"))?;
+    let changed = conn.changes();
+    drop(conn);
+    if changed == 0 {
+        return Err(anyhow!(
+            "state.vscdb 里没有 CodeBuddy 的登录态键（客户端版本可能已变更键名），未做任何修改"
+        ));
+    }
+
+    let client_exe = crate::core::launcher::launch("workbuddy")?;
+    Ok(SwitchOutcome {
+        backup,
+        target_file: db_path.to_string_lossy().to_string(),
+        client_exe: client_exe.to_string_lossy().to_string(),
+        chat_sync: None,
     })
 }
 
