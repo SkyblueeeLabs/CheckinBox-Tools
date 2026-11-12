@@ -1,5 +1,7 @@
 import type { AgentGroup } from "../lib/types";
-import { fmtPoints, formatMinute, parseMinute } from "../lib/api";
+import { fmtQuotaAmount, quotaLabels } from "../lib/api";
+import { WELFARE_META } from "../lib/welfare";
+import TimeInput from "./TimeInput";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import AccountCard from "./AccountCard";
 
@@ -23,7 +25,7 @@ interface Props {
   /** 把客户端切换成这个账号（改写客户端凭据文件） */
   onSwitchClient: (providerId: string, accountId: string) => void;
   onAlertChange: (providerId: string, value: number) => void;
-  /** 改「换号同步聊天记录」开关（仅 WorkBuddy / Qoder 显示） */
+  /** 改「换号同步聊天记录」开关（仅 WorkBuddy 显示） */
   onChatSyncChange: (providerId: string, enabled: boolean) => void;
 }
 
@@ -39,16 +41,14 @@ const RESET_HINT: Record<string, string> = {
  * 「换号同步聊天记录」的说明（借鉴 Cockpit 的 share_sessions_on_switch）。
  * 两个客户端的存储形态不同，措辞分开写：
  *   * WorkBuddy 会话按账号 uid 分目录 —— 开关做的是「合并到目标账号名下」；
- *   * Qoder 的聊天库是本机全局的 —— 开关做的是「按账号归档/回填」。
+ *   * Qoder 的聊天库在本机共享 —— 切号时默认保留，不需要账号迁移开关。
  */
 const CHAT_SYNC_HINT: Record<string, string> = {
   workbuddy:
     "开启后，切换客户端账号时会把当前账号的本地会话合并进目标账号；关闭则不碰聊天记录，各账号只看到自己名下的会话",
-  qoder:
-    "开启后，切换客户端账号时把当前聊天记录归档给原账号、带回该账号的历史会话；目标账号没有归档时以空白会话启动。关闭则不同步",
 };
 
-/** 与 MiniMax 自动同步的关系说明（开关只在 WorkBuddy / Qoder 上渲染）。 */
+/** 与 MiniMax 自动同步的关系说明（开关只在 WorkBuddy 上渲染）。 */
 const CHAT_SYNC_MINIMAX_NOTE =
   "MiniMax 不受此开关影响：它的会话存在服务端，客户端登录即自动同步，优先于本地记录";
 
@@ -78,15 +78,18 @@ export default function AgentGroupPanel({
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
   const panelIcon = agentIcon(provider.id);
+  // Zcode 的额度是 Token（3 亿级），其它平台是积分 —— 标签与格式跟着单位走
+  const labels = quotaLabels(provider.id);
 
   // 客户端实际登录的账号，和工具里选中的当前账号对不对得上
   const clientAccount = schedule.clientAccount;
   const activeId = accounts.find((a) => a.isActive)?.account.id;
   const mismatch =
     !!clientAccount && !!activeId && clientAccount.accountId !== activeId;
+  const formatMinute = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
 
   return (
-    <section className="panel" style={{ ["--agent-accent" as string]: accent }}>
+    <section className="panel agent-panel" style={{ ["--agent-accent" as string]: accent }}>
       <header className="panel-head">
         <div className="panel-title">
           <span className="panel-mark">
@@ -100,8 +103,11 @@ export default function AgentGroupPanel({
           <div>
             <h2>{provider.name}</h2>
             <p className="panel-sub">
-              {accounts.length} 个账号 · 今日已签 {schedule.todayClaimed} 个
-              {schedule.todayClaimable > 0 ? ` · ${schedule.todayClaimable} 个可签` : ""}
+              {accounts.length} 个账号 · 今日
+              {provider.supportsClaim ? "已签" : "已领取"} {schedule.todayClaimed} 个
+              {schedule.todayClaimable > 0
+                ? ` · ${schedule.todayClaimable} 个${provider.supportsClaim ? "可签" : "待领取"}`
+                : ""}
             </p>
             {clientAccount && (
               <p className={`client-line ${mismatch ? "warn" : ""}`}>
@@ -140,7 +146,18 @@ export default function AgentGroupPanel({
         </div>
       </header>
 
-      {/* 换号同步聊天记录（仅 WorkBuddy / Qoder 这类会话存本地的客户端显示） */}
+      <details className="agent-options">
+        <summary>
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9" /><circle cx="13" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+          <span>自动化设置</span>
+          <span className="agent-options-summary">
+            {provider.supportsClaim ? (schedule.enabled ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)} 自动签到` : "自动签到已关闭") : "官方客户端领取"}
+            {schedule.chatSyncSupported && ` · 聊天同步${schedule.chatSyncEnabled ? "已开启" : "已关闭"}`}
+          </span>
+          <span className="agent-options-caret" aria-hidden="true">⌄</span>
+        </summary>
+        <div className="agent-options-body">
+      {/* 换号同步聊天记录（WorkBuddy 按账号分片；Qoder 本地历史默认共享） */}
       {schedule.chatSyncSupported && (
         <div className="chat-sync">
           <label className="switch">
@@ -157,56 +174,63 @@ export default function AgentGroupPanel({
           </span>
         </div>
       )}
+      {/* 这个 agent 自己的自动签到。
+          不代领的平台（Zcode：领取要过官方客户端的阿里云验证码）没有可自动
+          执行的东西，换成一句说明，避免用户以为开了就会自动到账。 */}
+      {provider.supportsClaim ? (
+        <div className="sched">
+          <label className="switch">
+            <input
+              type="checkbox"
+              checked={schedule.enabled}
+              onChange={(e) => onScheduleChange(provider.id, { enabled: e.target.checked })}
+            />
+            <span>自动签到</span>
+          </label>
 
-      {/* 这个 agent 自己的自动签到 */}
-      <div className="sched">
-        <label className="switch">
-          <input
-            type="checkbox"
-            checked={schedule.enabled}
-            onChange={(e) => onScheduleChange(provider.id, { enabled: e.target.checked })}
-          />
-          <span>自动签到</span>
-        </label>
+          <span className="sched-label">时间窗</span>
+          <span className="sched-win">
+            <TimeInput
+              value={schedule.startMinute}
+              onCommit={(m) => onScheduleChange(provider.id, { startMinute: m })}
+              ariaLabel={`${provider.name} 时间窗起`}
+            />
+            <span className="sched-dash">→</span>
+            <TimeInput
+              value={schedule.endMinute}
+              onCommit={(m) => onScheduleChange(provider.id, { endMinute: m })}
+              ariaLabel={`${provider.name} 时间窗止`}
+            />
+          </span>
+          <span className="sched-hint">窗内每账号随机错峰执行</span>
+          {RESET_HINT[provider.id] ? (
+            <span className="sched-hint warn">{RESET_HINT[provider.id]}</span>
+          ) : null}
 
-        <span className="sched-label">时间窗</span>
-        <span className="sched-win">
-          <input
-            value={formatMinute(schedule.startMinute)}
-            onChange={(e) => {
-              const m = parseMinute(e.target.value);
-              if (m !== null) onScheduleChange(provider.id, { startMinute: m });
-            }}
-          />
-          <span className="sched-dash">→</span>
-          <input
-            value={formatMinute(schedule.endMinute)}
-            onChange={(e) => {
-              const m = parseMinute(e.target.value);
-              if (m !== null) onScheduleChange(provider.id, { endMinute: m });
-            }}
-          />
-        </span>
-        <span className="sched-hint">窗内每账号随机错峰执行</span>
-        {RESET_HINT[provider.id] ? (
-          <span className="sched-hint warn">{RESET_HINT[provider.id]}</span>
-        ) : null}
-
-        <span className="sched-label">预警</span>
-        <span className="sched-win">
-          <input
-            className="sched-threshold"
-            type="number"
-            min={0}
-            value={schedule.alertThreshold ?? 200}
-            onChange={(e) => {
-              const v = Number(e.target.value);
-              if (Number.isFinite(v) && v >= 0) onAlertChange(provider.id, Math.round(v));
-            }}
-          />
-          <span className="sched-hint">剩余低于此值标红</span>
-        </span>
-      </div>
+          <span className="sched-label">预警</span>
+          <span className="sched-win">
+            <input
+              className="sched-threshold"
+              type="number"
+              min={0}
+              value={schedule.alertThreshold ?? 200}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v) && v >= 0) onAlertChange(provider.id, Math.round(v));
+              }}
+            />
+            <span className="sched-hint">剩余低于此值标红</span>
+          </span>
+        </div>
+      ) : (
+        <div className="sched-hint">
+          {provider.name} 每日额度需在官方客户端领取
+          {WELFARE_META[provider.id]?.timing ? `（${WELFARE_META[provider.id].timing}）` : ""}
+          ，本工具只展示余额并提醒
+        </div>
+      )}
+        </div>
+      </details>
 
       {accounts.length === 0 ? (
         <div className="empty-state">
@@ -221,15 +245,15 @@ export default function AgentGroupPanel({
         <>
           <div className="quota-stats summary">
             <div className="qstat">
-              <span className="q-label">累计发放总积分</span>
-              <span className="q-value lg">{fmtPoints(group.totalGranted)}</span>
+              <span className="q-label">{labels.granted}</span>
+              <span className="q-value lg">{fmtQuotaAmount(group.totalGranted, provider.id)}</span>
             </div>
             <div className="qstat">
-              <span className="q-label">剩余总积分</span>
-              <span className="q-value lg">{fmtPoints(group.totalRemaining)}</span>
+              <span className="q-label">{labels.remaining}</span>
+              <span className="q-value lg">{fmtQuotaAmount(group.totalRemaining, provider.id)}</span>
             </div>
             <div className="qstat">
-              <span className="q-label">今日已签</span>
+              <span className="q-label">{provider.supportsClaim ? "今日已签" : "今日已领取"}</span>
               <span className="q-value lg">
                 {schedule.todayClaimed} / {accounts.length}
               </span>

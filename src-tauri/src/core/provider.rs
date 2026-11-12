@@ -95,13 +95,43 @@ impl Default for CheckinStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CreditItem {
-    /// "purchased"（购买）/ "free"（签到赠送）
+    /// "purchased"（购买）/ "free"（签到赠送）；WorkBuddy 是分组 kind（plan_base 等）
     pub credit_type: String,
     pub granted: f64,
     pub consumed: f64,
     pub remaining: f64,
     pub granted_at_ms: i64,
     pub expire_at_ms: i64,
+    /// 平台给的包名（WorkBuddy PackageName），没有为空串
+    #[serde(default)]
+    pub package_name: String,
+    /// 本批次下一次刷新时间（毫秒；0 = 平台未提供）。WorkBuddy 取 CycleResetTime，
+    /// 缺了按 CycleEndTime + 1s 推（套餐结束即刷新）。
+    #[serde(default)]
+    pub refresh_at_ms: i64,
+}
+
+/// WorkBuddy 官方积分分组（get-user-resource-summary 的 CreditGroups，
+/// 服务端按 Kind 聚合，口径与官网一致）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CreditGroup {
+    /// plan_base / plan_bonus / benefit / addon
+    pub kind: String,
+    /// 服务端给的中文名（套餐基础积分 等）
+    pub name: String,
+    pub total: f64,
+    pub used: f64,
+    pub remaining: f64,
+    /// 组内资源包数量
+    pub count: i64,
+    /// benefit/addon 取最近到期时间，plan_base/plan_bonus 取下次刷新时间
+    ///（毫秒；0 = 没有可展示的）
+    #[serde(default)]
+    pub time_ms: i64,
+    /// true = time_ms 是「到期时间」（benefit/addon），false =「下次刷新」
+    #[serde(default)]
+    pub uses_expiry: bool,
 }
 
 /// 积分总览：发放 / 已用 / 剩余。
@@ -116,6 +146,13 @@ pub struct Quota {
     /// 面向用户的一句话说明（例如"30 天内到期 400"）
     #[serde(default)]
     pub message: String,
+    /// 平台下一次额度刷新 / 发放时间（毫秒；0 = 平台未提供）。
+    /// 目前妙手会返回（每月刷新），其他平台为 0。
+    #[serde(default)]
+    pub refresh_at_ms: i64,
+    /// WorkBuddy 官方积分分组；其他平台 / summary 查询失败时为空。
+    #[serde(default)]
+    pub credit_groups: Vec<CreditGroup>,
 }
 
 impl Quota {
@@ -126,7 +163,27 @@ impl Quota {
             total_remaining: 0.0,
             items: Vec::new(),
             message: message.into(),
+            refresh_at_ms: 0,
+            credit_groups: Vec::new(),
         }
+    }
+
+    /// 未来 `days` 天内到期的剩余积分合计，以及最早到期时刻。
+    ///
+    /// 只统计 `remaining > 0` 且到期时间在 `(now, now + days]` 区间内的批次；
+    /// `expire_at_ms == 0`（平台没给到期时间）和已过期的批次都忽略。
+    pub fn expiring_within(&self, days: i64, now_ms: i64) -> Option<(f64, i64)> {
+        let limit = now_ms + days.max(0) * 86_400_000;
+        let mut total = 0.0;
+        let mut earliest = i64::MAX;
+        for item in &self.items {
+            if item.remaining <= 0.0 || item.expire_at_ms <= now_ms || item.expire_at_ms > limit {
+                continue;
+            }
+            total += item.remaining;
+            earliest = earliest.min(item.expire_at_ms);
+        }
+        (earliest != i64::MAX).then_some((total, earliest))
     }
 }
 
@@ -194,6 +251,15 @@ pub trait Provider: Send + Sync {
     /// 执行领取。
     async fn claim(&self, account: &Account, cred: &Value) -> Result<ClaimOutcome>;
 
+    /// 这个平台是否支持「自动领取」。
+    ///
+    /// `false` = 只展示状态 + 提醒，调度器和「一键全部签到」都不会调用
+    /// `claim()`。给「领取必须走官方客户端」的平台用（例如 Zcode ——
+    /// 领取要过阿里云验证码，第三方做不了）。
+    fn supports_claim(&self) -> bool {
+        true
+    }
+
     /// 查询积分总览（发放 / 已用 / 剩余）。
     ///
     /// 默认返回空并给出说明；平台支持时覆盖实现。
@@ -210,8 +276,64 @@ pub trait Provider: Send + Sync {
     }
 
     /// 凭据过期时尝试刷新，返回新的凭据；无法刷新返回 `Ok(None)`。
-#[allow(dead_code)] // 预留给「凭据自动刷新」的扩展点，第一版未接线
+    #[allow(dead_code)] // 预留给「凭据自动刷新」的扩展点，第一版未接线
     async fn refresh(&self, _account: &Account, _cred: &Value) -> Result<Option<Value>> {
         Ok(None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const DAY: i64 = 86_400_000;
+
+    fn item(remaining: f64, expire_at_ms: i64) -> CreditItem {
+        CreditItem {
+            credit_type: "free".into(),
+            granted: remaining,
+            consumed: 0.0,
+            remaining,
+            granted_at_ms: 0,
+            expire_at_ms,
+            package_name: String::new(),
+            refresh_at_ms: 0,
+        }
+    }
+
+    fn quota(items: Vec<CreditItem>) -> Quota {
+        Quota {
+            total_granted: 0.0,
+            total_consumed: 0.0,
+            total_remaining: 0.0,
+            items,
+            message: String::new(),
+            refresh_at_ms: 0,
+            credit_groups: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn 到期计算_只统计窗口内且未用完的批次() {
+        let now = 1_700_000_000_000;
+        let q = quota(vec![
+            item(100.0, now + 2 * DAY),
+            item(50.0, now + 6 * DAY),
+            item(0.0, now + 1 * DAY),
+            item(30.0, now + 8 * DAY),
+            item(20.0, now - DAY),
+            item(40.0, 0),
+        ]);
+        assert_eq!(q.expiring_within(7, now), Some((150.0, now + 2 * DAY)));
+    }
+
+    #[test]
+    fn 到期计算_没有窗口内批次时返回none() {
+        let now = 1_700_000_000_000;
+        assert_eq!(quota(vec![]).expiring_within(7, now), None);
+        assert_eq!(
+            quota(vec![item(100.0, now + 30 * DAY)]).expiring_within(7, now),
+            None
+        );
     }
 }

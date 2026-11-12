@@ -15,6 +15,7 @@ function provider(over: Partial<ProviderView> = {}): ProviderView {
     supportsOAuth: true,
     configured: true,
     hasClient: true,
+    supportsClaim: true,
     ...over,
   };
 }
@@ -67,7 +68,7 @@ function renderPanel(g: AgentGroup, onChatSyncChange = noop) {
 }
 
 describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
-  it("支持同步的 agent（WorkBuddy/Qoder）在面板顶部显示开关和说明", () => {
+  it("支持同步的 agent（WorkBuddy）在面板顶部显示开关和说明", () => {
     renderPanel(group());
     expect(screen.getByText("换号同步聊天记录")).toBeInTheDocument();
     // WorkBuddy 的专属说明：合并语义 + MiniMax 关系说明
@@ -75,9 +76,14 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
     expect(screen.getByText(/MiniMax 不受此开关影响/)).toBeInTheDocument();
   });
 
-  it("Qoder 的说明讲的是归档/回填语义", () => {
-    renderPanel(group({ provider: provider({ id: "qoder", name: "Qoder CN" }) }));
-    expect(screen.getByText(/归档给原账号/)).toBeInTheDocument();
+  it("Qoder 不提供「换号同步聊天记录」开关（会话在本机共享，不搬库）", () => {
+    renderPanel(
+      group({
+        provider: provider({ id: "qoder", name: "Qoder CN" }),
+        schedule: { ...group().schedule, chatSyncSupported: false },
+      })
+    );
+    expect(screen.queryByText("换号同步聊天记录")).not.toBeInTheDocument();
   });
 
   it("不支持的 agent（如 MiniMax）不渲染开关", () => {
@@ -116,5 +122,27 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
       .closest("label")!
       .querySelector("input")! as HTMLInputElement;
     expect(box.checked).toBe(true);
+  });
+});
+
+describe("不代领的平台（Zcode）", () => {
+  it("不显示「自动签到」开关，改成一句说明", () => {
+    renderPanel(
+      group({
+        provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }),
+      })
+    );
+    expect(screen.queryByText("自动签到")).not.toBeInTheDocument();
+    expect(screen.getByText(/需在官方客户端领取/)).toBeInTheDocument();
+  });
+
+  it("面板副标题说「今日已领取」而不是「今日已签」", () => {
+    renderPanel(
+      group({
+        provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }),
+        schedule: { ...group().schedule, todayClaimed: 1 },
+      })
+    );
+    expect(screen.getByText(/今日已领取 1 个/)).toBeInTheDocument();
   });
 });

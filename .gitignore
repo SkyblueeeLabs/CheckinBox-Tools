@@ -10,3 +10,26 @@ src-tauri/gen/
 # 临时参考图 / 截图（用户放的设计参考，不入库）
 temp/
 
+# AI 客户端（Zcode）在项目根下写的会话计划，不是本项目的文件
+.zcode/
+
+# 显卡驱动 / 各种程序在项目根下乱写的目录（NVIDIA umdlogs 等）
+NVIDIA Corporation/
+
+# 凭据类文件：任何情况下都不入库
+.env
+.env.*
+*.pem
+*.key
+*.pfx
+*.p12
+*.keystore
+accounts.json
+auth.json
+auth-state.json
+settings.json
+
+# 运行时产物（CLI 输出 / 备份目录等）
+_cli-output.txt
+client_login_backups/
+

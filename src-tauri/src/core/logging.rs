@@ -41,7 +41,11 @@ impl LogEntry {
     ) -> Self {
         let now = Local::now();
         Self {
-            id: format!("log_{}_{}", now.timestamp_millis(), uuid::Uuid::new_v4().simple()),
+            id: format!(
+                "log_{}_{}",
+                now.timestamp_millis(),
+                uuid::Uuid::new_v4().simple()
+            ),
             timestamp: now.format("%Y-%m-%d %H:%M:%S").to_string(),
             date: now.format("%Y-%m-%d").to_string(),
             provider: provider.into(),

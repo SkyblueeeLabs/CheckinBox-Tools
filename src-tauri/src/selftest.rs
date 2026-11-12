@@ -81,7 +81,10 @@ pub fn run() {
                             Err(e) => println!("        状态读取失败：{e}"),
                         }
                         match provider.quota(account, cred).await {
-                            Ok(q) => println!("        积分: 剩余={:.0} | {}", q.total_remaining, q.message),
+                            Ok(q) => println!(
+                                "        积分: 剩余={:.0} | {}",
+                                q.total_remaining, q.message
+                            ),
                             Err(e) => println!("        积分读取失败：{e}"),
                         }
                     }
@@ -101,7 +104,10 @@ pub fn run() {
             ),
             None => println!("    未找到 umid-cache.json（活动可能不下发）"),
         }
-        println!("    machine_id = {}", crate::providers::qoder::local_machine_id());
+        println!(
+            "    machine_id = {}",
+            crate::providers::qoder::local_machine_id()
+        );
         let qoder = QoderProvider::new();
         let session = qoder.begin_authorization("qoder");
         match session {
@@ -136,10 +142,9 @@ pub fn run() {
                                 Err(e) => println!("        积分读取失败：{e}"),
                             }
                             match qoder.profile(&account, &cred).await {
-                                Ok(Some(p)) => println!(
-                                    "        昵称={:?} 邮箱={:?}",
-                                    p.name, p.email
-                                ),
+                                Ok(Some(p)) => {
+                                    println!("        昵称={:?} 邮箱={:?}", p.name, p.email)
+                                }
                                 Ok(None) => println!("        昵称接口没返回数据"),
                                 Err(e) => println!("        昵称读取失败：{e}"),
                             }
@@ -176,11 +181,16 @@ pub fn run() {
         }
         match store.credential("minimax", "selftest") {
             Ok(cred) => {
-                let is_str = cred.get("access_token").and_then(|v| v.as_str()) == Some("demo-token");
+                let is_str =
+                    cred.get("access_token").and_then(|v| v.as_str()) == Some("demo-token");
                 println!(
                     "    回读凭据 {}（{}）",
                     if is_str { "✓" } else { "✗" },
-                    if is_str { "内容一致" } else { "内容不一致" }
+                    if is_str {
+                        "内容一致"
+                    } else {
+                        "内容不一致"
+                    }
                 );
             }
             Err(e) => println!("    回读失败：{e}"),
@@ -194,7 +204,10 @@ pub fn run() {
     // ---- 6. 配置文件 ----
     println!("\n[6] 数据目录");
     println!("    根目录 = {}", crate::core::paths::data_dir().display());
-    println!("    账号文件 = {}", crate::core::paths::accounts_file().display());
+    println!(
+        "    账号文件 = {}",
+        crate::core::paths::accounts_file().display()
+    );
 
     // ---- 7. 客户端定位 + 进程检测 ----
     println!("\n[7] 客户端定位与进程检测");
@@ -204,7 +217,10 @@ pub fn run() {
             Some(p) => println!("    {provider}: {}", p.display()),
             None => println!("    {provider}: 未找到客户端 exe"),
         }
-        println!("      正在运行 = {}", crate::core::launcher::is_running(provider));
+        println!(
+            "      正在运行 = {}",
+            crate::core::launcher::is_running(provider)
+        );
     }
 
     // ---- 8. Qoder OSCrypt（换号的核心链路）----

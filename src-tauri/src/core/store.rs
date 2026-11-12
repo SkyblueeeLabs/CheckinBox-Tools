@@ -104,7 +104,7 @@ impl AccountStore {
         self.save()
     }
 
-#[allow(dead_code)] // 多账号 UI 的「改备注」会用到
+    #[allow(dead_code)] // 多账号 UI 的「改备注」会用到
     /// 仅更新账号元信息（不碰凭据）。
     pub fn touch(&mut self, account: Account) -> Result<()> {
         let key = Self::key(&account.provider, &account.id);

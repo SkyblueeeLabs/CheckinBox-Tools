@@ -1,12 +1,14 @@
 //! 平台适配器注册表。
 //!
 //! 新增一个平台 = 在这里加一个 `Provider` 实现 + 在 `all()` 里登记，
-//! 其余各层（账号池、调度、UI）不需要改动。
+//! 另外还要在 `commands.rs::AppState::new()` 的 `providers` 列表里挂上
+//! （那才是运行时真正用的列表）。
 
 pub mod miaoshou;
 pub mod minimax;
 pub mod qoder;
 pub mod workbuddy;
+pub mod zcode;
 
 use std::sync::Arc;
 
@@ -20,6 +22,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(qoder::QoderProvider::new()),
         Arc::new(miaoshou::MiaoshouProvider::new()),
         Arc::new(workbuddy::WorkBuddyProvider::new()),
+        Arc::new(zcode::ZcodeProvider::new()),
     ]
 }
 

@@ -1,6 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { AppConfig, CloseAction, Overview } from "../lib/types";
-import { formatMinute } from "../lib/api";
+import TimeInput from "./TimeInput";
 import BackupPanel from "./BackupPanel";
 
 const CLOSE_OPTIONS: Array<{ value: CloseAction; label: string; desc: string }> = [
@@ -73,6 +73,11 @@ interface Props {
   onSyncNow: () => void;
   onOpenDataDir: () => void;
   onCloseAction: (action: CloseAction) => void;
+  /** null = 状态还没读到 / 读取失败 */
+  autostartEnabled: boolean | null;
+  onAutostartChange: (enabled: boolean) => void;
+  onNotificationsEnabled: (enabled: boolean) => void;
+  onTestNotification: () => void;
 }
 
 /**
@@ -94,6 +99,10 @@ export default function SettingsPanel({
   onSyncNow,
   onOpenDataDir,
   onCloseAction,
+  autostartEnabled,
+  onAutostartChange,
+  onNotificationsEnabled,
+  onTestNotification,
 }: Props) {
   const providers = overview.providers;
   const agents = overview.agents;
@@ -282,30 +291,16 @@ export default function SettingsPanel({
                     </td>
                     <td className="c">
                       <span className="set-win">
-                        <input
-                          value={formatMinute(view.startMinute)}
-                          onChange={(e) => {
-                            const text = e.target.value;
-                            const parts = text.split(":").map(Number);
-                            if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return;
-                            const m = parts[0] * 60 + parts[1];
-                            if (m >= 0 && m < 24 * 60) {
-                              onScheduleChange(p.id, { startMinute: m });
-                            }
-                          }}
+                        <TimeInput
+                          value={view.startMinute}
+                          onCommit={(m) => onScheduleChange(p.id, { startMinute: m })}
+                          ariaLabel={`${p.name} 时间窗起`}
                         />
                         <span className="sched-dash">→</span>
-                        <input
-                          value={formatMinute(view.endMinute)}
-                          onChange={(e) => {
-                            const text = e.target.value;
-                            const parts = text.split(":").map(Number);
-                            if (parts.length !== 2 || parts.some((n) => !Number.isFinite(n))) return;
-                            const m = parts[0] * 60 + parts[1];
-                            if (m > 0 && m <= 24 * 60) {
-                              onScheduleChange(p.id, { endMinute: m });
-                            }
-                          }}
+                        <TimeInput
+                          value={view.endMinute}
+                          onCommit={(m) => onScheduleChange(p.id, { endMinute: m })}
+                          ariaLabel={`${p.name} 时间窗止`}
                         />
                       </span>
                     </td>
@@ -347,6 +342,65 @@ export default function SettingsPanel({
               </label>
             ))}
           </div>
+        </SetBlock>
+
+        {/* ---------- 开机启动 ---------- */}
+        <SetBlock
+          title="开机启动"
+          meta={autostartEnabled === null ? "读取中" : undefined}
+          open={openBlocks.has("autostart")}
+          onToggle={() => toggleBlock("autostart")}
+          action={
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={autostartEnabled === true}
+                disabled={autostartEnabled === null}
+                onChange={(e) => onAutostartChange(e.target.checked)}
+              />
+              <span>
+                {autostartEnabled === null
+                  ? "读取中"
+                  : autostartEnabled
+                    ? "已开启"
+                    : "已关闭"}
+              </span>
+            </label>
+          }
+        >
+          <p className="set-hint">
+            开机后静默启动到系统托盘，自动签到不用等你手动打开；
+            启动时不弹窗、不抢焦点。要彻底结束程序，用托盘右键「退出」。
+          </p>
+        </SetBlock>
+
+        {/* ---------- 应用内提醒 ---------- */}
+        <SetBlock
+          title="应用内提醒"
+          open={openBlocks.has("notify")}
+          onToggle={() => toggleBlock("notify")}
+          action={
+            <label className="switch">
+              <input
+                type="checkbox"
+                checked={config.notificationsEnabled}
+                onChange={(e) => onNotificationsEnabled(e.target.checked)}
+              />
+              <span>{config.notificationsEnabled ? "已开启" : "已关闭"}</span>
+            </label>
+          }
+        >
+          <p className="set-hint">
+            自动签到失败、额度低于预警线、即将到期或可领取时会生成提醒。
+            窗口隐藏时也会保存，可通过窗口顶部或托盘右键的「应用内提醒」查看。
+          </p>
+          <button
+            className="btn small"
+            style={{ alignSelf: "flex-start" }}
+            onClick={onTestNotification}
+          >
+            发送测试提醒
+          </button>
         </SetBlock>
 
         {/* ---------- 数据 ---------- */}

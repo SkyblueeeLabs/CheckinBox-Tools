@@ -44,6 +44,10 @@ thiserror = "2"
 async-trait = "0.1"
 dirs = "6"
 open = "5"
+# 开机自启（Windows: HKCU\...\Run）和桌面单实例
+tauri-plugin-autostart = "2"
+tauri-plugin-single-instance = "2"
+tempfile = "3"
 
 [features]
 # 生产构建必带：启用后 `generate_context!` 才会把 ../dist 的界面嵌入 exe；

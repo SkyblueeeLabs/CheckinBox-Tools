@@ -12,6 +12,7 @@ function provider(id: string): ProviderView {
     supportsOAuth: true,
     configured: true,
     hasClient: true,
+    supportsClaim: true,
   };
 }
 
@@ -33,6 +34,7 @@ function account(
     isLow: false,
     alertThreshold: 200,
     trend: [],
+    supportsClaim: true,
     ...over,
   };
 }

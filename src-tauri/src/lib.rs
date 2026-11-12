@@ -17,12 +17,13 @@ compile_error!(
      请改用 `npx tauri build --no-bundle`，或加 `--features custom-protocol`"
 );
 
-use tauri::{Emitter, Manager};
+use tauri::Manager;
 
 use crate::core::config::CloseAction;
 
 pub mod commands;
 mod core;
+mod notifications;
 mod providers;
 pub mod selftest;
 mod tray;
@@ -30,11 +31,22 @@ mod tray;
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .manage(commands::AppState::new())
+        .plugin(tauri_plugin_single_instance::init(|app, args, _| {
+            if !args.iter().any(|arg| arg == "--silent") {
+                let _ = tray::show_main_window(app);
+            }
+        }))
+        // 开机自启注册时带 --silent：登录后直接驻留托盘，不抢焦点
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            Some(vec!["--silent"]),
+        ))
         .invoke_handler(tauri::generate_handler![
             commands::overview,
             commands::refresh_quota,
             commands::refresh_all_quotas,
+            commands::workbuddy_credit_packages,
+            commands::workbuddy_credit_usage,
             commands::checkin_account,
             commands::checkin_all,
             commands::discover_accounts,
@@ -47,6 +59,13 @@ pub fn run() {
             commands::set_config,
             commands::set_close_action,
             commands::resolve_close_action,
+            commands::autostart_enabled,
+            commands::set_autostart,
+            commands::set_notifications_enabled,
+            notifications::send_test_notification,
+            notifications::list_notices,
+            notifications::mark_notices_read,
+            tray::take_window_request,
             commands::set_agent_order,
             commands::set_agent_schedule,
             commands::set_scheduler_enabled,
@@ -58,6 +77,10 @@ pub fn run() {
             commands::list_chat_backups,
             commands::delete_chat_backup,
             commands::delete_old_chat_backups,
+            commands::list_client_login_backups,
+            commands::restore_client_login_backup,
+            commands::delete_client_login_backup,
+            commands::prune_client_login_backups,
             commands::launch_client,
             commands::detect_client_account,
             commands::client_running,
@@ -90,14 +113,17 @@ pub fn run() {
                 // 首次 / 每次询问：拦下关闭，交给前端弹确认框
                 CloseAction::Ask => {
                     api.prevent_close();
-                    // 必须用 app 广播：window.emit 的目标是 Window，
-                    // 前端 listen 监听的是 Webview，收不到。
-                    let _ = app.emit("close-requested", ());
+                    tray::request_window(app, tray::WindowRequest::Close);
                 }
             }
         })
         .setup(|app| {
+            app.manage(commands::AppState::new());
             tray::setup(app.handle())?;
+            // 正常启动显示主窗口；开机自启带 --silent 时只驻留托盘
+            if !std::env::args().any(|arg| arg == "--silent") {
+                tray::show_main_window(app.handle())?;
+            }
             let handle = app.handle().clone();
             tauri::async_runtime::spawn(commands::scheduler_loop(handle));
             Ok(())

@@ -14,7 +14,7 @@
 
 ![首页总览](docs/images/dashboard.png)
 
-**Agent 面板**——账号小卡片（点击展开详情：积分明细 / 用量条 / 趋势 / 批次）：
+**Agent 面板**——账号方块卡片按窗口宽度并排展示，卡片直接显示余额，从明细入口查看用量、趋势和批次。
 
 ![Agent 面板](docs/images/agent-panel.png)
 
@@ -38,9 +38,18 @@
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 浏览器设备授权 |
 | **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / **Cockpit Tools 账号库**（多账号） |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（只有注册奖励） | ✅ | ✅ | 本机导入 |
+| **Zcode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ **只展示 + 提醒，不代领**（领取要过官方客户端的阿里云验证码） | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
 
 > 上游接口都是**非公开的**，随时可能变。**核心原则：失败就如实报错**——本工具宁可显示
 > 「签到失败：xxx」，也不会谎报「已签到」。
+>
+> **Zcode 特殊**：每日 3 亿 GLM-5.3-Flash Token 只能在官方客户端领取（阿里云验证码
+> 只有在 Zcode 的 Electron 渲染进程里才生得出来）。所以 Zcode 面板只展示余额和
+> 「待领取 / 已领取」状态，点「打开 Zcode 领取」会拉起官方客户端让你自己点。
+>
+> **领取提醒**：不写死时间（实测开放时刻并不固定，18:11 / 19:33 / 19:49 / 20:25 都见过），
+> 而是轮询官方的 `billing/preview` 接口。出现「现在能领」的套餐时会保存一条应用内提醒，
+> 每天每账号一条。在设置页的「应用内提醒」中可开关自动提醒。
 
 ## 核心功能
 
@@ -55,34 +64,34 @@
 - **切换客户端账号**：一条龙——自动关闭客户端 → 捕获当前登录 → 备份 → 写入目标凭据
   → 以目标账号重启，全程不用你手动退出
 
-### 换号同步聊天记录（WorkBuddy / Qoder）
+### 换号时保留聊天记录（WorkBuddy / Qoder）
 
 借鉴 Cockpit Tools 的 `share_sessions_on_switch`：MiniMax 的会话存在**服务端**，
 换号后客户端登录即自动拉取历史；而 WorkBuddy 和 Qoder CN 的会话/聊天记录存在
-**本地**，换号不会跟着账号走。为此两个 agent 面板顶部各有一个
-**「换号同步聊天记录」**开关（默认关，落盘 config.json 重启保持）：
+**本地**。WorkBuddy 在 agent 面板提供 **「换号同步聊天记录」**开关
+（默认关，落盘 config.json 重启保持）：
 
 - **勾选**：每次「切换客户端账号」时把会话记录带给目标账号——
-  - WorkBuddy：会话正文按账号 uid 分目录
-    （`%LOCALAPPDATA%\CodeBuddyExtension\Data\<uid>\…\history\`），切换时把来源
-    账号的会话**合并**进目标账号名下（同 id 比 `lastMessageAt` 新者胜，目标已有
-    的不丢），机制与上游 Cockpit 的会话迁移一致；
-  - Qoder CN：聊天库 `main.sqlite` 是本机全局的（表里没有账号字段），切换时把
-    当前聊天库**归档**给原账号、**回填**目标账号的归档；目标没有归档则以空白
-    会话启动。归档存 `%APPDATA%\CheckinBox\chat_history\qoder\<账号id>\`。
+  - WorkBuddy 5.x：会话索引在 `%USERPROFILE%\.workbuddy\workbuddy.db`，客户端按
+    `sessions.user_id` 过滤。切换时先备份数据库，再将未删除会话归到目标账号 UID；
+    旧版扩展目录仍执行文件级合并，目标已有会话不会被删除；
+  - Qoder CN：会话索引/消息在 `main.sqlite`，项目会话正文在
+    `%USERPROFILE%\.qoder-cn\projects\`。索引没有账号归属字段，因此本机各账号
+    共用会话记录；切换时保留数据库和项目文件，不搬库、不清空。
+    旧版 CheckinBox 若曾把会话库存进账号归档，新版会在切换时先备份现场，再把归档里的
+    会话/消息及 `workspaces` 工作区目录合并回共享库；Qoder 的其他设置和凭据不参与合并。
 - **不勾选**：换号完全不碰聊天数据（与旧版行为一致）。
 - **与 MiniMax 的关系**：MiniMax 不显示也不需要这个开关——它的同步是客户端
   自己做的（服务端按账号下发），始终生效、优先于任何本地处理；本开关只管
-  WorkBuddy / Qoder 的本地记录。
-- 安全措施（**每次同步都先备份，宁可不同步也不丢数据**）：
-  - 动手前把涉及的现有文件完整备份到 `chat_history\<平台>\_backups\<操作id>\`
-    （每次一个独立目录，不覆盖旧备份、不自动清理）；
-  - Qoder 的现场聊天库还会归档一份到 `chat_history\qoder\<账号id>\payload\`，
-    同一份历史至少同时存在「当次备份 + 账号归档」两份；
+  WorkBuddy 的本地记录；Qoder 的本地历史始终共享。
+- 安全措施（**修改会话前先备份，宁可不同步也不丢数据**）：
+  - WorkBuddy 合并、Qoder 旧归档恢复前，将涉及的数据库和 WAL/SHM 完整备份到
+    `chat_history\<平台>\_backups\<操作id>\`（每次一个独立目录，不覆盖旧备份）；
+  - 旧版 Qoder 账号归档保留供恢复使用；当前切号不再移动数据库；
   - WorkBuddy 只读来源账号，目标账号的会话**只增不删**；替换任何会话/索引前
     先把原目录/原文件整个移进备份；
-  - sqlite 主库与 `-wal`/`-shm` 成组搬；归档用 staging + rename（旧归档先改名
-    让位再删），回填失败自动把现场移回，进程任何时刻被强杀都留有一份完整数据；
+  - sqlite 主库与 `-wal`/`-shm` 成组备份；旧版 Qoder 账号归档只合并聊天与工作区目录，
+    不覆盖应用设置、凭据或迁移记录；
   - 客户端运行中拒绝执行；同步失败**不阻塞**换号本身，结果如实显示在切换提示里。
 - **出问题怎么恢复**：到 `%APPDATA%\CheckinBox\chat_history\` 下找
   对应平台的 `_backups\<操作id>\`（时间戳最新的那次），把里面的文件复制回客户端
@@ -90,7 +99,7 @@
   `%LOCALAPPDATA%\CodeBuddyExtension\Data\`）。操作前请先完全退出客户端。
 - **备份管理**：设置页新增「历史备份」tab，按平台列出每次换号备份的时间、大小、
   文件数和内容，可逐条删除或按「保留最近 N 天」批量清理（删除不可撤销，均有确认）。
-  账号归档（`<账号id>\payload`）是同步功能的数据源，不在列表里、也不允许删除。
+  历史 Qoder 账号归档（`<账号id>\payload`）保留作恢复材料，不在列表里、也不允许删除。
 - 附带把 **WorkBuddy 的客户端换号**补齐了（此前为「—」）：解密 state.vscdb 的
   safeStorage 登录态 → 以当前文件为模板改写身份与 token → 重新加密写回。首次
   真机换号时留意一下客户端登录结果（有 `.bak` 备份兜底）。
@@ -102,7 +111,18 @@
 - 窗内补跑：晚启动软件也不会整天漏签；改时间窗会自动重排
 - 自动同步：按平台各自的间隔刷新积分 / 状态 / 昵称；**跨天强制同步**，"今日已签"
   不会停在昨天的状态
-- 系统托盘常驻：左键显示窗口，右键菜单「立即全部签到 / 退出」
+- 系统托盘常驻。左键恢复窗口，右键可看提醒、签到记录、打开设置、立即签到或同步、隐藏窗口和退出。重复启动桌面应用时会恢复已有窗口。
+
+### 后台可靠性
+
+- **开机启动（静默驻留）**：设置页开启后，登录 Windows 自动启动到托盘，
+  不弹窗、不抢焦点；自动签到不依赖你手动打开程序
+- **应用内提醒**：后台签到失败、额度过低、7 天内到期或可领取时生成提醒。窗口隐藏时照常保存，重启后可以查看最近 100 条。托盘和窗口顶部显示未读数，设置页可关闭自动提醒或发送测试提醒。
+- **积分到期**：首页「7 天内到期」按紧迫度列出账号与积分，账号小卡片显示
+  「N 天到期」徽标；打开积分明细可看到「最近到期」和每个批次的到期日。
+  到期时间以平台接口为准：MiniMax 每批积分都有到期日；WorkBuddy 取套餐
+  `PackageEndTime`；Qoder 返回长期（界面显示「长期有效」）；妙手体验版
+  不提供到期时间（显示「平台未提供」，只有「下次刷新」时间）
 
 ### 关闭窗口 / 后台驻留
 
@@ -121,7 +141,7 @@
 
 ### 多账号管理
 
-- 账号小卡片：收起显示关键信息，点击展开完整详情
+- 账号卡片上可以直接打开或切换客户端、签到、设为当前账号、查看明细和移除账号。移除前会确认账号。WorkBuddy 明细提供有效与过期资源包及消耗记录。Zcode 按 Token 显示，Qoder 可查看 CheckinBox 记录的本地领取批次。
 - 「客户端登录」徽标 + 平台色头像描边——谁是客户端现场一眼可见
 - 侧栏拖拽调序，顺序持久化
 - 首页总览：全局关键指标 + 各平台积分卡，一屏看全
@@ -158,17 +178,27 @@ npx tauri build --no-bundle --features custom-protocol
 >    `--features custom-protocol`。
 > 3. `npm run tauri build -- --no-bundle` 里的 `--no-bundle` 会被 npm 吃掉，用 `npx`。
 > 4. shell 里找不到 `cargo` 时把 `%USERPROFILE%\.cargo\bin` 加进 PATH；
->    构建前**关掉正在运行的 CheckinBox**（占用 exe 会静默失败）。
->    另外关窗口的行为可在设置里配：默认弹确认框（最小化到托盘 / 退出），
->    也可固定为「最小化到托盘」后台常驻。若进程仍在托盘运行，直接双击新 exe
->    会因 WebView2 用户数据目录被占用而静默退出（0x800700AA）——先从托盘
->    右键「退出」再开。
+>    构建前**杀掉正在运行的 CheckinBox**（占用 exe 会失败，报
+>    `failed to remove file … 拒绝访问 (os error 5)`）。**不用问用户，直接杀**：
+>    ```bash
+>    taskkill //IM CheckinBox.exe //F     # Git Bash 语法；PowerShell 用 /IM /F
+>    tasklist //FI "IMAGENAME eq CheckinBox.exe"   # 确认杀干净
+>    ```
+>    注意「关窗口」≠「进程结束」：关窗口行为可在设置里配，默认弹确认框
+>    （最小化到托盘 / 退出），也可固定为「最小化到托盘」后台常驻 —— 所以要按
+>    **进程名**确认。杀之前不用打招呼（用户明确要求），但要知道这会中断正在
+>    跑的操作（调度签到 / 切换客户端）；构建完直接重新拉起 exe。
+>    另外若进程没杀干净，直接双击新 exe 会因 WebView2 用户数据目录被占用而
+>    静默退出（0x800700AA）。
 
 ### 打包安装程序（NSIS / MSI）
 
 ```bash
-npx tauri build
+npx tauri build --features custom-protocol
 ```
+
+> `--features custom-protocol` 同样不能省（见上面的坑 2）：少了它会撞上
+> `lib.rs` 的编译期护栏，直接编译失败。
 
 产物在 `src-tauri/target/release/bundle/`：
 
@@ -202,7 +232,16 @@ npx tauri build
 
 # 命令行版切换客户端账号（自动关客户端 → 备份 → 写入 → 重启）
 .\src-tauri\target\release\CheckinBox.exe --switch-client minimax <account_id>
+
+# 列出客户端登录态的多代备份（minimax / miaoshou / qoder）
+.\src-tauri\target\release\CheckinBox.exe --list-client-backups minimax
+
+# 回滚到指定的一代（操作 id 从上面的列表里取）
+.\src-tauri\target\release\CheckinBox.exe --restore-client-backup minimax <操作id>
 ```
+
+> release 版没有控制台，这两个命令的结果会写进
+> `%APPDATA%\CheckinBox\client_login_backups\<平台>\_cli-output.txt` 并自动打开。
 
 ### 测试
 
@@ -223,6 +262,8 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
 5. **首页总览**：侧栏顶部「首页」，所有平台的积分和签到状态一屏看全。
 6. **关闭窗口**：首次点 × 会询问「最小化到托盘 / 退出」，可记住选择；
    之后在设置页「关闭窗口」里修改。托盘常驻时后台照常签到。
+7. **开机启动 / 提醒**：设置页「开机启动」开启后静默驻留托盘。「应用内提醒」
+   控制自动提醒，可发送测试提醒并打开提醒列表。
 
 ## 实现要点
 
@@ -236,8 +277,23 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
   `sharedUser.userID`，身份判定用 token 调 `/v1/api/user/info` 实测
 - OAuth 刷新：`POST account.minimax.cn/oauth2/token`，**refresh token 每次轮换**，
   刷新后必须回写；绝不能刷「客户端当前登录」的账号（会让客户端掉登录）
+- **客户端运行中刷新护栏（2026-11-02 实测）**：身份探测是三态 `Same/Other/Unknown`。
+  `Same` 只捕获不刷新；`Other` 可安全刷新；**`Unknown` 且客户端在运行时不刷新**——
+  否则一次探测失败就可能把客户端手里的 RT 轮换掉，客户端下一次刷新直接
+  `invalid_grant` 掉登录（实测 16:00:46 掉线）。401 抢救路径同样走这个判断
 - 客户端有带防篡改围栏的鉴权状态机：写凭据必须**连同 `auth-state.json` 一起写**
   （generation 严格一致），否则客户端启动直接弹重新登录
+- 积分接口每个批次带 `expire_at_ms`（毫秒），到期展示和 7 天提醒直接用这个字段
+- **客户端运行态是三态（2026-11-12 加固）**：进程探测返回 `Running`/`Absent`/`Unknown`，
+  不是布尔——布尔分不出「探测失败」和「确实没跑」。`Unknown` 一律按「可能在跑」处理，
+  **不自动刷新**（宁可这次签到失败，也不顶掉客户端手里的 RT）。上游 cockpit-tools
+  至今没有这层守卫，刷新时抄客户端 RT 去用，RT 一轮换客户端就掉线
+- **换号备份按「代」成组留存（2026-11-12 加固）**：每次换号把 `auth.json` 与
+  `auth-state.json` 存成一「代」，落在 `%APPDATA%\CheckinBox\client_login_backups\`，
+  可列出、回滚、删除、裁剪（命令行 / Tauri 命令，设置页 UI 尚未接入）
+- **设备授权导入会记下客户端登录态路径**（`auth_file`）：只记路径、不取文件里的凭据，
+  避免把客户端当前登录号的会话串到别的账号上
+- 详细的加固设计与实施记录见 `docs/minimax-hardening/`
 
 ### Qoder CN
 
@@ -249,14 +305,33 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
 - 登录态 `%APPDATA%\com.qodercn.app.stable\auth.v1.dat` 是 Electron safeStorage
   （`v10` + AES-256-GCM，密钥在 `Local State` 里由 DPAPI 保护）——同一 Windows 用户
   可解可写，换号即「解密 → 改 → 重加密」
+- 积分接口的 `qoderUsage.expiresAt` 实测是 9999 年（长期），界面显示「长期有效」
+- 网页端有更细的「资源包」明细（`GET https://qoder.cn/api/v2/me/usages/big_model_credits`，
+  返回每个 100 Credits 包的 `expiresAt`），但**需要网页登录 Cookie + `X-CSRF-TOKEN`**；
+  账号的设备 token 调用返回 401。本工具改用签到日志回填「每日领取记录（本地）」，
+  显示领取时间 + 30 天到期；客户端里手动领的、或首次使用前领的批次无法还原
 
 ### WorkBuddy（腾讯 CodeBuddy）
 
-- 凭据在 `%APPDATA%\CodeBuddy\User\globalStorage\state.vscdb`（SQLite **TEXT** 列）
-  的 safeStorage Buffer，解密链和 Qoder 同款
+- 凭据在 `%APPDATA%\WorkBuddy\User\globalStorage\state.vscdb`（SQLite **TEXT** 列）
+  键 `secret://{"extensionId":"tencent-cloud.coding-copilot","key":"planning-genie.new.accessTokencn"}`
+  的 safeStorage Buffer，解密链和 Qoder 同款（旧版 CodeBuddy 客户端才用
+  `%APPDATA%\CodeBuddy` + `accessToken`，本工具不接管）
 - 接口基址**跟随账号 domain**（`www.workbuddy.cn` / `www.codebuddy.cn` / 国际版 `.ai`）；
   网关要求浏览器 UA + `X-User-Id` + `X-Domain` 头，少一个 401
 - 兼容 Cockpit Tools 的加密账号库（AES-256-GCM，密钥在其数据目录）
+- **导入后凭据复制进本工具账号池**（DPAPI 加密），运行时不依赖 Cockpit；
+  两边同时续期同一个账号可能互相轮换 refresh token，建议一个账号只由一个工具负责续期
+- **积分到期取 `PackageEndTime`**（实测 `CycleEndTime` 在纯积分包上常为 0）；
+  数值兼容秒/毫秒，也兼容 `YYYY-MM-DD HH:mm:ss` 字符串
+
+### 妙手（美团 CatPaw）
+
+- 鉴权要**同时**带 `X-Auth-Token` 和 `access-token`（同值），少一个 `4011`
+- **没有每日签到**：积分来自套餐，别去实现「每日领取」
+- **`nextRefreshTime` 是套餐刷新时间，不是积分到期**：到期取订阅接口的
+  `expireTime`；体验版实测不返回该字段，界面如实显示「平台未提供」。
+  下次刷新时间单独一行显示（本地日期），注册奖励/每月发放的历史流水接口不提供
 
 ### 凭据保护
 
@@ -272,12 +347,15 @@ npm test                     # 前端测试：分组聚合 / 账号卡 / 签到�
 
 ```
 %APPDATA%\CheckinBox\
-  ├── config.json              应用配置（各平台调度/间隔/阈值/侧栏顺序/聊天同步开关/关闭行为）
+  ├── config.json              应用配置（各平台调度/间隔/阈值/侧栏顺序/聊天同步开关/关闭行为/提醒开关）
+  ├── notifications.json       最近 100 条应用内提醒及已读状态
   ├── accounts.json            账号池（凭据 DPAPI 加密后 base64）
   ├── scheduler_state.json     当日调度计划（每账号随机分钟偏移 + 今日已处理标记）
   ├── auth_pending.json        未完成的浏览器授权会话（重启后恢复轮询）
   ├── quota_history.jsonl      积分快照（趋势图数据源，最多 4000 条）
   ├── chat_history\            换号同步的聊天记录归档（WorkBuddy 合并备份 / Qoder 每账号一份聊天库）
+  ├── client_login_backups\    客户端登录态的多代备份（换号前现场，可回滚）
+  │   └── <平台>\<操作id>\     auth.json + auth-state.json + meta.json
   └── logs\
       └── checkin-2026-10.jsonl  签到流水，按月分文件
 ```
@@ -311,7 +389,7 @@ src-tauri/src/
 │   ├── paths.rs            数据目录布局 + 原子写
 │   ├── launcher.rs         客户端 exe 动态定位 + 进程检测 + 关闭/启动
 │   ├── client_switch.rs    改写客户端登录态实现换号（四平台）
-│   ├── chat_sync.rs        换号同步聊天记录（WorkBuddy 合并 / Qoder 归档回填 + 备份管理）
+│   ├── chat_sync.rs        换号会话处理（WorkBuddy 合并 / Qoder 本地历史共享 + 备份管理）
 │   └── tz.rs               Windows 时区名 → IANA
 ├── providers/              minimax.rs / qoder.rs / miaoshou.rs / workbuddy.rs
 ├── commands.rs             Tauri 命令层 + 调度器后台循环

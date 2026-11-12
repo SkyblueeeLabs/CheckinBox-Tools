@@ -1,19 +1,15 @@
 //! 换号时同步客户端本地聊天记录（机制调研自上游 Cockpit Tools）。
 //!
-//! 上游的做法（`workbuddy_session_transfer.rs`）：WorkBuddy 的会话正文按 **UID**
-//! 分目录存在 `%LOCALAPPDATA%\CodeBuddyExtension\Data\<uid>\<产品>\<uid>\history\…`，
-//! 切号前把来源账号的会话**合并**进目标账号名下（同 id 比 lastMessageAt 新者胜，
-//! 新 id 直接复制），再重映射会话库的 user_id；开关 `share_sessions_on_switch` 控制。
+//! WorkBuddy 5.x 的会话记录由 `~/.workbuddy/workbuddy.db` 中 `sessions.user_id`
+//! 过滤。切号前把所有未删除会话重映射到目标 UID；旧版扩展目录仍做文件级合并。
 //!
 //! 本项目的两个客户端形态不同，分别落地为：
 //!
-//! * **WorkBuddy（CodeBuddy IDE）**——与上游同构：会话正文按 uid 分目录，
-//!   直接迁移上游的「目录级合并」算法（本机无 `workbuddy.db`，
-//!   旧版 `codebuddy-sessions.vscdb` 是空库，数据库重映射做成无行则跳过的防御逻辑）。
-//! * **Qoder CN**——Electron 应用，聊天库 `main.sqlite`（`chat_sessions` 表
-//!   **没有 user_id 列**，会话是本机全局的，重映射不可行），改用**文件级换库**：
-//!   换号前把当前聊天库归档给来源账号，再回填目标账号的归档；目标没有归档
-//!   就清空（新账号从空白开始，与需求「未勾选保持空白」的直觉一致）。
+//! * **WorkBuddy 5.x**——切号时备份并更新 `workbuddy.db` 的活动会话 `user_id`，
+//!   让客户端查询时能看到原账号会话；旧版 CodeBuddy IDE 扩展目录保留兼容路径。
+//! * **Qoder CN**——会话索引和消息在 `main.sqlite`，项目正文在
+//!   `~/.qoder-cn/projects`。客户端数据库没有账号字段；会话在本机共享，
+//!   切号时不搬动数据库或项目文件。
 //!
 //! 触发时机与上游一致：**换号写凭据之前**（客户端已完全退出），见
 //! `client_switch::switch`。MiniMax 的会话在服务端、客户端登录即自动拉取，
@@ -23,8 +19,7 @@
 //!   * 动手前把涉及的现有文件**先备份**到
 //!     `chat_history\<provider>\_backups\<操作id>\`（每次操作独立目录，
 //!     不覆盖旧备份、不自动清理）；
-//!   * Qoder 的现场库归档时还会另存一份到 `chat_history\qoder\<账号id>\payload\`，
-//!     同一份历史至少同时存在「当次备份 + 账号归档」两份；
+//!   * 旧版 Qoder 账号归档保留作历史恢复，不再参与新切换，避免搬走共享聊天索引；
 //!   * WorkBuddy **只读来源账号**，目标账号的会话只增不删；替换任何会话/索引前，
 //!     先把原目录/原文件整个移进备份；
 //!   * sqlite 必须**主库 + `-wal`/`-shm` 成组**搬，否则数据不一致；
@@ -34,7 +29,9 @@
 //!   * 客户端必须在运行检测不通过（`launcher::is_running`）时拒绝执行。
 
 use anyhow::{anyhow, Result};
+use rusqlite::Connection;
 use serde::Serialize;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use super::paths::{data_dir, ensure_dir};
@@ -57,25 +54,30 @@ pub struct ChatSyncReport {
     pub replaced: usize,
 }
 
-/// 这个平台的客户端要不要（能不能）做聊天记录同步。
-///
-/// 只有「聊天记录存本地」且工具有换号能力的平台才有意义：
-/// MiniMax 的会话在服务端自动跟随账号，不需要也不提供此开关。
+/// 这个平台是否需要用户可配置的会话迁移开关。
+/// Qoder 的本地会话库本来就是跨账号共享；MiniMax 的会话由服务端同步。
 pub fn supports(provider: &str) -> bool {
-    matches!(provider, "workbuddy" | "qoder")
+    provider == "workbuddy"
 }
 
 /// 换号入口：把聊天记录从 `from` 账号带到 `to` 账号名下。
 ///
-/// `from` 为 `None`（客户端当前登录识别失败）时 Qoder 跳过（无法归属的
-/// 历史不能乱动），WorkBuddy 同样跳过 —— 宁可不同步，不能弄丢。
+/// Qoder 使用单机共享会话库，不依赖来源 UID；WorkBuddy 仍需识别来源账号。
 /// 调用方保证客户端已完全退出；这里再做一次进程防御。
 pub fn sync_on_switch(provider: &str, from: Option<&str>, to: &str) -> Result<ChatSyncReport> {
-    if !supports(provider) {
+    if !matches!(provider, "workbuddy" | "qoder") {
         return Ok(skipped("该平台不需要/不支持聊天记录同步"));
     }
     if super::launcher::is_running(provider) {
         return Err(anyhow!("客户端正在运行，不能同步聊天记录"));
+    }
+    if provider == "qoder" {
+        let op = operation_id();
+        return share_qoder_chat(
+            &qoder_user_data()?,
+            &qoder_archive_root(),
+            &backup_root("qoder", &op),
+        );
     }
     let Some(from) = from.filter(|f| !f.is_empty()) else {
         return Ok(skipped("没识别出客户端当前登录的账号，聊天记录保持原样"));
@@ -86,14 +88,50 @@ pub fn sync_on_switch(provider: &str, from: Option<&str>, to: &str) -> Result<Ch
 
     let op = operation_id();
     match provider {
-        "qoder" => swap_qoder_chat(&qoder_user_data()?, &qoder_archive_root(), from, to, &op),
+        "qoder" => unreachable!("Qoder shared history returns before account-specific sync"),
         "workbuddy" => {
-            let Some(root) = workbuddy_extension_data_dir() else {
-                return Ok(skipped("本机没有 CodeBuddy 会话数据目录"));
+            let Some(config_root) = workbuddy_config_dir() else {
+                return Ok(skipped("无法定位 WorkBuddy 本地数据目录"));
             };
             let backup = backup_root("workbuddy", &op);
-            ensure_dir(&backup)?;
-            merge_uid_history(&root, from, to, &backup)
+            let mut report = remap_workbuddy_database_user_id(
+                &config_root.join("workbuddy.db"), to, &backup.join("database"),
+            )?;
+
+            // Sidebar snapshot is a cache/seed; the database user_id is the
+            // authoritative filter used by WorkBuddy 5.x to list sessions.
+            let snapshot = config_root.join(from).join("sidebar-list-snapshot.json");
+            if snapshot.is_file() {
+                match sync_workbuddy_sidebar_snapshot(&config_root, from, to, &backup) {
+                    Ok(snapshot_report) => combine_workbuddy_reports(&mut report, snapshot_report),
+                    Err(error) => {
+                        report.detail = format!("数据库会话已迁移；更新列表快照时遇到问题：{error}");
+                    }
+                }
+            }
+
+            // Preserve compatibility with older WorkBuddy/CodeBuddy versions
+            // that keep transcript indexes in per-UID extension directories.
+            if let Some(extension_root) = workbuddy_extension_data_dir(from, to) {
+                let source = extension_root.join(from);
+                if source.is_dir() {
+                    match merge_uid_history(&extension_root, from, to, &backup.join("legacy-extension")) {
+                        Ok(extension_report) => combine_workbuddy_reports(&mut report, extension_report),
+                        Err(error) => {
+                            report.detail = format!("{}；旧版扩展会话目录合并失败：{error}", report.detail);
+                        }
+                    }
+                }
+            }
+
+            if report.added == 0 && report.replaced == 0 && report.detail.is_empty() {
+                Ok(skipped("WorkBuddy 数据库中没有可同步的活动会话"))
+            } else {
+                if report.detail.is_empty() {
+                    report.detail = format!("已将 WorkBuddy 本地活动会话共享给目标账号：{} 条", report.added);
+                }
+                Ok(report)
+            }
         }
         _ => Ok(skipped("未知平台")),
     }
@@ -177,6 +215,7 @@ fn remove_dir_all_quiet(path: &Path) {
 }
 
 /// 把现场聊天库文件移进 trash（同盘 rename 优先，失败退回复制+删除）。
+#[cfg(test)]
 fn move_live_to_trash(_root: &Path, live: &[Vec<PathBuf>], trash: &Path) {
     for group in live {
         for src in group.iter().filter(|p| p.is_file()) {
@@ -192,6 +231,7 @@ fn move_live_to_trash(_root: &Path, live: &[Vec<PathBuf>], trash: &Path) {
 }
 
 /// 回填失败时把 trash 里的文件尽量移回现场。
+#[cfg(test)]
 fn restore_from_trash(root: &Path, trash: &Path) {
     if let Ok(entries) = std::fs::read_dir(trash) {
         for entry in entries.flatten() {
@@ -201,6 +241,7 @@ fn restore_from_trash(root: &Path, trash: &Path) {
 }
 
 /// 从归档 payload 回填聊天库到 userData 根（主文件 + sidecar 成组）。
+#[cfg(test)]
 fn fill_from_payload(
     root: &Path,
     payload: &Path,
@@ -234,6 +275,7 @@ fn fill_from_payload(
 /// 另两个是聊天相关的配套库；一律**主文件 + `-wal`/`-shm` 成组**处理。
 /// 不搬迁移台账（sessionMigration/memoryMigration，设备级状态）与
 /// `qoder-data.v1.json`（agent 运行时配置，非聊天，且含 deviceId）。
+#[cfg(test)]
 const QODER_CHAT_FILES: &[&str] = &[
     "main.sqlite",
     "chat-session-turn-payload-buffer.sqlite",
@@ -248,22 +290,186 @@ fn qoder_user_data() -> Result<PathBuf> {
         .ok_or_else(|| anyhow!("没有找到 Qoder CN 客户端的数据目录"))
 }
 
+/// Qoder stores sessions/messages and their workspace catalog in the device-local
+/// main database, with transcript files under `~/.qoder-cn/projects`. The
+/// database has no account ownership column, so keeping it in place preserves
+/// history across credential switches. Old per-account archives may have been
+/// swapped into the live database without their `workspaces` rows; restore those
+/// alongside chat rows so Qoder can render its workspace/session sidebar.
+fn share_qoder_chat(root: &Path, archive_root: &Path, backup_dir: &Path) -> Result<ChatSyncReport> {
+    let db_path = root.join("main.sqlite");
+    if !db_path.is_file() {
+        return Ok(ChatSyncReport {
+            action: "shared".into(),
+            detail: "Qoder 的会话记录由本机共享；客户端尚未创建会话数据库".into(),
+            ..Default::default()
+        });
+    }
+    reject_symlink(root)?;
+    reject_symlink(&db_path)?;
+    for suffix in ["-wal", "-shm"] {
+        let mut sidecar = db_path.as_os_str().to_os_string();
+        sidecar.push(suffix);
+        reject_symlink(&PathBuf::from(sidecar))?;
+    }
+
+    // Previous versions moved main.sqlite into a per-account archive, which
+    // could leave the live database empty. Merge only chat_* rows back into
+    // the shared database; app settings, migrations and credentials stay put.
+    let mut sources = Vec::new();
+    if archive_root.is_dir() {
+        reject_symlink(archive_root)?;
+        for entry in std::fs::read_dir(archive_root)? {
+            let entry = entry?;
+            let uid = entry.file_name().to_string_lossy().into_owned();
+            if uid == "_backups" || uid.starts_with('.') || validate_path_segment(&uid).is_err() {
+                continue;
+            }
+            let payload = entry.path().join("payload");
+            reject_symlink(&payload)?;
+            let source = payload.join("main.sqlite");
+            if !source.is_file() { continue; }
+            reject_symlink(&entry.path())?;
+            reject_symlink(&source)?;
+            for suffix in ["-wal", "-shm"] {
+                let mut sidecar = source.as_os_str().to_os_string();
+                sidecar.push(suffix);
+                reject_symlink(&PathBuf::from(sidecar))?;
+            }
+            sources.push(source);
+        }
+    }
+
+    let mut connection = Connection::open(&db_path)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    let has_sessions: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='chat_sessions')",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_sessions {
+        return Ok(ChatSyncReport {
+            action: "shared".into(),
+            detail: "Qoder 的本地会话库结构尚未初始化；切换时没有移动或清理任何记录".into(),
+            ..Default::default()
+        });
+    }
+
+    let mut live_sessions: usize = connection.query_row(
+        "SELECT COUNT(*) FROM chat_sessions", [], |row| row.get(0),
+    )?;
+    let mut recovered_sessions = 0usize;
+    let mut recovered_workspaces = 0usize;
+    let mut recovered_rows = 0usize;
+    let mut schema_mismatch = false;
+
+    // Attach source DBs first so the operation can be rolled back as one unit.
+    for (index, source) in sources.iter().enumerate() {
+        let alias = format!("history_{index}");
+        let source_path = source.to_string_lossy();
+        connection.execute(&format!("ATTACH DATABASE ?1 AS {alias}"), [source_path.as_ref()])?;
+    }
+
+    connection.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    let mut pending_rows = 0usize;
+    for (index, _) in sources.iter().enumerate() {
+        let alias = format!("history_{index}");
+        let source_tables = qoder_history_tables(&connection, &alias)?;
+        for table in source_tables {
+            if table.contains("fts") { continue; }
+            let source_info = qoder_table_columns(&connection, &alias, &table)?;
+            let target_info = qoder_table_columns(&connection, "main", &table)?;
+            if source_info.iter().map(|c| &c.0).ne(target_info.iter().map(|c| &c.0)) {
+                schema_mismatch = true;
+                continue;
+            }
+            let keys: Vec<_> = target_info.iter().filter(|c| c.1 > 0).map(|c| c.0.clone()).collect();
+            if keys.is_empty() { continue; }
+            let predicate = keys.iter().map(|key| format!("dst.\"{key}\" IS src.\"{key}\"")).collect::<Vec<_>>().join(" AND ");
+            let sql = format!(
+                "SELECT COUNT(*) FROM {alias}.\"{table}\" AS src WHERE NOT EXISTS (SELECT 1 FROM main.\"{table}\" AS dst WHERE {predicate})"
+            );
+            pending_rows += connection.query_row(&sql, [], |row| row.get::<_, i64>(0))? as usize;
+        }
+    }
+
+    if pending_rows > 0 {
+        // Preserve the complete current SQLite set (including WAL state) before
+        // applying the account archives to the shared DB.
+        ensure_dir(backup_dir)?;
+        for suffix in ["", "-wal", "-shm"] {
+            let mut name = db_path.as_os_str().to_os_string();
+            name.push(suffix);
+            let path = PathBuf::from(name);
+            if path.is_file() {
+                reject_symlink(&path)?;
+                std::fs::copy(&path, backup_dir.join(path.file_name().expect("database file name")))?;
+            }
+        }
+
+        let transaction = connection.transaction()?;
+        for (index, _) in sources.iter().enumerate() {
+            let alias = format!("history_{index}");
+            for table in qoder_history_tables(&transaction, &alias)? {
+                if table.contains("fts") { continue; }
+                let source_info = qoder_table_columns(&transaction, &alias, &table)?;
+                let target_info = qoder_table_columns(&transaction, "main", &table)?;
+                if source_info.iter().map(|c| &c.0).ne(target_info.iter().map(|c| &c.0)) {
+                    continue;
+                }
+                let before = transaction.changes();
+                transaction.execute(
+                    &format!("INSERT OR IGNORE INTO main.\"{table}\" SELECT * FROM {alias}.\"{table}\""),
+                    [],
+                )?;
+                let inserted = (transaction.changes() - before) as usize;
+                recovered_rows += inserted;
+                if table == "chat_sessions" { recovered_sessions += inserted; }
+                if table == "workspaces" { recovered_workspaces += inserted; }
+            }
+        }
+        transaction.commit()?;
+        live_sessions = connection.query_row("SELECT COUNT(*) FROM chat_sessions", [], |row| row.get(0))?;
+    }
+    for index in (0..sources.len()).rev() {
+        connection.execute_batch(&format!("DETACH DATABASE history_{index};"))?;
+    }
+
+    Ok(ChatSyncReport {
+        action: "shared".into(),
+        detail: if recovered_rows > 0 {
+            format!("已恢复 {recovered_workspaces} 个工作区、{recovered_sessions} 条会话；Qoder 切号继续共用本机历史（当前共 {live_sessions} 条）")
+        } else if schema_mismatch {
+            format!("Qoder 会话历史保留在本机共享数据库中（当前 {live_sessions} 条）；旧归档版本不同，未自动导入")
+        } else {
+            format!("Qoder 会话记录在本机共享数据库和项目目录中；切换账号时不搬动历史（当前索引 {live_sessions} 条）")
+        },
+        ..Default::default()
+    })
+}
+
 fn qoder_archive_root() -> PathBuf {
     data_dir().join("chat_history").join("qoder")
 }
 
 /// 一个聊天库文件的「成组」路径：主文件 + -wal + -shm。
+#[cfg(test)]
 fn sqlite_group(root: &Path, name: &str) -> Vec<PathBuf> {
-    [name.to_string(), format!("{name}-wal"), format!("{name}-shm")]
-        .iter()
-        .map(|n| root.join(n))
-        .collect()
+    [
+        name.to_string(),
+        format!("{name}-wal"),
+        format!("{name}-shm"),
+    ]
+    .iter()
+    .map(|n| root.join(n))
+    .collect()
 }
 
 /// Qoder 换号：把当前聊天库归档给 `from`，再回填 `to` 的归档（没有就清空）。
 ///
 /// 布局：`chat_history\qoder\<账号id>\payload\`（与 userData 根同构）。
 /// 所有步骤先备份、staging 后 rename，任何一步失败都保留原状并如实报错。
+#[cfg(test)]
 fn swap_qoder_chat(
     root: &Path,
     arc_root: &Path,
@@ -338,7 +544,9 @@ fn swap_qoder_chat(
         .iter()
         .any(|f| target_payload.join(f).is_file());
     if !has_target && live.is_empty() {
-        return Ok(skipped("客户端没有本地聊天记录，目标账号也没有归档，无需同步"));
+        return Ok(skipped(
+            "客户端没有本地聊天记录，目标账号也没有归档，无需同步",
+        ));
     }
 
     ensure_dir(arc_root)?;
@@ -363,9 +571,7 @@ fn swap_qoder_chat(
     Ok(match action {
         "swapped" => ChatSyncReport {
             action: action.into(),
-            detail: format!(
-                "已把 {from} 的聊天记录归档，并回填 {to} 的历史会话（原库已备份）"
-            ),
+            detail: format!("已把 {from} 的聊天记录归档，并回填 {to} 的历史会话（原库已备份）"),
             files,
             bytes,
             ..Default::default()
@@ -542,16 +748,39 @@ pub fn delete_backups_older_than(days: u32) -> Result<usize> {
 }
 
 // ---------------------------------------------------------------------------
-// WorkBuddy（CodeBuddy IDE）：按 uid 合并会话目录
+// WorkBuddy：按 uid 合并会话数据库与旧版会话列表
 // ---------------------------------------------------------------------------
 
-/// 会话正文根目录：WorkBuddy 5.x 用 `WorkBuddyExtension\Data`，
-/// CodeBuddy（本机实测）用 `CodeBuddyExtension\Data`，存在哪个用哪个。
-fn workbuddy_extension_data_dir() -> Option<PathBuf> {
+/// 会话正文根目录必须跟随当前客户端的登录态目录。
+///
+/// 登录态由 `wb_session::auth_file` 锚定到客户端实际使用的扩展数据树。旧逻辑
+/// 只按目录名排序（WorkBuddyExtension 优先），当机器同时残留新旧目录时会把
+/// 会话合并到未被当前客户端读取的那棵树里，界面看起来就像“同步成功但没记录”。
+fn workbuddy_extension_data_dir(from: &str, to: &str) -> Option<PathBuf> {
+    if let Some(auth_file) = super::wb_session::auth_file().filter(|path| path.is_file()) {
+        // ...\<Extension>\Data\Public\auth\workbuddy-desktop.info
+        if let Some(root) = auth_file
+            .parent()
+            .and_then(Path::parent)
+            .and_then(Path::parent)
+            .filter(|path| path.is_dir())
+        {
+            return Some(root.to_path_buf());
+        }
+    }
+
     let base = std::env::var_os("LOCALAPPDATA")?;
     for name in ["WorkBuddyExtension", "CodeBuddyExtension"] {
         let dir = PathBuf::from(&base).join(name).join("Data");
-        if dir.is_dir() {
+        if dir.is_dir() && dir.join(from).is_dir() {
+            return Some(dir);
+        }
+    }
+    // 兼容没有可用 auth_file 的旧客户端：若源账号目录不存在，也返回现存
+    // 数据目录，让上层给出明确的跳过原因，而不是误选另一棵目录。
+    for name in ["WorkBuddyExtension", "CodeBuddyExtension"] {
+        let dir = PathBuf::from(&base).join(name).join("Data");
+        if dir.is_dir() && dir.join(to).exists() {
             return Some(dir);
         }
     }
@@ -566,13 +795,271 @@ fn backup_root(provider: &str, op: &str) -> PathBuf {
         .join(op)
 }
 
+/// WorkBuddy Desktop stores its local sidebar per account UID, while transcript
+/// JSONL files live in the shared `projects` tree. Seeding the target snapshot
+/// is what makes those existing conversations visible after account switching.
+fn workbuddy_config_dir() -> Option<PathBuf> {
+    for key in ["WORKBUDDY_CONFIG_DIR", "CODEBUDDY_CONFIG_DIR"] {
+        if let Some(value) = std::env::var_os(key).filter(|v| !v.is_empty()) {
+            return Some(PathBuf::from(value));
+        }
+    }
+    dirs::home_dir().map(|home| home.join(".workbuddy"))
+}
+
+/// Cockpit's WorkBuddy 5.x path: the conversation list is filtered from the
+/// shared `workbuddy.db` by `sessions.user_id`, so copy/seed files alone do not
+/// make the conversations visible to the selected account.
+fn remap_workbuddy_database_user_id(
+    db_path: &Path,
+    target_uid: &str,
+    backup_dir: &Path,
+) -> Result<ChatSyncReport> {
+    validate_path_segment(target_uid)?;
+    if !db_path.is_file() {
+        return Ok(ChatSyncReport::default());
+    }
+    reject_symlink(db_path)?;
+
+    let connection = Connection::open(db_path)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    let has_sessions: bool = connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type='table' AND name='sessions')",
+        [], |row| row.get(0),
+    )?;
+    if !has_sessions {
+        return Ok(ChatSyncReport::default());
+    }
+    let mut statement = connection.prepare("PRAGMA table_info(sessions)")?;
+    let columns = statement.query_map([], |row| row.get::<_, String>(1))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(statement);
+    if !columns.iter().any(|column| column == "user_id") {
+        return Ok(ChatSyncReport::default());
+    }
+    let has_deleted_at = columns.iter().any(|column| column == "deleted_at");
+    let active_filter = if has_deleted_at { " AND deleted_at IS NULL" } else { "" };
+    let count_sql = format!("SELECT COUNT(*) FROM sessions WHERE user_id != ?1{active_filter}");
+    let moved: usize = connection.query_row(&count_sql, [target_uid], |row| row.get(0))?;
+    drop(connection);
+    if moved == 0 {
+        return Ok(ChatSyncReport::default());
+    }
+
+    // Back up the complete SQLite file set before changing ownership. WorkBuddy
+    // is already closed by the account-switch flow, so the trio is consistent.
+    ensure_dir(backup_dir)?;
+    for suffix in ["", "-wal", "-shm"] {
+        let mut source_name = db_path.as_os_str().to_os_string();
+        source_name.push(suffix);
+        let source = PathBuf::from(source_name);
+        if !source.is_file() { continue; }
+        reject_symlink(&source)?;
+        let name = source.file_name().ok_or_else(|| anyhow!("WorkBuddy 数据库路径无文件名"))?;
+        std::fs::copy(&source, backup_dir.join(name))?;
+    }
+
+    let mut connection = Connection::open(db_path)?;
+    connection.busy_timeout(std::time::Duration::from_secs(5))?;
+    let update_sql = format!("UPDATE sessions SET user_id = ?1 WHERE user_id != ?1{active_filter}");
+    let transaction = connection.transaction()?;
+    let updated = transaction.execute(&update_sql, [target_uid])?;
+    transaction.commit()?;
+
+    Ok(ChatSyncReport {
+        action: "merged".into(),
+        detail: format!("WorkBuddy 数据库已将 {updated} 条未删除会话索引归入目标账号"),
+        files: 1,
+        bytes: std::fs::metadata(db_path).map(|meta| meta.len()).unwrap_or_default(),
+        added: updated,
+        ..Default::default()
+    })
+}
+
+fn combine_workbuddy_reports(target: &mut ChatSyncReport, source: ChatSyncReport) {
+    if source.action != "merged" || (source.added == 0 && source.replaced == 0) {
+        return;
+    }
+    target.action = "merged".into();
+    if !target.detail.is_empty() { target.detail.push_str("；"); }
+    target.detail.push_str(&source.detail);
+    target.added += source.added;
+    target.replaced += source.replaced;
+    target.files += source.files;
+    target.bytes += source.bytes;
+}
+
+fn sync_workbuddy_sidebar_snapshot(
+    root: &Path,
+    from: &str,
+    to: &str,
+    backup_root: &Path,
+) -> Result<ChatSyncReport> {
+    validate_path_segment(from)?;
+    validate_path_segment(to)?;
+    reject_symlink(root)?;
+    let source_dir = root.join(from);
+    let target_dir = root.join(to);
+    reject_symlink(&source_dir)?;
+    reject_symlink(&target_dir)?;
+    let source_path = source_dir.join("sidebar-list-snapshot.json");
+    let target_path = target_dir.join("sidebar-list-snapshot.json");
+    reject_symlink(&source_path)?;
+    reject_symlink(&target_path)?;
+
+    let source: serde_json::Value = serde_json::from_slice(&std::fs::read(&source_path)?)?;
+    let source_items = source.get("items").and_then(|v| v.as_array())
+        .ok_or_else(|| anyhow!("WorkBuddy 来源会话快照格式无效"))?;
+    if source_items.is_empty() {
+        return Ok(skipped("WorkBuddy 来源账号的本地会话列表为空"));
+    }
+
+    let projects = root.join("projects");
+    reject_symlink(&projects)?;
+    let mut incoming = Vec::new();
+    for item in source_items {
+        if item.get("transport").and_then(|v| v.as_str()) != Some("local") {
+            continue;
+        }
+        let Some(id) = item.get("id").and_then(|v| v.as_str()) else { continue };
+        if validate_path_segment(id).is_err() || id.ends_with(".jsonl") { continue; }
+        let Some(workspace) = item.get("space").and_then(|v| v.get("name")).and_then(|v| v.as_str()) else { continue };
+        let workspace_dir = projects.join(compress_workbuddy_workspace(workspace));
+        reject_symlink(&workspace_dir)?;
+        let transcript = workspace_dir.join(format!("{id}.jsonl"));
+        reject_symlink(&transcript)?;
+        if transcript.is_file() {
+            incoming.push(item.clone());
+        }
+    }
+    if incoming.is_empty() {
+        return Ok(skipped("来源快照中没有找到对应的本地聊天正文文件"));
+    }
+
+    let mut target_items = if target_path.is_file() {
+        let target: serde_json::Value = serde_json::from_slice(&std::fs::read(&target_path)?)?;
+        target.get("items").and_then(|v| v.as_array()).cloned()
+            .ok_or_else(|| anyhow!("WorkBuddy 目标会话快照格式无效，已保留原文件"))?
+    } else { Vec::new() };
+
+    let mut added = 0;
+    let mut replaced = 0;
+    for item in incoming {
+        let id = item.get("id").and_then(|v| v.as_str()).unwrap_or_default();
+        if let Some(existing) = target_items.iter_mut().find(|v| v.get("id").and_then(|x| x.as_str()) == Some(id)) {
+            if workbuddy_snapshot_is_newer(&item, existing) {
+                *existing = item;
+                replaced += 1;
+            }
+        } else {
+            target_items.push(item);
+            added += 1;
+        }
+    }
+    if added == 0 && replaced == 0 {
+        return Ok(ChatSyncReport {
+            action: "merged".into(), detail: "目标账号已包含来源账号的本地会话，无需更新".into(),
+            ..Default::default()
+        });
+    }
+
+    ensure_dir(backup_root)?;
+    if target_path.is_file() {
+        let backup = backup_root.join(to).join("sidebar-list-snapshot.json");
+        ensure_dir(backup.parent().expect("backup has parent"))?;
+        std::fs::copy(&target_path, &backup)?;
+    }
+    let saved_at = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default().as_millis() as u64;
+    let output = serde_json::json!({"version": 3, "savedAt": saved_at, "items": target_items});
+    super::paths::atomic_write(&target_path, &serde_json::to_vec_pretty(&output)?)?;
+
+    Ok(ChatSyncReport {
+        action: "merged".into(),
+        detail: format!("已将来源账号的本地会话加入目标账号：新增 {added} 条、更新 {replaced} 条（目标原有记录已保留）"),
+        added,
+        replaced,
+        files: 1,
+        bytes: std::fs::metadata(&target_path).map(|m| m.len()).unwrap_or_default(),
+    })
+}
+
+fn workbuddy_snapshot_is_newer(source: &serde_json::Value, target: &serde_json::Value) -> bool {
+    let stamp = |v: &serde_json::Value| {
+        v.get("updatedAt").and_then(|x| x.as_i64()).unwrap_or(0)
+            .max(v.get("lastActivityAt").and_then(|x| x.as_i64()).unwrap_or(0))
+    };
+    stamp(source) > stamp(target)
+}
+
+fn qoder_history_tables(connection: &Connection, schema: &str) -> Result<Vec<String>> {
+    if schema.is_empty() || !schema.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+        return Err(anyhow!("Qoder 会话数据库别名不合法"));
+    }
+    let mut statement = connection.prepare(&format!(
+        "SELECT name FROM {schema}.sqlite_master WHERE type='table' AND (name LIKE 'chat_%' OR name = 'workspaces') ORDER BY name"
+    ))?;
+    let names = statement.query_map([], |row| row.get::<_, String>(0))?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    if names.iter().any(|name| {
+        name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    }) {
+        return Err(anyhow!("Qoder 会话数据库包含不安全的表名"));
+    }
+    Ok(names)
+}
+
+/// Return ordered column names and primary-key positions. Table and schema names
+/// originate from SQLite metadata or our generated aliases, and are validated
+/// before being interpolated into PRAGMA statements.
+fn qoder_table_columns(connection: &Connection, schema: &str, table: &str) -> Result<Vec<(String, i64)>> {
+    let valid_identifier = |value: &str| {
+        !value.is_empty() && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
+    };
+    if !valid_identifier(schema) || !valid_identifier(table) {
+        return Err(anyhow!("Qoder 会话数据库包含不安全的表名"));
+    }
+    let mut statement = connection.prepare(&format!("PRAGMA {schema}.table_info(\"{table}\")"))?;
+    let columns = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(1)?, row.get::<_, i64>(5)?))
+    })?.collect::<std::result::Result<Vec<_>, _>>()?;
+    Ok(columns)
+}
+
+/// Mirrors WorkBuddy's workspace folder naming used by its local history source.
+fn compress_workbuddy_workspace(workspace: &str) -> String {
+    let normalized = workspace.replace(['/', '\\', ':'], "-");
+    let normalized = normalized.trim_matches('-').split('-').filter(|s| !s.is_empty()).collect::<Vec<_>>().join("-");
+    if normalized.len() <= 255 { return normalized; }
+    let mut prefix = String::new();
+    for ch in normalized.chars() {
+        if prefix.len() + ch.len_utf8() > 180 { break; }
+        prefix.push(ch);
+    }
+    let hash = normalized.as_bytes().iter().fold(5381u32, |h, b| h.wrapping_mul(33) ^ u32::from(*b));
+    let mut n = hash;
+    let mut suffix = String::new();
+    loop {
+        let digit = (n % 36) as u8;
+        suffix.push(if digit < 10 { (b'0' + digit) as char } else { (b'a' + digit - 10) as char });
+        n /= 36;
+        if n == 0 { break; }
+    }
+    format!("{prefix}-{}", suffix.chars().rev().collect::<String>())
+}
+
 /// 把来源账号 uid 的本地会话合并进目标账号 uid 名下（上游同款算法）。
 ///
 /// 目录结构（本机实测）：`Data\<uid>\<产品>\<uid>\history\<工作区hash>\
 /// index.json + <会话id>\`，另有 `check-point\<工作区>\<会话id>\` 辅助目录。
 /// 合并规则：会话 id 相同比 `lastMessageAt` **新者胜**（替换），目标缺失的
 /// 直接复制（added）；目标已有且不旧于来源的保留不动。
-fn merge_uid_history(root: &Path, from: &str, to: &str, backup_root: &Path) -> Result<ChatSyncReport> {
+fn merge_uid_history(
+    root: &Path,
+    from: &str,
+    to: &str,
+    backup_root: &Path,
+) -> Result<ChatSyncReport> {
     validate_path_segment(from)?;
     validate_path_segment(to)?;
     let source_outer = root.join(from);
@@ -692,17 +1179,30 @@ fn merge_workspace(
                 report.files += 1;
             }
             Some(pos) => {
-                // 同 id：来源更新才替换
-                if conversation_is_newer(conv, &target_convs[pos]) {
-                    let src_dir = source_ws.join(id);
-                    if src_dir.is_dir() {
-                        let rel = format!("history/{ws_name}/{id}");
-                        backup_then_copy_dir(&src_dir, &target_ws.join(id), backup_root, Some(&rel))?;
-                        copy_checkpoint(source_account, target_account, ws_name, id, backup_root)?;
-                        target_convs[pos] = conv.clone();
-                        report.replaced += 1;
-                        report.files += 1;
-                    }
+                // 同 id：来源更新才替换；lastMessageAt 相同也比较正文，避免
+                // WorkBuddy 两边时间戳相同但消息文件不同，导致同步被误判为无变化。
+                let src_dir = source_ws.join(id);
+                let dst_dir = target_ws.join(id);
+                let source_has_body = src_dir.is_dir();
+                let target_has_body = dst_dir.is_dir();
+                let same_timestamp_changed = source_has_body
+                    && target_has_body
+                    && timestamp_of(conv) > 0
+                    && timestamp_of(conv) == timestamp_of(&target_convs[pos])
+                    && !directories_equal(&src_dir, &dst_dir)?;
+                let target_body_missing = source_has_body && !target_has_body;
+
+                if source_has_body
+                    && (conversation_is_newer(conv, &target_convs[pos])
+                        || same_timestamp_changed
+                        || target_body_missing)
+                {
+                    let rel = format!("history/{ws_name}/{id}");
+                    backup_then_copy_dir(&src_dir, &dst_dir, backup_root, Some(&rel))?;
+                    copy_checkpoint(source_account, target_account, ws_name, id, backup_root)?;
+                    target_convs[pos] = conv.clone();
+                    report.replaced += 1;
+                    report.files += 1;
                 }
             }
         }
@@ -717,7 +1217,12 @@ fn merge_workspace(
         "conversations": target_convs,
         "current": if had_target { current } else { source_index["current"].clone() },
     });
-    write_json_backup_then(&target_index_path, &merged, backup_root, &format!("history/{ws_name}/index.json"))?;
+    write_json_backup_then(
+        &target_index_path,
+        &merged,
+        backup_root,
+        &format!("history/{ws_name}/index.json"),
+    )?;
     Ok(())
 }
 
@@ -729,8 +1234,14 @@ fn copy_checkpoint(
     conv_id: &str,
     backup_root: &Path,
 ) -> Result<()> {
-    let src = source_account.join("check-point").join(ws_name).join(conv_id);
-    let dst = target_account.join("check-point").join(ws_name).join(conv_id);
+    let src = source_account
+        .join("check-point")
+        .join(ws_name)
+        .join(conv_id);
+    let dst = target_account
+        .join("check-point")
+        .join(ws_name)
+        .join(conv_id);
     if src.is_dir() && !dst.exists() {
         backup_then_copy_dir(&src, &dst, backup_root, None)?;
     }
@@ -738,7 +1249,12 @@ fn copy_checkpoint(
 }
 
 /// 目录复制，带可选备份：`rel` 给出被覆盖项的相对路径，覆盖前先移进备份目录。
-fn backup_then_copy_dir(src: &Path, dst: &Path, backup_root: &Path, rel: Option<&str>) -> Result<()> {
+fn backup_then_copy_dir(
+    src: &Path,
+    dst: &Path,
+    backup_root: &Path,
+    rel: Option<&str>,
+) -> Result<()> {
     if dst.exists() {
         if let Some(rel) = rel {
             let bak = backup_root.join(rel);
@@ -760,7 +1276,12 @@ fn read_json(path: &Path) -> Result<serde_json::Value> {
 }
 
 /// 原子写 index.json，原文件先备份。
-fn write_json_backup_then(path: &Path, value: &serde_json::Value, backup_root: &Path, rel: &str) -> Result<()> {
+fn write_json_backup_then(
+    path: &Path,
+    value: &serde_json::Value,
+    backup_root: &Path,
+    rel: &str,
+) -> Result<()> {
     if path.is_file() {
         let bak = backup_root.join(rel);
         ensure_dir(bak.parent().unwrap_or(backup_root))?;
@@ -778,6 +1299,73 @@ fn conversations(index: &serde_json::Value) -> Vec<serde_json::Value> {
         .as_array()
         .cloned()
         .unwrap_or_default()
+}
+
+/// 比较会话正文目录，忽略符号链接（与复制逻辑保持一致），并按相对路径对齐文件。
+/// 逐块比较避免把完整聊天历史同时读入内存。
+fn directories_equal(left: &Path, right: &Path) -> Result<bool> {
+    let left_files = regular_files(left)?;
+    let right_files = regular_files(right)?;
+    if left_files.len() != right_files.len() {
+        return Ok(false);
+    }
+
+    for (left_rel, left_path) in left_files {
+        let Some((_, right_path)) = right_files
+            .iter()
+            .find(|(right_rel, _)| *right_rel == left_rel)
+        else {
+            return Ok(false);
+        };
+        if !files_equal(&left_path, right_path)? {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+fn regular_files(root: &Path) -> Result<Vec<(PathBuf, PathBuf)>> {
+    fn visit(root: &Path, dir: &Path, files: &mut Vec<(PathBuf, PathBuf)>) -> Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let meta = std::fs::symlink_metadata(&path)?;
+            if meta.file_type().is_symlink() {
+                continue;
+            }
+            if meta.is_dir() {
+                visit(root, &path, files)?;
+            } else if meta.is_file() {
+                files.push((path.strip_prefix(root)?.to_path_buf(), path));
+            }
+        }
+        Ok(())
+    }
+
+    let mut files = Vec::new();
+    visit(root, root, &mut files)?;
+    files.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(files)
+}
+
+fn files_equal(left: &Path, right: &Path) -> Result<bool> {
+    if std::fs::metadata(left)?.len() != std::fs::metadata(right)?.len() {
+        return Ok(false);
+    }
+    let mut left = std::io::BufReader::new(std::fs::File::open(left)?);
+    let mut right = std::io::BufReader::new(std::fs::File::open(right)?);
+    let mut left_buf = [0_u8; 8192];
+    let mut right_buf = [0_u8; 8192];
+    loop {
+        let left_read = left.read(&mut left_buf)?;
+        let right_read = right.read(&mut right_buf)?;
+        if left_read != right_read || left_buf[..left_read] != right_buf[..right_read] {
+            return Ok(false);
+        }
+        if left_read == 0 {
+            return Ok(true);
+        }
+    }
 }
 
 /// 来源会话是否比目标的新（lastMessageAt，RFC3339；解析失败当 0）。
@@ -801,7 +1389,11 @@ fn timestamp_of(conv: &serde_json::Value) -> i64 {
             Some(serde_json::Value::Number(n)) => {
                 if let Some(ms) = n.as_i64() {
                     // 10 位按秒，13 位按毫秒
-                    return if ms > 0 && ms < 1_000_000_000_000 { ms * 1000 } else { ms };
+                    return if ms > 0 && ms < 1_000_000_000_000 {
+                        ms * 1000
+                    } else {
+                        ms
+                    };
                 }
             }
             _ => {}
@@ -818,7 +1410,10 @@ mod tests {
     impl TempDir {
         fn new(tag: &str) -> Self {
             let id = operation_id();
-            let path = std::env::temp_dir().join(format!("checkinbox-chat-sync-{tag}-{}-{id}", std::process::id()));
+            let path = std::env::temp_dir().join(format!(
+                "checkinbox-chat-sync-{tag}-{}-{id}",
+                std::process::id()
+            ));
             remove_dir_all_quiet(&path);
             std::fs::create_dir_all(&path).unwrap();
             Self(path)
@@ -858,7 +1453,11 @@ mod tests {
         let report = swap_qoder_chat(&root, &arc, "accA", "accB", "op1").unwrap();
         assert_eq!(report.action, "cleared");
         assert!(!root.join("main.sqlite").exists(), "现场应被清空");
-        assert!(arc.join("accA").join("payload").join("main.sqlite").is_file());
+        assert!(arc
+            .join("accA")
+            .join("payload")
+            .join("main.sqlite")
+            .is_file());
         // 保底备份：动现场之前的原文件必须留在 _backups\<op>\ 里
         let bak = arc.join("_backups").join("op1").join("main.sqlite");
         assert!(bak.is_file(), "同步前必须先备份原聊天库");
@@ -873,7 +1472,11 @@ mod tests {
             b"chat-A-v1",
             "应回填 A 的归档"
         );
-        assert!(arc.join("accB").join("payload").join("main.sqlite").is_file());
+        assert!(arc
+            .join("accB")
+            .join("payload")
+            .join("main.sqlite")
+            .is_file());
     }
 
     #[test]
@@ -913,7 +1516,13 @@ mod tests {
         );
         write_file(&src_ws.join("conv1").join("messages.json"), b"src-conv1");
         write_file(&src_ws.join("conv2").join("messages.json"), b"src-conv2");
-        write_file(&src.join("check-point").join("ws1").join("conv2").join("meta.json"), b"cp");
+        write_file(
+            &src.join("check-point")
+                .join("ws1")
+                .join("conv2")
+                .join("meta.json"),
+            b"cp",
+        );
 
         // 目标账号：已有自己的 conv2（更旧）
         let tgt_ws = tgt.join("history").join("ws1");
@@ -923,7 +1532,10 @@ mod tests {
                 {"id":"conv2","createdAt":"2026-10-01T00:00:00Z","lastMessageAt":"2026-10-01T00:00:00Z"}],
                 "current":"conv2"}"#,
         );
-        write_file(&tgt_ws.join("conv2").join("messages.json"), b"tgt-conv2-old");
+        write_file(
+            &tgt_ws.join("conv2").join("messages.json"),
+            b"tgt-conv2-old",
+        );
 
         let report = merge_uid_history(&root, "uidA", "uidB", &backup).unwrap();
         assert_eq!(report.action, "merged");
@@ -941,21 +1553,41 @@ mod tests {
             b"src-conv2"
         );
         // check-point 跟着过来
-        assert!(tgt.join("check-point").join("ws1").join("conv2").join("meta.json").is_file());
+        assert!(tgt
+            .join("check-point")
+            .join("ws1")
+            .join("conv2")
+            .join("meta.json")
+            .is_file());
         // 合并后的 index：两条会话，current 保留目标的
         let merged = read_json(&tgt_ws.join("index.json")).unwrap();
         assert_eq!(merged["conversations"].as_array().unwrap().len(), 2);
         assert_eq!(merged["current"], "conv2");
         // 被替换的目标会话有备份
-        assert!(backup.join("history").join("ws1").join("conv2").join("messages.json").is_file());
+        assert!(backup
+            .join("history")
+            .join("ws1")
+            .join("conv2")
+            .join("messages.json")
+            .is_file());
     }
 
     #[test]
     fn workbuddy合并_目标较新则不动() {
         let tmp = TempDir::new("wb-keep");
         let root = tmp.0.join("Data");
-        let src = root.join("uidA").join("IDE").join("uidA").join("history").join("ws");
-        let tgt = root.join("uidB").join("IDE").join("uidB").join("history").join("ws");
+        let src = root
+            .join("uidA")
+            .join("IDE")
+            .join("uidA")
+            .join("history")
+            .join("ws");
+        let tgt = root
+            .join("uidB")
+            .join("IDE")
+            .join("uidB")
+            .join("history")
+            .join("ws");
         write_file(
             &src.join("index.json"),
             br#"{"conversations":[{"id":"c1","lastMessageAt":"2026-10-01T00:00:00Z"}]}"#,
@@ -969,7 +1601,10 @@ mod tests {
 
         let report = merge_uid_history(&root, "uidA", "uidB", &tmp.0.join("bk")).unwrap();
         assert_eq!(report.replaced, 0, "目标更新时不应替换");
-        assert_eq!(std::fs::read(tgt.join("c1").join("m.json")).unwrap(), b"tgt");
+        assert_eq!(
+            std::fs::read(tgt.join("c1").join("m.json")).unwrap(),
+            b"tgt"
+        );
     }
 
     #[test]
@@ -995,8 +1630,14 @@ mod tests {
     fn 备份列表_按时间倒序并统计大小() {
         let tmp = TempDir::new("backup-list");
         let root = tmp.0.join("chat_history");
-        write_file(&root.join("qoder/_backups/1700000000000-1/main.sqlite"), b"12345");
-        write_file(&root.join("qoder/_backups/1700000000000-1/main.sqlite-wal"), b"67");
+        write_file(
+            &root.join("qoder/_backups/1700000000000-1/main.sqlite"),
+            b"12345",
+        );
+        write_file(
+            &root.join("qoder/_backups/1700000000000-1/main.sqlite-wal"),
+            b"67",
+        );
         write_file(
             &root.join("workbuddy/_backups/1800000000000-2/history/ws/conv/m.json"),
             b"x",
@@ -1023,7 +1664,10 @@ mod tests {
     fn 删除备份_只允许backups下的单级目录() {
         let tmp = TempDir::new("backup-del");
         let root = tmp.0.join("chat_history");
-        write_file(&root.join("qoder/_backups/1700000000000-1/main.sqlite"), b"x");
+        write_file(
+            &root.join("qoder/_backups/1700000000000-1/main.sqlite"),
+            b"x",
+        );
         write_file(&root.join("qoder/accA/payload/main.sqlite"), b"keep");
 
         // 外部输入校验：路径穿越 / 分隔符 / 未知平台 / 临时目录一律拒绝

@@ -20,6 +20,7 @@ use std::sync::Mutex;
 use crate::core::provider::{
     Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
 };
+use crate::core::launcher::ClientProcessState;
 use crate::core::tz;
 
 const BASE: &str = "https://agent.minimax.cn";
@@ -63,6 +64,16 @@ fn auth_files() -> Vec<PathBuf> {
     };
     let root = home.join(".minimax").join("auth");
     collect_auth_files(&root, &mut out, 0);
+    // 排序确定化：read_dir 顺序未定义，机器上有多套命名空间时
+    // 「取第一个」会选到不同的文件 —— 官方默认布局（prod/cn）优先，
+    // 其余按路径字典序，保证每次都选同一个。
+    out.sort_by(|a, b| {
+        let pa = a.to_string_lossy().to_lowercase();
+        let pb = b.to_string_lossy().to_lowercase();
+        let da = pa.contains("prod") && pa.contains("cn");
+        let db = pb.contains("prod") && pb.contains("cn");
+        db.cmp(&da).then_with(|| pa.cmp(&pb))
+    });
     out
 }
 
@@ -120,6 +131,15 @@ pub fn local_user_id() -> Option<String> {
             .filter(|s| !s.is_empty())
             .map(|s| s.to_string())
     })
+}
+
+/// 本机客户端登录态文件的路径（**只取路径，不读内容**）。
+///
+/// 设备授权导入的账号没有登录态文件归属，用它把凭据锚定到正确的命名空间，
+/// 避免换号时全盘搜索选中别的环境。文件里的记录属于客户端当前登录的那个
+/// 账号，与本次授权的账号无关 —— **绝不能把它的凭据一起取出来**。
+fn local_auth_path() -> Option<PathBuf> {
+    auth_files().into_iter().next()
 }
 
 /// 本机登录态文件（含路径）。
@@ -180,10 +200,7 @@ static PERSIST_HOOK: Mutex<Option<fn(&str, &str, &Value)>> = Mutex::new(None);
 static FETCH_HOOK: Mutex<Option<fn(&str, &str) -> Option<Value>>> = Mutex::new(None);
 
 /// 应用启动时注入一次。
-pub fn set_cred_hooks(
-    persist: fn(&str, &str, &Value),
-    fetch: fn(&str, &str) -> Option<Value>,
-) {
+pub fn set_cred_hooks(persist: fn(&str, &str, &Value), fetch: fn(&str, &str) -> Option<Value>) {
     *PERSIST_HOOK.lock().unwrap() = Some(persist);
     *FETCH_HOOK.lock().unwrap() = Some(fetch);
 }
@@ -222,7 +239,9 @@ async fn probe_identity(http: &reqwest::Client, token: &str) -> Result<(String, 
     if resp["statusInfo"]["code"].as_i64().unwrap_or(-1) != 0 {
         return Err(anyhow!(
             "身份探测失败：{}",
-            resp["statusInfo"]["message"].as_str().unwrap_or("上游返回异常")
+            resp["statusInfo"]["message"]
+                .as_str()
+                .unwrap_or("上游返回异常")
         ));
     }
     let user = &resp["data"]["userInfo"];
@@ -247,7 +266,10 @@ async fn probe_identity(http: &reqwest::Client, token: &str) -> Result<(String, 
 pub async fn client_session() -> Option<(String, String, Value)> {
     let (path, parsed) = local_auth_with_path()?;
     let rec = parsed["records"].as_object()?.values().find(|r| {
-        r["accessToken"].as_str().map(|t| !t.is_empty()).unwrap_or(false)
+        r["accessToken"]
+            .as_str()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
     })?;
     let token = rec["accessToken"].as_str()?;
     let prefix: String = token.chars().take(32).collect();
@@ -287,13 +309,43 @@ pub async fn client_session() -> Option<(String, String, Value)> {
     ))
 }
 
-/// 客户端当前登录账号的最新凭据（仅当真实登录**就是** `account` 时返回）。
+/// 客户端当前登录态与本账号的关系。
 ///
-/// 客户端开着时会自动续期 token 并写回登录态文件 —— 把它捕获进账号池，
-/// 这个账号就算之后被切走，池里留的也是最新快照（借鉴 Cockpit 的做法）。
-pub async fn capture_current_cred(account: &Account) -> Option<Value> {
-    let (id, _name, cred) = client_session().await?;
-    (id == account.id).then_some(cred)
+/// `Unknown` 很关键：探测失败时不能假设「不是当前账号」——MiniMax 的 RT
+/// 用一次就轮换，刷错账号会直接把客户端顶下线（2026-11-02 实测）。
+pub enum ClientLoginState {
+    /// 客户端当前登录的就是这个账号（附带客户端最新凭据）
+    Same(Value),
+    /// 客户端当前登录的是别的账号（可以安全刷新本账号）
+    Other,
+    /// 无法确认（探测失败 / 客户端未登录）
+    Unknown,
+}
+
+impl ClientLoginState {
+    /// 是否允许我们自己刷新这个账号的 RT。
+    ///
+    /// 只有「确认客户端登录的是别的账号」，或「**确认**客户端没在运行」才允许。
+    ///
+    /// ⚠️ 进程状态未知（枚举失败 / 平台不支持）时一律不允许 ——
+    /// 宁可不刷新，也不能轮换掉客户端手里的 RT：那会让客户端下次续期直接
+    /// `invalid_grant` 掉登录（2026-11-11 上游 cockpit-tools 实测掉线）。
+    pub fn allow_self_refresh(&self, process: ClientProcessState) -> bool {
+        match self {
+            Self::Same(_) => false,
+            Self::Other => true,
+            Self::Unknown => process == ClientProcessState::Absent,
+        }
+    }
+}
+
+/// 探测客户端当前登录账号与本账号的关系（失败绝不猜）。
+pub async fn client_login_state(account: &Account) -> ClientLoginState {
+    match client_session().await {
+        Some((id, _name, cred)) if id == account.id => ClientLoginState::Same(cred),
+        Some(_) => ClientLoginState::Other,
+        None => ClientLoginState::Unknown,
+    }
 }
 
 impl MiniMaxProvider {
@@ -331,6 +383,8 @@ impl MiniMaxProvider {
         let backoff = [2000u64, 5000, 10000];
         let mut last_err = anyhow!("请求失败");
         let mut attempt = 0usize;
+        // 「为什么没自动刷新」的说明，最后并进错误信息
+        let mut blocked: Option<String> = None;
         // 可变副本：401 抢救刷新后换成新凭据继续本次请求
         let mut cred = cred.clone();
         // 每次请求链最多抢救一次，避免刷新风暴
@@ -364,10 +418,12 @@ impl MiniMaxProvider {
                 Ok(resp) => {
                     let code = resp.status().as_u16();
                     if code == 401 || code == 403 {
-                        // 客户端当前登录的不是这个账号 → 凭据快照不会再被客户端续期。
-                        // 但别急着判死：先强制走一次 RT 刷新抢救（见函数头注释），
-                        // 救不回来才把「该怎么办」说清楚。
-                        if !client_login_is(account) {
+                        // 抢救刷新前先确认「刷这个账号不会把客户端顶下线」。
+                        // 客户端在跑且身份未知时绝不刷（RT 轮换即作废）。
+                        let login_state = client_login_state(account).await;
+                        // 进程状态是三态：枚举失败 = 「不知道」，不等于「没在跑」。
+                        let process = crate::core::launcher::client_process_state("minimax");
+                        if login_state.allow_self_refresh(process) {
                             if rescued {
                                 return Err(anyhow!(
                                     "凭据已失效（HTTP {code}）：自动刷新后仍被拒绝。\
@@ -392,11 +448,33 @@ impl MiniMaxProvider {
                         }
                         // 客户端根本没在运行 → 没人续期 token，退避重试只是白等。
                         // 快速失败，把「该怎么办」说清楚（这也是首屏加载慢的常见原因）。
-                        if !crate::core::launcher::is_running("minimax") {
+                        if process == ClientProcessState::Absent {
                             return Err(anyhow!(
                                 "凭据已过期（HTTP {code}）：MiniMax Code 客户端未在运行，\
                                  token 不会被续期。打开一次客户端即可恢复"
                             ));
+                        }
+                        // 不能自己刷时，把原因记下来，最后一并说清楚 ——
+                        // 别让用户只看到一个干巴巴的 HTTP 401。
+                        if blocked.is_none() {
+                            blocked = Some(match (&login_state, process) {
+                                (ClientLoginState::Same(_), _) => {
+                                    "客户端当前登录的就是这个账号，刷新会轮换掉它手里的 refresh token \
+                                     （会导致客户端掉线），所以没有自动刷新；\
+                                     请在客户端里重新登录该账号，或退出客户端后重试"
+                                        .to_string()
+                                }
+                                (_, ClientProcessState::Absent) => {
+                                    "MiniMax Code 客户端未在运行，token 不会被续期；\
+                                     打开一次客户端即可恢复"
+                                        .to_string()
+                                }
+                                _ => {
+                                    "无法确认 MiniMax Code 客户端是否在运行，为避免顶掉客户端登录没有自动刷新；\
+                                     请退出 MiniMax Code 客户端后重试"
+                                        .to_string()
+                                }
+                            });
                         }
                     }
                     last_err = anyhow!("HTTP {code}");
@@ -422,6 +500,10 @@ impl MiniMaxProvider {
             tokio::time::sleep(std::time::Duration::from_millis(delay)).await;
         }
 
+        // 有「没自动刷新」的原因时并进错误信息，别只留一个干巴巴的 HTTP 401
+        if let Some(reason) = blocked {
+            return Err(anyhow!("{last_err}：{reason}"));
+        }
         Err(last_err)
     }
 
@@ -429,9 +511,15 @@ impl MiniMaxProvider {
     /// 轮换 RT），没有才强制走一次 OAuth 刷新并**立即落盘**。
     /// 返回 None = RT 也死了，只能重新导入。
     async fn force_refresh_cred(&self, account: &Account, cred: &Value) -> Option<Value> {
-        let my_token = cred.get("access_token").and_then(|v| v.as_str()).unwrap_or("");
+        let my_token = cred
+            .get("access_token")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
         if let Some(pool) = fetch_cred(&account.provider, &account.id) {
-            let pool_token = pool.get("access_token").and_then(|v| v.as_str()).unwrap_or("");
+            let pool_token = pool
+                .get("access_token")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
             if !pool_token.is_empty() && pool_token != my_token {
                 return Some(pool); // 别人刚刷新过：直接采纳，不再轮换
             }
@@ -577,7 +665,10 @@ impl Provider for MiniMaxProvider {
 
         let empty = Vec::new();
         let days = body["data"]["days"].as_array().unwrap_or(&empty);
-        let Some(today) = days.iter().find(|d| d["is_today"].as_bool().unwrap_or(false)) else {
+        let Some(today) = days
+            .iter()
+            .find(|d| d["is_today"].as_bool().unwrap_or(false))
+        else {
             return Ok(CheckinStatus {
                 state: ClaimState::NotAvailable,
                 message: "上游没有返回今天的签到信息".to_string(),
@@ -624,7 +715,10 @@ impl Provider for MiniMaxProvider {
         let points = data["points"].as_i64().unwrap_or(0);
 
         match result {
-            1 => Ok(ClaimOutcome::claimed(points, format!("签到成功 +{points} 积分"))),
+            1 => Ok(ClaimOutcome::claimed(
+                points,
+                format!("签到成功 +{points} 积分"),
+            )),
             2 => Ok(ClaimOutcome::already(points, "今日已签到")),
             _ => Ok(ClaimOutcome::failed(
                 data["claim_id"].as_str().unwrap_or("上游未返回领取结果"),
@@ -654,7 +748,11 @@ impl Provider for MiniMaxProvider {
                 .or_else(|| v.as_f64())
                 .unwrap_or(0.0);
             // 上游会返回 "-0.00" 这种形式，归一成 0 避免界面显示 -0
-            if n == 0.0 { 0.0 } else { n }
+            if n == 0.0 {
+                0.0
+            } else {
+                n
+            }
         };
 
         let empty = Vec::new();
@@ -669,6 +767,8 @@ impl Provider for MiniMaxProvider {
                 remaining: amount(&d["remaining_amount"]),
                 granted_at_ms: d["granted_at_ms"].as_i64().unwrap_or(0),
                 expire_at_ms: d["expire_at_ms"].as_i64().unwrap_or(0),
+                package_name: String::new(),
+                refresh_at_ms: 0,
             });
         }
 
@@ -690,6 +790,8 @@ impl Provider for MiniMaxProvider {
             total_remaining,
             items,
             message,
+            refresh_at_ms: 0,
+            credit_groups: Vec::new(),
         })
     }
 
@@ -753,8 +855,7 @@ impl Provider for MiniMaxProvider {
             fresh["refresh_token"] = json!(rt);
         }
         let expires_in = body["expires_in"].as_i64().unwrap_or(3600);
-        fresh["expires_at_ms"] =
-            json!(chrono::Utc::now().timestamp_millis() + expires_in * 1000);
+        fresh["expires_at_ms"] = json!(chrono::Utc::now().timestamp_millis() + expires_in * 1000);
         Ok(Some(fresh))
     }
 }
@@ -775,6 +876,8 @@ pub struct DeviceAuthorization {
     pub poll_param: String,
     /// 建议轮询间隔（秒）
     pub interval_secs: u64,
+    /// 授权码有效期（秒）—— 上游只给 5 分钟，超时后网页会报「缺少有效的 user_code」
+    pub expires_in: u64,
 }
 
 impl MiniMaxProvider {
@@ -826,6 +929,7 @@ impl MiniMaxProvider {
             poll_code,
             poll_param,
             interval_secs: resp["interval"].as_u64().unwrap_or(5).max(1),
+            expires_in: resp["expires_in"].as_u64().unwrap_or(300).max(30),
         })
     }
 
@@ -868,6 +972,11 @@ impl MiniMaxProvider {
             if err == "authorization_pending" || err == "slow_down" {
                 return Ok(None);
             }
+            // 授权码过期：网页那边会显示「授权链接无效 / 缺少有效的 user_code」，
+            // 根因是上游的 device code 只有 5 分钟有效期（2026-11-02 实测）
+            if err == "expired_token" || err == "expired" {
+                return Err(anyhow!("授权码已过期（有效期约 5 分钟）：请重新发起授权"));
+            }
             return Err(anyhow!("授权失败（HTTP {} {err}）", status.as_u16()));
         }
 
@@ -881,21 +990,32 @@ impl MiniMaxProvider {
         // 身份用 token 实测（和导入/捕获同一条路径）
         let (id, name) = probe_identity(&self.http, access).await.unwrap_or_default();
         if id.is_empty() {
-            return Err(anyhow!("授权成功但拿不到账号身份（user/info 接口异常），请稍后重试"));
+            return Err(anyhow!(
+                "授权成功但拿不到账号身份（user/info 接口异常），请稍后重试"
+            ));
         }
         let account = Account {
             id,
             provider: "minimax".to_string(),
-            label: if name.is_empty() { "MiniMax 账号".to_string() } else { name },
+            label: if name.is_empty() {
+                "MiniMax 账号".to_string()
+            } else {
+                name
+            },
             created_at: chrono::Utc::now().timestamp(),
             last_used: None,
             origin: "浏览器授权登录".to_string(),
         };
-        let cred = json!({
+        let mut cred = json!({
             "access_token": access,
             "refresh_token": refresh,
             "expires_at_ms": chrono::Utc::now().timestamp_millis() + expires_in * 1000,
         });
+        // 锚定客户端登录态文件：换号时直接用这个路径，不再全盘搜索
+        // （多套命名空间时全盘搜索会选错环境）。只记路径，不取里面的凭据。
+        if let Some(path) = local_auth_path() {
+            cred["auth_file"] = json!(path.to_string_lossy());
+        }
         Ok(Some((account, cred)))
     }
 }
@@ -944,10 +1064,12 @@ pub fn migrate_device_key_ids(store: &mut crate::core::store::AccountStore) {
     }
 
     // 文件里的记录就是当前登录账号的（取第一条非空 token），按新 id 落一条干净的
-    if let Some((_key, rec)) = records
-        .iter()
-        .find(|(_, r)| r["accessToken"].as_str().map(|t| !t.is_empty()).unwrap_or(false))
-    {
+    if let Some((_key, rec)) = records.iter().find(|(_, r)| {
+        r["accessToken"]
+            .as_str()
+            .map(|t| !t.is_empty())
+            .unwrap_or(false)
+    }) {
         let account = Account {
             id: user_id,
             provider: "minimax".to_string(),
@@ -969,5 +1091,28 @@ pub fn migrate_device_key_ids(store: &mut crate::core::store::AccountStore) {
         }
     } else {
         let _ = store.save();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn 客户端登录态_刷新许可规则() {
+        use crate::core::launcher::ClientProcessState;
+        // 当前登录：任何情况都不自己刷（否则会把客户端 RT 轮换掉）
+        assert!(!ClientLoginState::Same(Value::Null).allow_self_refresh(ClientProcessState::Running));
+        assert!(!ClientLoginState::Same(Value::Null).allow_self_refresh(ClientProcessState::Absent));
+        assert!(!ClientLoginState::Same(Value::Null).allow_self_refresh(ClientProcessState::Unknown));
+        // 确认是别的账号：三种进程状态都安全
+        assert!(ClientLoginState::Other.allow_self_refresh(ClientProcessState::Running));
+        assert!(ClientLoginState::Other.allow_self_refresh(ClientProcessState::Absent));
+        assert!(ClientLoginState::Other.allow_self_refresh(ClientProcessState::Unknown));
+        // 身份未知：只有「确认客户端没在跑」才允许；进程状态未知（枚举失败）一律不刷
+        // （2026-11-11 上游 cockpit-tools 实测：这样会把客户端刷掉线）。
+        assert!(!ClientLoginState::Unknown.allow_self_refresh(ClientProcessState::Running));
+        assert!(ClientLoginState::Unknown.allow_self_refresh(ClientProcessState::Absent));
+        assert!(!ClientLoginState::Unknown.allow_self_refresh(ClientProcessState::Unknown));
     }
 }

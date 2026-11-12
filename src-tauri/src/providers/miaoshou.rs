@@ -20,7 +20,9 @@ use anyhow::{anyhow, Result};
 use async_trait::async_trait;
 use serde_json::{json, Value};
 
-use crate::core::provider::{Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota};
+use crate::core::provider::{
+    Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+};
 
 const BASE: &str = "https://catx.nocode.cn";
 const BALANCE_PATH: &str = "/api/gateway/credit/balance";
@@ -42,7 +44,6 @@ impl MiaoshouProvider {
             .unwrap_or_default();
         Self { http }
     }
-
 
     /// 读一次登录态（每次请求前重读，客户端会自己续期）。
     fn local_auth() -> Option<Value> {
@@ -172,13 +173,14 @@ impl Provider for MiaoshouProvider {
         let is_new = data["newUser"].as_bool().unwrap_or(false);
         let bonus = data["registrationBonus"].as_i64().unwrap_or(0);
         if is_new {
-            Ok(ClaimOutcome::claimed(bonus, format!("注册奖励 +{bonus} Credits")))
+            Ok(ClaimOutcome::claimed(
+                bonus,
+                format!("注册奖励 +{bonus} Credits"),
+            ))
         } else {
             Ok(ClaimOutcome::already(
                 0,
-                data["message"]
-                    .as_str()
-                    .unwrap_or("用户已注册，无注册奖励"),
+                data["message"].as_str().unwrap_or("用户已注册，无注册奖励"),
             ))
         }
     }
@@ -218,10 +220,19 @@ impl Provider for MiaoshouProvider {
             .as_str()
             .unwrap_or("")
             .to_string();
-        let next_refresh = data["userPlan"]["nextRefreshTime"].as_i64().unwrap_or(0);
+        let next_refresh_raw = data["userPlan"]["nextRefreshTime"].as_i64().unwrap_or(0);
+        // 兼容秒级时间戳（界面按毫秒展示）
+        let next_refresh = if next_refresh_raw > 0 && next_refresh_raw < 1_000_000_000_000 {
+            next_refresh_raw * 1000
+        } else {
+            next_refresh_raw
+        };
 
         // 订阅详情（失败不影响主结果）
         let mut message = format!("{plan_name} · 可用 {available:.0} Credits");
+        // 真正的「积分到期」来自订阅的 expireTime；nextRefreshTime 只是套餐刷新时间，
+        // 不能当到期用（否则会误报「N 天后到期」）。
+        let mut subscription_expire_ms = 0i64;
         if let Ok(sub) = self
             .http
             .get(format!("{BASE}{SUBSCRIPTION_CURRENT_PATH}"))
@@ -233,16 +244,19 @@ impl Provider for MiaoshouProvider {
                 if v["code"].as_i64() == Some(0) {
                     if let Some(exp) = v["data"]["expireTime"].as_i64() {
                         if exp > 0 {
-                            message.push_str(&format!(" · {} 到期", fmt_ts(exp)));
+                            let exp_ms = if exp < 1_000_000_000_000 {
+                                exp * 1000
+                            } else {
+                                exp
+                            };
+                            subscription_expire_ms = exp_ms;
+                            message.push_str(&format!(" · {} 到期", fmt_ts(exp_ms)));
                         }
                     }
                 }
             }
         }
-        if next_refresh > 0 {
-            message.push_str(&format!(" · 下次刷新 {}", fmt_ts(next_refresh)));
-        }
-
+        // 下次刷新时间单独用 refresh_at_ms 返回，界面独立展示，避免和到期混在一起。
         Ok(Quota {
             total_granted: 0.0,
             total_consumed: 0.0,
@@ -253,15 +267,23 @@ impl Provider for MiaoshouProvider {
                 consumed: 0.0,
                 remaining: available,
                 granted_at_ms: 0,
-                expire_at_ms: next_refresh,
+                expire_at_ms: subscription_expire_ms,
+                package_name: String::new(),
+                refresh_at_ms: 0,
             }],
             message,
+            refresh_at_ms: next_refresh,
+            credit_groups: Vec::new(),
         })
     }
 }
 
 fn fmt_ts(ms: i64) -> String {
     chrono::DateTime::from_timestamp_millis(ms)
-        .map(|d| d.format("%Y-%m-%d").to_string())
+        .map(|d| {
+            d.with_timezone(&chrono::Local)
+                .format("%Y-%m-%d")
+                .to_string()
+        })
         .unwrap_or_else(|| ms.to_string())
 }

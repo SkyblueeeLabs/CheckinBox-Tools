@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import SettingsPanel from "../SettingsPanel";
 import { api } from "../../lib/api";
@@ -29,6 +29,7 @@ function overview(): Overview {
         supportsOAuth: true,
         configured: true,
         hasClient: true,
+        supportsClaim: true,
       },
     ],
     todayPoints: 0,
@@ -48,12 +49,16 @@ function config(): AppConfig {
     activeAccounts: {},
     alertThresholds: {},
     closeAction: "ask",
+    notificationsEnabled: true,
   };
 }
 
 const noop = vi.fn();
 
-function renderSettings(onCloseAction: (action: "ask" | "tray" | "exit") => void = noop) {
+function renderSettings(
+  onCloseAction: (action: "ask" | "tray" | "exit") => void = noop,
+  onNotificationsEnabled: (enabled: boolean) => void = noop
+) {
   return render(
     <SettingsPanel
       overview={overview()}
@@ -67,6 +72,10 @@ function renderSettings(onCloseAction: (action: "ask" | "tray" | "exit") => void
       onSyncNow={noop}
       onOpenDataDir={noop}
       onCloseAction={onCloseAction}
+      autostartEnabled={false}
+      onAutostartChange={noop}
+      onNotificationsEnabled={onNotificationsEnabled}
+      onTestNotification={noop}
     />
   );
 }
@@ -118,5 +127,18 @@ describe("SettingsPanel（设置页 tab）", () => {
 
     fireEvent.click(screen.getByRole("radio", { name: /最小化到系统托盘/ }));
     expect(onCloseAction).toHaveBeenCalledWith("tray");
+  });
+
+  it("应用内提醒开关回调当前值", () => {
+    const onNotificationsEnabled = vi.fn();
+    renderSettings(noop, onNotificationsEnabled);
+
+    const block = screen.getByRole("button", { name: /应用内提醒/ }).closest(".set-block");
+    expect(block).not.toBeNull();
+    const toggle = within(block as HTMLElement).getByRole("checkbox") as HTMLInputElement;
+    expect(toggle.checked).toBe(true);
+
+    fireEvent.click(toggle);
+    expect(onNotificationsEnabled).toHaveBeenCalledWith(false);
   });
 });

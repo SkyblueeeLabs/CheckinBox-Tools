@@ -48,13 +48,24 @@ fn spec_of(provider: &str) -> Option<ClientSpec> {
         "miaoshou" => Some(ClientSpec {
             exe_names: &["妙手.exe"],
             dir_keywords: &["妙手", "catpaw", "meituan"],
-            legacy_paths: &[r"D:\meituan\妙手\妙手.exe", r"C:\Program Files\妙手\妙手.exe"],
+            legacy_paths: &[
+                r"D:\meituan\妙手\妙手.exe",
+                r"C:\Program Files\妙手\妙手.exe",
+            ],
         }),
         "workbuddy" => Some(ClientSpec {
-            // 腾讯 CodeBuddy CN（桌面端品牌是 WorkBuddy），exe 两个名字都认
-            exe_names: &["CodeBuddy.exe", "WorkBuddy.exe"],
-            dir_keywords: &["codebuddy", "workbuddy"],
+            // 腾讯 WorkBuddy（原 CodeBuddy CN 桌面端）。只认 WorkBuddy：
+            // 本工具的登录态写在 `%APPDATA%\WorkBuddy`，旧 CodeBuddy 用的是
+            // `%APPDATA%\CodeBuddy`，打开它不会读到切换后的账号。
+            exe_names: &["WorkBuddy.exe"],
+            dir_keywords: &["workbuddy"],
             legacy_paths: &[],
+        }),
+        "zcode" => Some(ClientSpec {
+            // 智谱 Zcode（Z.ai），安装目录名 `ZCode`
+            exe_names: &["ZCode.exe"],
+            dir_keywords: &["zcode"],
+            legacy_paths: &[r"D:\Program Files\ZCode\ZCode.exe"],
         }),
         _ => None,
     }
@@ -174,9 +185,18 @@ fn qoder_versioned_exe(root: &Path) -> Option<PathBuf> {
     for entry in entries.flatten() {
         let name = entry.file_name().to_string_lossy().to_string();
         let mut parts = name.split('.');
-        let a = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-        let b = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
-        let c = parts.next().and_then(|v| v.parse::<u64>().ok()).unwrap_or(0);
+        let a = parts
+            .next()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let b = parts
+            .next()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
+        let c = parts
+            .next()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(0);
         found.push((a, b, c, entry.path()));
     }
     found
@@ -250,6 +270,7 @@ pub fn data_dir(provider: &str) -> Option<PathBuf> {
         "qoder" => home.join(".qoder-cn"),
         "miaoshou" => home.join(".meituan-catpaw"),
         "workbuddy" => home.join(".workbuddy"),
+        "zcode" => home.join(".zcode"),
         _ => return None,
     };
     if dir.is_dir() {
@@ -260,39 +281,137 @@ pub fn data_dir(provider: &str) -> Option<PathBuf> {
 }
 
 /// 启动客户端。返回实际启动的可执行文件路径。
+///
+/// ⚠️ 必须**经 explorer 分离启动**：客户端不能作为本进程的直接子进程 ——
+/// Electron 客户端启动时先拿单实例锁，拿不到就 `app.quit()` 秒退（退出码 0），
+/// 表现是「提示切换成功，但客户端根本没起来」（2026-11-03 实测：从 GUI 宿主
+/// 直接 spawn 必现；经 explorer / 控制台启动则正常）。
+/// explorer 拉起等价于用户双击：进程上下文干净，父进程也不是我们。
+///
+/// 启动后还要**确认它真的活了** —— 客户端起不来时不能报成功，否则用户只看到
+/// 「已切换并重启」却找不到客户端。
 pub fn launch(provider: &str) -> Result<PathBuf> {
-    let exe = client_exe(provider)
-        .ok_or_else(|| anyhow!("没有找到 {} 的客户端可执行文件", provider))?;
-    std::process::Command::new(&exe)
+    let exe =
+        client_exe(provider).ok_or_else(|| anyhow!("没有找到 {} 的客户端可执行文件", provider))?;
+
+    let _ = spawn_hidden("explorer.exe", &[&exe.to_string_lossy()]);
+
+    if wait_until_running(provider, std::time::Duration::from_secs(8)) {
+        return Ok(exe);
+    }
+
+    // 没起来：退回直接 spawn，好把退出码如实带出来（explorer 路径拿不到退出码）
+    let mut child = std::process::Command::new(&exe)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| anyhow!("启动失败：{e}"))?;
-    Ok(exe)
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if is_running(provider) {
+            return Ok(exe);
+        }
+        if let Ok(Some(status)) = child.try_wait() {
+            return Err(anyhow!(
+                "客户端启动后立刻退出（退出码 {:?}）：请手动打开客户端",
+                status.code()
+            ));
+        }
+    }
+    Err(anyhow!("客户端启动超时（没起来）：请手动打开客户端"))
+}
+
+/// 等客户端进程出现（Electron 主进程一起来就有进程名，不必等窗口）。
+fn wait_until_running(provider: &str, timeout: std::time::Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while std::time::Instant::now() < deadline {
+        std::thread::sleep(std::time::Duration::from_millis(200));
+        if is_running(provider) {
+            return true;
+        }
+    }
+    false
+}
+
+/// 以「不弹控制台窗口」的方式跑一个命令。
+#[cfg(windows)]
+fn spawn_hidden(program: &str, args: &[&str]) -> std::io::Result<std::process::Child> {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new(program)
+        .args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()
+}
+
+#[cfg(not(windows))]
+fn spawn_hidden(program: &str, args: &[&str]) -> std::io::Result<std::process::Child> {
+    std::process::Command::new(program).args(args).spawn()
 }
 
 // ---------------------------------------------------------------------------
 // 进程检测（换号前必须确认客户端已完全退出）
 // ---------------------------------------------------------------------------
 
+/// 客户端进程的三种状态。
+///
+/// 关键区别：「**不知道**」≠「**没在跑**」。
+/// 凭据刷新这类会**轮换 refresh token** 的动作，一旦不确定客户端状态，
+/// 就必须按「可能还在跑」处理 —— 2026-11-11 上游 cockpit-tools 就是在这里
+/// 把客户端手里的 RT 轮换掉、导致客户端掉线的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientProcessState {
+    /// 确认客户端进程存在
+    Running,
+    /// 确认没有客户端进程
+    Absent,
+    /// 枚举失败 / 平台不支持 —— 既不能确认在跑，也不能确认没跑
+    Unknown,
+}
+
+/// 客户端进程状态（三态）。
+///
+/// 枚举失败返回 `Unknown` 而不是 `Absent`：调用方要区分
+/// 「确认没在跑」（可以安全刷新凭据）与「不知道」（必须保守）。
+pub fn client_process_state(provider: &str) -> ClientProcessState {
+    process_state_from_names(provider, winproc::process_names_result())
+}
+
+/// 由「进程名枚举结果」推导三态（抽出来便于单测）。
+pub fn process_state_from_names(
+    provider: &str,
+    names: Result<Vec<String>, String>,
+) -> ClientProcessState {
+    let Some(spec) = spec_of(provider) else {
+        return ClientProcessState::Unknown;
+    };
+    let targets: Vec<String> = spec.exe_names.iter().map(|n| n.to_lowercase()).collect();
+    match names {
+        Ok(names) => {
+            if names.iter().any(|name| targets.iter().any(|t| name == t)) {
+                ClientProcessState::Running
+            } else {
+                ClientProcessState::Absent
+            }
+        }
+        // 枚举失败 → 不知道，不是「没在跑」
+        Err(_) => ClientProcessState::Unknown,
+    }
+}
+
 /// 客户端是否正在运行。
 ///
 /// 用 Toolhelp32 快照枚举进程名（W 版 API，中文 exe 名也正确），
 /// 与该平台的候选 exe 名做不区分大小写的**全等**比较。
 /// Electron 客户端的全部子进程都与其主 exe 同名，比到一个就算在运行。
+///
+/// ⚠️ 这是**布尔兼容层**：`Unknown`（枚举失败）一律当作 `false`。
+/// 涉及刷新 / 改写客户端凭据的地方必须用 `client_process_state`，
+/// 否则会在「不知道客户端是否在跑」时误轮换客户端的 refresh token。
 pub fn is_running(provider: &str) -> bool {
-    let Some(spec) = spec_of(provider) else {
-        return false;
-    };
-    let targets: Vec<String> = spec
-        .exe_names
-        .iter()
-        .map(|n| n.to_lowercase())
-        .collect();
-    for name in winproc::process_names() {
-        if targets.iter().any(|t| name == *t) {
-            return true;
-        }
-    }
-    false
+    client_process_state(provider) == ClientProcessState::Running
 }
 
 /// 关闭客户端：先请求**优雅关闭**（等价于点窗口的 X），超时再强制结束树。
@@ -425,39 +544,46 @@ mod winproc {
         fn CloseHandle(h_object: *mut c_void) -> i32;
     }
 
-    /// 全部进程名（小写）。枚举失败返回空（宁可放行也不误报客户端在运行）。
-    pub fn process_names() -> Vec<String> {
+    /// 全部进程名（小写）。
+    ///
+    /// 枚举失败返回 `Err` —— 调用方需要区分「枚举失败」与「确实没有该进程」：
+    /// 前者是**不知道**，后者才是「没在跑」（两者对凭据刷新的含义相反）。
+    pub fn process_names_result() -> Result<Vec<String>, String> {
         unsafe {
             let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if snap == INVALID_HANDLE_VALUE || snap.is_null() {
-                return Vec::new();
+                return Err("创建进程快照失败".to_string());
             }
             let mut out = Vec::new();
             let mut entry = ProcessEntry32W::zeroed();
-            if Process32FirstW(snap, &mut entry) != 0 {
-                loop {
-                    let len = entry
-                        .sz_exe_file
-                        .iter()
-                        .position(|c| *c == 0)
-                        .unwrap_or(entry.sz_exe_file.len());
-                    let name = String::from_utf16_lossy(&entry.sz_exe_file[..len]).to_lowercase();
-                    out.push(name);
-                    if Process32NextW(snap, &mut entry) == 0 {
-                        break;
-                    }
+            if Process32FirstW(snap, &mut entry) == 0 {
+                CloseHandle(snap);
+                return Err("枚举进程失败".to_string());
+            }
+            loop {
+                let len = entry
+                    .sz_exe_file
+                    .iter()
+                    .position(|c| *c == 0)
+                    .unwrap_or(entry.sz_exe_file.len());
+                let name = String::from_utf16_lossy(&entry.sz_exe_file[..len]).to_lowercase();
+                out.push(name);
+                if Process32NextW(snap, &mut entry) == 0 {
+                    break;
                 }
             }
             CloseHandle(snap);
-            out
+            Ok(out)
         }
     }
 }
 
 #[cfg(not(windows))]
 mod winproc {
-    pub fn process_names() -> Vec<String> {
-        Vec::new()
+    /// 非 Windows 上没有进程枚举 —— 一律「不知道」，
+    /// 不能当成「客户端没在跑」（那会让凭据刷新顶掉客户端的登录）。
+    pub fn process_names_result() -> Result<Vec<String>, String> {
+        Err("当前平台不支持进程枚举".to_string())
     }
 }
 
@@ -522,7 +648,54 @@ mod tests {
     #[test]
     fn 进程名可枚举() {
         // 至少能列出当前进程（测试进程自身）
-        let names = winproc::process_names();
+        let names = winproc::process_names_result().expect("Toolhelp32 应该能枚举到进程");
         assert!(!names.is_empty(), "Toolhelp32 应该能枚举到进程");
+    }
+
+    #[test]
+    fn 进程状态三态_枚举失败算未知而不是没在跑() {
+        // 枚举失败 → Unknown（不是 Absent）：调用方要区分「不知道」与「没在跑」，
+        // 否则会在客户端其实还在跑的时候把它的 refresh token 轮换掉（掉线）。
+        assert_eq!(
+            process_state_from_names("minimax", Err("boom".to_string())),
+            ClientProcessState::Unknown
+        );
+        // 枚举成功但没有客户端 → Absent
+        assert_eq!(
+            process_state_from_names("minimax", Ok(vec!["explorer.exe".to_string()])),
+            ClientProcessState::Absent
+        );
+        // 枚举成功且命中 → Running
+        assert_eq!(
+            process_state_from_names("minimax", Ok(vec!["minimax code.exe".to_string()])),
+            ClientProcessState::Running
+        );
+        // 未知平台 → Unknown
+        assert_eq!(
+            process_state_from_names("unknown-provider", Ok(Vec::new())),
+            ClientProcessState::Unknown
+        );
+    }
+
+    #[test]
+    fn workbuddy_只认WorkBuddy不认旧CodeBuddy() {
+        // 本工具的登录态写在 `%APPDATA%\WorkBuddy`，旧 CodeBuddy 用
+        // `%APPDATA%\CodeBuddy` —— 解析到旧版会出现「切换成功但账号没变」。
+        let spec = spec_of("workbuddy").expect("workbuddy 应有 spec");
+        assert_eq!(spec.exe_names, &["WorkBuddy.exe"]);
+        assert_eq!(spec.dir_keywords, &["workbuddy"]);
+    }
+
+    #[test]
+    fn workbuddy_应能定位到安装好的客户端() {
+        if !matching_dirs(&spec_of("workbuddy").expect("spec"))
+            .iter()
+            .any(|d| d.join("WorkBuddy.exe").is_file())
+        {
+            return;
+        }
+        let exe = client_exe("workbuddy").expect("应能定位到客户端");
+        let name = exe.file_name().unwrap_or_default().to_string_lossy();
+        assert_eq!(name, "WorkBuddy.exe", "解析到了 {exe:?}");
     }
 }

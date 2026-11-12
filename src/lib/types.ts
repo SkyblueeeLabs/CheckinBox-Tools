@@ -2,6 +2,22 @@ export type ClaimState = "claimable" | "claimed" | "notAvailable" | "unknown";
 
 /** 点窗口右上角 × 时的行为 */
 export type CloseAction = "ask" | "tray" | "exit";
+export type NoticeKind = "ok" | "warn" | "err";
+export type WindowRequest = "close" | "notices" | "logs" | "settings";
+
+export interface Notice {
+  id: string;
+  title: string;
+  body: string;
+  kind: NoticeKind;
+  createdAt: number;
+  read: boolean;
+}
+
+export interface TaskSummary {
+  kind: NoticeKind;
+  message: string;
+}
 
 export interface CheckinStatus {
   state: ClaimState;
@@ -19,6 +35,27 @@ export interface CreditItem {
   remaining: number;
   grantedAtMs: number;
   expireAtMs: number;
+  /** 平台给的包名（WorkBuddy PackageName），没有为空串 */
+  packageName?: string;
+  /** 本批次下一次刷新时间（毫秒；0 = 平台未提供） */
+  refreshAtMs?: number;
+}
+
+/** WorkBuddy 官方积分分组（服务端 summary 聚合，口径与官网一致） */
+export interface CreditGroup {
+  /** plan_base / plan_bonus / benefit / addon */
+  kind: string;
+  /** 服务端给的中文名（套餐基础积分 等） */
+  name: string;
+  total: number;
+  used: number;
+  remaining: number;
+  /** 组内资源包数量 */
+  count: number;
+  /** benefit/addon = 最近到期；plan_base/plan_bonus = 下次刷新（毫秒；0 = 无） */
+  timeMs?: number;
+  /** true = timeMs 是「到期时间」，false =「下次刷新」 */
+  usesExpiry?: boolean;
 }
 
 export interface Quota {
@@ -27,6 +64,43 @@ export interface Quota {
   totalRemaining: number;
   items: CreditItem[];
   message: string;
+  /** 平台下一次额度刷新 / 发放时间（毫秒；0 = 平台未提供，目前妙手会返回） */
+  refreshAtMs?: number;
+  /** WorkBuddy 官方积分分组；其他平台 / summary 查询失败时为空 */
+  creditGroups?: CreditGroup[];
+}
+
+/** WorkBuddy 积分明细弹窗里的一个资源包 */
+export interface CreditPackage {
+  id: string;
+  /** 发放原因（grantReason），没有则用平台包名 */
+  name: string;
+  total: number;
+  used: number;
+  remaining: number;
+  expireAtMs: number;
+}
+
+export interface CreditPackagePage {
+  items: CreditPackage[];
+  total: number;
+  hasMore: boolean;
+}
+
+/** WorkBuddy 消耗明细的一行（近 30 天） */
+export interface CreditUsageRow {
+  requestId: string;
+  /** 服务端给的本地时间字符串（YYYY-MM-DD HH:mm:ss） */
+  time: string;
+  input: string;
+  inputTrunc: string;
+  credit: number;
+  model: string;
+}
+
+export interface CreditUsagePage {
+  items: CreditUsageRow[];
+  total: number;
 }
 
 export interface Account {
@@ -61,6 +135,10 @@ export interface AccountView {
   alertThreshold: number;
   /** 最近 7 天积分快照（升序） */
   trend: QuotaPoint[];
+  /** Qoder 每日领取的本地记录（平台逐包明细需要网页登录态） */
+  trackedGrants?: CreditItem[];
+  /** 是否支持自动领取（false = 只展示 + 提醒，不调用领取接口） */
+  supportsClaim: boolean;
 }
 
 export interface QuotaPoint {
@@ -79,6 +157,8 @@ export interface ProviderView {
   configured: boolean;
   hasClient: boolean;
   clientExe?: string | null;
+  /** 是否支持自动领取（false = 只展示 + 提醒，不调用领取接口） */
+  supportsClaim: boolean;
 }
 
 /** 单个 agent 自己的自动签到配置 */
@@ -126,6 +206,22 @@ export interface SwitchOutcome {
     added: number;
     replaced: number;
   };
+}
+
+export type SwitchProgressStage =
+  | "closing"
+  | "capturing"
+  | "validating"
+  | "syncing"
+  | "syncSkipped"
+  | "writing"
+  | "launching";
+
+export interface SwitchProgress {
+  providerId: string;
+  accountId: string;
+  accountLabel: string;
+  stage: SwitchProgressStage;
 }
 
 export interface Overview {
@@ -218,6 +314,8 @@ export interface AppConfig {
   alertThresholds: Record<string, number>;
   /** 关闭主窗口时的行为（默认每次询问） */
   closeAction: CloseAction;
+  /** 是否生成自动提醒（签到失败、低额度、到期、可领取） */
+  notificationsEnabled: boolean;
 }
 
 export interface DiscoveredAccount {
@@ -231,4 +329,6 @@ export interface AuthChallenge {
   authUrl: string;
   /** 发起授权的 provider */
   provider?: string;
+  /** 授权码有效期（秒）—— 上游 device code 只有 5 分钟 */
+  expiresInSecs?: number;
 }

@@ -45,7 +45,42 @@ fn main() {
             eprintln!("用法：--switch-client <minimax|qoder|miaoshou> <account_id>");
             std::process::exit(1);
         }
-        if let Err(e) = commands::cli_switch_client(&provider, &account) {
+        // CLI 路径要跑 async 的捕获/保活（MiniMax 需要 token 实测与刷新）
+        let switched = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())
+            .and_then(|rt| rt.block_on(commands::cli_switch_client(&provider, &account)));
+        if let Err(e) = switched {
+            eprintln!("失败：{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // 列出客户端登录态的多代备份
+    if let Some(pos) = args.iter().position(|a| a == "--list-client-backups") {
+        let provider = args.get(pos + 1).cloned().unwrap_or_default();
+        if provider.is_empty() {
+            eprintln!("用法：--list-client-backups <minimax|miaoshou|qoder>");
+            std::process::exit(1);
+        }
+        if let Err(e) = commands::cli_list_client_backups(&provider) {
+            eprintln!("失败：{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    // 回滚到指定的一代客户端登录态备份
+    if let Some(pos) = args.iter().position(|a| a == "--restore-client-backup") {
+        let provider = args.get(pos + 1).cloned().unwrap_or_default();
+        let op_id = args.get(pos + 2).cloned().unwrap_or_default();
+        if provider.is_empty() || op_id.is_empty() {
+            eprintln!("用法：--restore-client-backup <minimax|miaoshou|qoder> <操作id>");
+            std::process::exit(1);
+        }
+        if let Err(e) = commands::cli_restore_client_backup(&provider, &op_id) {
             eprintln!("失败：{e}");
             std::process::exit(1);
         }

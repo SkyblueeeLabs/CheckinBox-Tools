@@ -219,11 +219,15 @@ impl QoderProvider {
         }
         headers.insert(
             "cosy-clienttype",
-            SASH_CLIENT_TYPE.parse::<reqwest::header::HeaderValue>().unwrap(),
+            SASH_CLIENT_TYPE
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         headers.insert(
             "accept",
-            "application/json".parse::<reqwest::header::HeaderValue>().unwrap(),
+            "application/json"
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         headers.insert(
             "accept-language",
@@ -231,15 +235,21 @@ impl QoderProvider {
         );
         headers.insert(
             "user-agent",
-            SASH_USER_AGENT.parse::<reqwest::header::HeaderValue>().unwrap(),
+            SASH_USER_AGENT
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         headers.insert(
             "Cosy-Version",
-            client_version().parse::<reqwest::header::HeaderValue>().unwrap(),
+            client_version()
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         headers.insert(
             "Cosy-MachineOS",
-            machine_os().parse::<reqwest::header::HeaderValue>().unwrap(),
+            machine_os()
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         headers.insert(
             "Cosy-MachineId",
@@ -274,10 +284,7 @@ impl QoderProvider {
     }
 
     /// 拉活动列表。
-    async fn fetch_campaigns(
-        &self,
-        cred: &Value,
-    ) -> Result<(reqwest::StatusCode, Value)> {
+    async fn fetch_campaigns(&self, cred: &Value) -> Result<(reqwest::StatusCode, Value)> {
         let url = format!("{OPENAPI_BASE}{CAMPAIGNS_PATH}?forceRefresh=true");
         let resp = self
             .http
@@ -304,13 +311,40 @@ impl QoderProvider {
     }
 }
 
+/// Qoder's userinfo has appeared both as a flat object and under response
+/// wrappers. Accept the profile object itself, common wrapper keys, and the
+/// equivalent casing used by different API generations.
+fn profile_text<'a>(value: &'a Value, keys: &[&str], depth: u8) -> Option<&'a str> {
+    if let Some(object) = value.as_object() {
+        for key in keys {
+            if let Some(text) = object.get(*key).and_then(Value::as_str) {
+                let text = text.trim();
+                if !text.is_empty() {
+                    return Some(text);
+                }
+            }
+        }
+        if depth > 0 {
+            for key in ["data", "user", "profile", "result", "account"] {
+                if let Some(child) = object.get(key) {
+                    if let Some(text) = profile_text(child, keys, depth - 1) {
+                        return Some(text);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
 /// 是不是「每日积分」活动行。
 ///
 /// 活动列表里还混着别的 `CLAIM_BENEFIT` 活动（例如「发布站点领奶茶兑换卡」，
 /// `benefit.kind == REDEMPTION_CODE`），不能当成每日签到，否则会领错东西。
 fn is_daily_credits(row: &Value) -> bool {
     row.get("actionType").and_then(|v| v.as_str()) == Some("CLAIM_BENEFIT")
-        && row.get("benefit")
+        && row
+            .get("benefit")
             .and_then(|b| b.get("kind"))
             .and_then(|v| v.as_str())
             == Some("CREDITS")
@@ -353,8 +387,9 @@ fn row_points(row: &Value) -> i64 {
 enum Cycle {
     /// 今天可以领，带可领积分数
     Claimable(i64),
-    /// 今天已经领过了
-    Claimed,
+    /// 今天已经领过了（带当天积分数 —— 首页福利展示要显示「每天大概多少」，
+    /// 已领取时也要能看出来，不能只报 0）
+    Claimed(i64),
     /// 今天还没到刷新点
     NotYet { reset_minute: u32 },
     /// 已经过了刷新点，但上游还没下发今天的活动行
@@ -398,7 +433,7 @@ fn daily_cycle(rows: &[Value], now: &chrono::DateTime<chrono::Local>) -> Cycle {
     if let Some(row) = today_row {
         return match row.get("claimStatus").and_then(|v| v.as_str()) {
             Some("CLAIMABLE") => Cycle::Claimable(row_points(row)),
-            Some("CLAIMED") => Cycle::Claimed,
+            Some("CLAIMED") => Cycle::Claimed(row_points(row)),
             _ => Cycle::NotIssued { reset_minute },
         };
     }
@@ -456,11 +491,11 @@ impl Provider for QoderProvider {
                 day_index: None,
                 bonus_points: 0,
             },
-            Cycle::Claimed => CheckinStatus {
+            Cycle::Claimed(points) => CheckinStatus {
                 state: ClaimState::Claimed,
-                points: 0,
+                points,
                 streak_days: 0,
-                message: "今日已领取".to_string(),
+                message: format!("今日已领取 +{points} Credits"),
                 day_index: None,
                 bonus_points: 0,
             },
@@ -511,9 +546,9 @@ impl Provider for QoderProvider {
             .find(|row| row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMABLE"));
 
         let Some(target) = target else {
-            let already = candidates.iter().any(|row| {
-                row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMED")
-            });
+            let already = candidates
+                .iter()
+                .any(|row| row.get("claimStatus").and_then(|v| v.as_str()) == Some("CLAIMED"));
             return if already {
                 Ok(ClaimOutcome::already(0, "当前周期已领取"))
             } else {
@@ -531,11 +566,15 @@ impl Provider for QoderProvider {
         let mut headers = self.sash_headers(cred);
         headers.insert(
             "content-type",
-            "application/json".parse::<reqwest::header::HeaderValue>().unwrap(),
+            "application/json"
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
         headers.insert(
             "origin",
-            OPENAPI_BASE.parse::<reqwest::header::HeaderValue>().unwrap(),
+            OPENAPI_BASE
+                .parse::<reqwest::header::HeaderValue>()
+                .unwrap(),
         );
 
         let resp = self
@@ -564,7 +603,10 @@ impl Provider for QoderProvider {
             return Err(anyhow!("领取失败 HTTP {} {msg}", status.as_u16()));
         }
         if body.get("status").and_then(|v| v.as_str()) != Some("CLAIMED") {
-            let s = body.get("status").and_then(|v| v.as_str()).unwrap_or("未知");
+            let s = body
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("未知");
             return Err(anyhow!("签到未完成（上游状态 {s}）"));
         }
 
@@ -640,6 +682,15 @@ impl Provider for QoderProvider {
         let mut total_consumed = 0.0;
         let mut total_remaining = 0.0;
 
+        // expiresAt 实测是毫秒；有的账号返回 9999 年（视为长期有效）。
+        // 保险起见兼容秒级时间戳。
+        let expires_raw = usage["expiresAt"].as_i64().unwrap_or(0);
+        let expires_at_ms = if expires_raw > 0 && expires_raw < 1_000_000_000_000 {
+            expires_raw * 1000
+        } else {
+            expires_raw
+        };
+
         let mut absorb = |label: &str, q: &Value, items: &mut Vec<CreditItem>| {
             let granted = num(&q["total"]);
             let consumed = num(&q["used"]);
@@ -653,7 +704,9 @@ impl Provider for QoderProvider {
                 consumed,
                 remaining,
                 granted_at_ms: 0,
-                expire_at_ms: usage["expiresAt"].as_i64().unwrap_or(0),
+                expire_at_ms: expires_at_ms,
+                package_name: String::new(),
+                refresh_at_ms: 0,
             });
         };
 
@@ -674,6 +727,8 @@ impl Provider for QoderProvider {
             total_remaining,
             items,
             message,
+            refresh_at_ms: 0,
+            credit_groups: Vec::new(),
         })
     }
 
@@ -703,9 +758,16 @@ impl Provider for QoderProvider {
             return Ok(None);
         }
 
-        let name = body["name"].as_str().map(str::to_string);
-        let email = body["email"].as_str().map(str::to_string);
-        let avatar = body["avatar"].as_str().map(str::to_string);
+        let name = profile_text(
+            &body,
+            &["name", "nickname", "displayName", "display_name", "username", "loginName", "login_name"],
+            3,
+        )
+        .map(str::to_string);
+        let email = profile_text(&body, &["email", "emailAddress", "email_address"], 3)
+            .map(str::to_string);
+        let avatar = profile_text(&body, &["avatar", "avatarUrl", "avatar_url", "picture"], 3)
+            .map(str::to_string);
         if name.is_none() && email.is_none() {
             return Ok(None);
         }
@@ -749,7 +811,11 @@ pub fn umid_identity() -> Option<UmidIdentity> {
         let code = info["machineCode"].as_str().unwrap_or("").to_string();
         let r#type = info["machineType"].as_str().unwrap_or("").to_string();
         if !token.is_empty() && !code.is_empty() {
-            return Some(UmidIdentity { token, code, r#type });
+            return Some(UmidIdentity {
+                token,
+                code,
+                r#type,
+            });
         }
     }
     None
@@ -810,8 +876,14 @@ fn client_version() -> String {
         .filter_map(|v| {
             let mut parts = v.split('.');
             let a = parts.next().and_then(|x| x.parse::<u64>().ok())?;
-            let b = parts.next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
-            let c = parts.next().and_then(|x| x.parse::<u64>().ok()).unwrap_or(0);
+            let b = parts
+                .next()
+                .and_then(|x| x.parse::<u64>().ok())
+                .unwrap_or(0);
+            let c = parts
+                .next()
+                .and_then(|x| x.parse::<u64>().ok())
+                .unwrap_or(0);
             Some((a, b, c, v))
         })
         .max()
@@ -911,10 +983,10 @@ mod tests {
     #[test]
     fn 十点后今天已领() {
         let rows = vec![daily_row(at(2026, 10, 23, 10, 0).timestamp(), "CLAIMED")];
-        assert!(matches!(
-            daily_cycle(&rows, &at(2026, 10, 23, 10, 5)),
-            Cycle::Claimed
-        ));
+        match daily_cycle(&rows, &at(2026, 10, 23, 10, 5)) {
+            Cycle::Claimed(points) => assert_eq!(points, 100, "已领取也要带当天积分数"),
+            other => panic!("应为 Claimed，实际 {other:?}"),
+        }
     }
 
     #[test]

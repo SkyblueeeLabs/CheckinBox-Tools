@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 interface Props {
   onResolve: (action: "tray" | "exit", remember: boolean) => void;
@@ -13,28 +13,33 @@ interface Props {
  */
 export default function CloseConfirmDialog({ onResolve, onCancel }: Props) {
   const [remember, setRemember] = useState(false);
+  const dialog = useRef<HTMLDialogElement>(null);
 
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onCancel();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onCancel]);
+    const element = dialog.current;
+    element?.showModal();
+    return () => element?.close();
+  }, []);
+
+  const cancel = () => {
+    dialog.current?.close();
+    onCancel();
+  };
 
   return (
-    <div
-      className="modal-backdrop"
+    <dialog
+      className="confirm-dialog"
+      ref={dialog}
+      aria-labelledby="close-dialog-title"
+      onCancel={(e) => {
+        e.preventDefault();
+        cancel();
+      }}
       onMouseDown={(e) => {
-        if (e.target === e.currentTarget) onCancel();
+        if (e.target === e.currentTarget) cancel();
       }}
     >
-      <div
-        className="modal-card"
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="close-dialog-title"
-      >
+      <div className="modal-card">
         <h2 id="close-dialog-title">要关闭 CheckinBox 吗？</h2>
         <p className="modal-text">
           最小化到系统托盘后，自动签到和后台同步会在后台继续运行；
@@ -51,7 +56,7 @@ export default function CloseConfirmDialog({ onResolve, onCancel }: Props) {
         </label>
 
         <div className="modal-actions">
-          <button className="btn" onClick={onCancel}>
+          <button className="btn" onClick={cancel}>
             取消
           </button>
           <button className="btn" onClick={() => onResolve("exit", remember)}>
@@ -66,6 +71,6 @@ export default function CloseConfirmDialog({ onResolve, onCancel }: Props) {
           </button>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

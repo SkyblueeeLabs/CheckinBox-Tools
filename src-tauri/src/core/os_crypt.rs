@@ -82,10 +82,7 @@ pub fn encrypt(key: &[u8; KEY_LEN], plain: &[u8]) -> Result<Vec<u8>> {
 
     let cipher = Aes256Gcm::new(key.into());
     let sealed = cipher
-        .encrypt(
-            Nonce::from_slice(&nonce_bytes),
-            Payload::from(plain),
-        )
+        .encrypt(Nonce::from_slice(&nonce_bytes), Payload::from(plain))
         .map_err(|_| anyhow!("AES-GCM 加密失败"))?;
 
     let mut out = Vec::with_capacity(PREFIX.len() + NONCE_LEN + sealed.len());

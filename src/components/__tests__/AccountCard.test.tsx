@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import AccountCard from "../AccountCard";
 import type { AccountView } from "../../lib/types";
@@ -17,6 +18,7 @@ function view(over: Partial<AccountView> = {}): AccountView {
     isLow: false,
     alertThreshold: 200,
     trend: [],
+    supportsClaim: true,
     ...over,
   };
 }
@@ -27,7 +29,11 @@ const noop = vi.fn();
 const ERR =
   "凭据已失效（HTTP 401）：客户端当前登录的不是这个账号。在客户端登录此账号后重新导入，或用「切换客户端账号」切过去";
 
-function renderCard(over: Partial<AccountView> = {}, switchable = true) {
+function renderCard(
+  over: Partial<AccountView> = {},
+  switchable = true,
+  actions: Partial<ComponentProps<typeof AccountCard>> = {},
+) {
   return render(
     <AccountCard
       view={view(over)}
@@ -40,16 +46,17 @@ function renderCard(over: Partial<AccountView> = {}, switchable = true) {
       onSetActive={noop}
       onLaunch={noop}
       onRemove={noop}
+      {...actions}
     />
   );
 }
 
-/** 小卡片默认收起：点一下展开（可访问名随账号内容变化，直接按类名取） */
+/** 展开账号诊断信息 */
 function expand() {
   fireEvent.click(document.querySelector(".acct-mini")!);
 }
 
-describe("AccountCard（小卡片 + 点击展开）", () => {
+describe("AccountCard（方块卡片与快捷操作）", () => {
   it("收起态展示账号名、id 副名字（默认打码）、状态徽标和剩余积分摘要", () => {
     localStorage.removeItem("checkinbox-log-mask:minimax");
     renderCard({
@@ -73,53 +80,174 @@ describe("AccountCard（小卡片 + 点击展开）", () => {
     localStorage.removeItem("checkinbox-log-mask:minimax");
   });
 
-  it("展开后才出现签到按钮和积分明细", () => {
+  it("7 天内到期的积分显示到期徽标", () => {
+    const expireAtMs = Date.now() + 2 * 86_400_000;
+    renderCard({
+      quota: {
+        totalGranted: 500,
+        totalConsumed: 100,
+        totalRemaining: 400,
+        items: [
+          {
+            creditType: "free",
+            granted: 400,
+            consumed: 0,
+            remaining: 400,
+            grantedAtMs: 0,
+            expireAtMs,
+          },
+        ],
+        message: "",
+      },
+    });
+    expect(screen.getByText("2 天到期")).toBeInTheDocument();
+  });
+
+  it("Qoder 在弹窗内展示本地领取批次，即使额度接口报错", () => {
+    const now = Date.now();
+    renderCard({
+      account: { id: "q1", provider: "qoder", label: "Qoder 账号", createdAt: 0, origin: "" },
+      providerName: "Qoder CN",
+      quotaError: "额度接口不可用",
+      trackedGrants: [
+        {
+          creditType: "daily",
+          granted: 100,
+          consumed: 0,
+          remaining: 100,
+          grantedAtMs: now - 86_400_000,
+          expireAtMs: now + 29 * 86_400_000,
+        },
+      ],
+    });
+    expect(screen.queryByText(/每日领取记录（本地）/)).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "积分明细" }));
+    const dialog = within(screen.getByRole("dialog", { name: "积分明细" }));
+    expect(dialog.getByText(/每日领取记录（本地）/)).toBeInTheDocument();
+    expect(dialog.getByRole("alert")).toHaveTextContent("额度接口不可用");
+    expect(dialog.getByRole("button", { name: "重试刷新" })).toBeEnabled();
+  });
+
+  it("Zcode 的额度按 Token 展示：3 亿级缩写为亿，单位标签不再是积分", () => {
+    renderCard({
+      account: { id: "z1", provider: "zcode", label: "Zcode 账号", createdAt: 0, origin: "本机 Zcode 登录态" },
+      providerName: "Zcode",
+      status: { state: "claimable", points: 0, streakDays: 0, message: "可领取", bonusPoints: 0 },
+      supportsClaim: false,
+      quota: {
+        totalGranted: 300_000_000,
+        totalConsumed: 1_109_567,
+        totalRemaining: 298_890_433,
+        items: [],
+        message: "GLM-5.3-Flash 剩余 2.99亿 / 共 3.00亿",
+      },
+    });
+    // 收起态：紧凑数字 + Token 标签
+    expect(screen.getByText("2.99亿")).toBeInTheDocument();
+    expect(screen.getByText("剩余 Token")).toBeInTheDocument();
+    expect(screen.queryByText("剩余总积分")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "额度明细" }));
+    const dialog = within(screen.getByRole("dialog", { name: "额度明细" }));
+    expect(dialog.getByText("3亿")).toBeInTheDocument();
+    expect(dialog.getByText("累计发放 Token")).toBeInTheDocument();
+    expect(screen.queryByText("累计发放总积分")).not.toBeInTheDocument();
+  });
+
+  it("直接从卡片签到和设为当前", () => {
+    const onCheckin = vi.fn();
+    const onSetActive = vi.fn();
     renderCard({
       status: { state: "claimable", points: 400, streakDays: 0, message: "可签到 +400 积分", bonusPoints: 0 },
-    });
-    expect(screen.queryByRole("button", { name: "签到" })).not.toBeInTheDocument();
-    expand();
-    expect(screen.getByRole("button", { name: "签到" })).toBeEnabled();
-    expect(screen.getByText("本机")).toBeInTheDocument();
+    }, true, { onCheckin, onSetActive });
+    fireEvent.click(screen.getByRole("button", { name: "签到" }));
+    fireEvent.click(screen.getByRole("button", { name: "设为当前" }));
+    expect(onCheckin).toHaveBeenCalledOnce();
+    expect(onSetActive).toHaveBeenCalledOnce();
+    expect(screen.getByRole("button", { name: "积分明细" })).toBeEnabled();
+    expect(screen.queryByText("本机")).not.toBeInTheDocument();
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
-  it("客户端登录中的账号带徽标，展开后只有「打开客户端」（它就是现场）", () => {
-    renderCard({ isClientLogin: true });
+  it("客户端登录中的账号可直接打开客户端", () => {
+    const onLaunch = vi.fn();
+    renderCard({ isClientLogin: true }, true, { onLaunch });
     expect(screen.getByText("客户端登录")).toBeInTheDocument();
-    expand();
-    expect(screen.getByText("打开客户端")).toBeInTheDocument();
-    expect(screen.queryByText("切换并打开客户端")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "打开客户端" }));
+    expect(onLaunch).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "切换并打开客户端" })).not.toBeInTheDocument();
   });
 
-  it("非客户端登录的账号展开后是「切换并打开客户端」一条龙按钮", () => {
-    renderCard({ isClientLogin: false });
-    expand();
-    expect(screen.getByText("切换并打开客户端")).toBeEnabled();
+  it("其他可切换账号可以从卡片切换并打开客户端", () => {
+    const onSwitchClient = vi.fn();
+    renderCard({ isClientLogin: false }, true, { onSwitchClient });
+    fireEvent.click(screen.getByRole("button", { name: "切换并打开客户端" }));
+    expect(onSwitchClient).toHaveBeenCalledOnce();
   });
 
-  it("switchable=false 的平台展开后只有普通「打开客户端」", () => {
+  it("不支持切换的平台直接提供「打开客户端」", () => {
     renderCard({}, false);
-    expand();
-    expect(screen.queryByText("切换并打开客户端")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "切换并打开客户端" })).not.toBeInTheDocument();
     expect(screen.getByText("打开客户端")).toBeInTheDocument();
   });
 
-  it("积分低于预警阈值时小卡片数字标红，展开后有预警提示", () => {
+  it("移除账号须确认，取消时保留账号", () => {
+    const onRemove = vi.fn();
+    renderCard({}, true, { onRemove });
+    const remove = screen.getByRole("button", { name: "移除账号" });
+    fireEvent.click(remove);
+    const dialog = within(screen.getByRole("dialog", { name: "移除账号？" }));
+    expect(dialog.getByText(/MiniMax Code.*测试账号/)).toBeVisible();
+    fireEvent.click(dialog.getByRole("button", { name: "取消" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(onRemove).not.toHaveBeenCalled();
+
+    fireEvent.click(remove);
+    fireEvent.click(dialog.getByRole("button", { name: "确认移除" }));
+    expect(onRemove).toHaveBeenCalledOnce();
+  });
+
+  it("积分低于预警阈值时小卡片数字标红，明细窗口有预警提示", () => {
     renderCard({
       quota: { totalGranted: 1000, totalConsumed: 900, totalRemaining: 80, items: [], message: "" },
       isLow: true,
       alertThreshold: 200,
     });
     expect(document.querySelector(".acct-mini-remaining b.low")).toBeInTheDocument();
-    expand();
+    fireEvent.click(screen.getByRole("button", { name: "积分明细" }));
     expect(screen.getByText("积分低于预警线（200）")).toBeInTheDocument();
   });
 
-  it("状态未知时摘要提示读取中，展开后签到按钮禁用", () => {
+  it("WorkBuddy 卡片直接显示小数余额和官方分组，详情在应用内另开", () => {
+    renderCard({
+      account: { id: "wb1", provider: "workbuddy", label: "工作账号", createdAt: 0, origin: "本机" },
+      providerName: "WorkBuddy",
+      quota: {
+        totalGranted: 200,
+        totalConsumed: 75.14,
+        totalRemaining: 124.86,
+        items: [],
+        message: "",
+        creditGroups: [
+          { kind: "benefit", name: "平台奖励积分", total: 150, used: 75.14, remaining: 74.86, count: 1 },
+          { kind: "plan_base", name: "套餐基础积分", total: 50, used: 0, remaining: 50, count: 1 },
+        ],
+      },
+    });
+    expect(screen.getByText("124.86")).toBeInTheDocument();
+    expect(screen.getByText("74.86")).toBeInTheDocument();
+    expect(screen.queryByText("已使用 75.14/150")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "积分明细" }));
+    const dialog = within(screen.getByRole("dialog", { name: "积分明细" }));
+    expect(dialog.getByText("WorkBuddy · 工作账号")).toBeInTheDocument();
+    expect(dialog.getByText("已使用 75.14/150")).toBeInTheDocument();
+    fireEvent.click(dialog.getByRole("button", { name: "关闭弹窗" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("状态未知时摘要提示读取中，签到按钮禁用", () => {
     renderCard();
     expect(screen.getByText("正在读取…")).toBeInTheDocument();
-    expand();
-    expect(screen.getByText("已处理")).toBeDisabled();
+    expect(screen.getByRole("button", { name: "签到" })).toBeDisabled();
   });
 
   it("凭据失效时收起态显示红色徽标和异常摘要", () => {
@@ -142,5 +270,40 @@ describe("AccountCard（小卡片 + 点击展开）", () => {
     expand();
     expect(screen.getByText(ERR)).toBeInTheDocument();
     expect(screen.getByText(quotaErr)).toBeInTheDocument();
+  });
+
+  it("不代领的平台（Zcode）显示「待领取」和「打开Zcode领取」按钮", () => {
+    renderCard({
+      providerName: "Zcode",
+      supportsClaim: false,
+      status: {
+        state: "claimable",
+        points: 0,
+        streakDays: 0,
+        message: "当前无生效中的套餐，点「打开 Zcode 领取」去官方客户端领取",
+        bonusPoints: 0,
+      },
+    }, false);
+    expect(screen.getAllByText("待领取").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "打开Zcode领取" })).toBeEnabled();
+    // 不代领的平台不该出现「签到」按钮
+    expect(screen.queryByRole("button", { name: "签到" })).not.toBeInTheDocument();
+  });
+
+  it("Zcode 已领取时直接打开客户端", () => {
+    renderCard({
+      providerName: "Zcode",
+      supportsClaim: false,
+      status: {
+        state: "claimed",
+        points: 0,
+        streakDays: 0,
+        message: "已领取 ZCODE GLOBAL BUILD · GLM-5.3-Flash",
+        bonusPoints: 0,
+      },
+    }, false);
+    expect(screen.getAllByText("已领取").length).toBeGreaterThan(0);
+    expect(screen.queryByRole("button", { name: "打开Zcode领取" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "打开客户端" })).toBeEnabled();
   });
 });

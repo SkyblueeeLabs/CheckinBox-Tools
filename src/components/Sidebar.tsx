@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { HOME_ID, type AgentGroup } from "../lib/types";
-import { fmtPoints } from "../lib/api";
+import { fmtPoints, fmtQuotaAmount } from "../lib/api";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 
 interface Props {
@@ -234,8 +234,11 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
                   ) : null}
                 </span>
               </span>
-              <span className={`side-remaining ${remaining > 0 ? "" : "zero"}`}>
-                {remaining > 0 ? fmtPoints(remaining) : "—"}
+              <span
+                className={`side-remaining ${remaining > 0 ? "" : "zero"}`}
+                title={remaining > 0 ? `剩余 ${fmtPoints(remaining)}` : undefined}
+              >
+                {remaining > 0 ? fmtQuotaAmount(remaining, group.provider.id) : "—"}
               </span>
             </button>
           );
@@ -277,8 +280,13 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
               ) : null}
             </span>
           </span>
-          <span className={`side-remaining ${draggedGroup.totalRemaining > 0 ? "" : "zero"}`}>
-            {draggedGroup.totalRemaining > 0 ? fmtPoints(draggedGroup.totalRemaining) : "—"}
+          <span
+            className={`side-remaining ${draggedGroup.totalRemaining > 0 ? "" : "zero"}`}
+            title={draggedGroup.totalRemaining > 0 ? `剩余 ${fmtPoints(draggedGroup.totalRemaining)}` : undefined}
+          >
+            {draggedGroup.totalRemaining > 0
+              ? fmtQuotaAmount(draggedGroup.totalRemaining, draggedGroup.provider.id)
+              : "—"}
           </span>
         </div>
       )}

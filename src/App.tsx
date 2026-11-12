@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { api, onAccountsSynced, onCheckinProgress, onCloseRequested } from "./lib/api";
+import { api, onAccountsChanged, onNoticesChanged, onSwitchProgress, onWindowRequested } from "./lib/api";
 import { buildGroups } from "./lib/groups";
 import type {
-  AccountResult,
   AppConfig,
   CloseAction,
   LogEntry,
+  Notice,
+  NoticeKind,
   Overview,
+  SwitchProgressStage,
 } from "./lib/types";
 import Sidebar, { SETTINGS_ID } from "./components/Sidebar";
 import AgentGroupPanel from "./components/AgentGroupPanel";
@@ -14,77 +16,174 @@ import DashboardPanel from "./components/DashboardPanel";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
 import CloseConfirmDialog from "./components/CloseConfirmDialog";
+import NotificationsDialog from "./components/NotificationsDialog";
+import SwitchProgressDialog from "./components/SwitchProgressDialog";
 import { HOME_ID } from "./lib/types";
 
 interface Toast {
   id: number;
-  kind: "ok" | "warn" | "err";
+  kind: NoticeKind;
   text: string;
+}
+
+interface SwitchProgressState {
+  providerId: string;
+  providerName: string;
+  accountId: string;
+  accountLabel: string;
+  chatSyncEnabled: boolean;
+  stage: SwitchProgressStage | "preparing" | "completed" | "failed";
+  detail?: string;
+  error?: string;
 }
 
 export default function App() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [autostart, setAutostart] = useState<boolean | null>(null);
   const [selected, setSelected] = useState<string>(HOME_ID);
   const [busy, setBusy] = useState(false);
+  const [switchProgress, setSwitchProgress] = useState<SwitchProgressState | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
   const [authSession, setAuthSession] = useState<string | null>(null);
   const [authUrl, setAuthUrl] = useState<string | null>(null);
   const [authProvider, setAuthProvider] = useState<string | null>(null);
+  const [authDeadline, setAuthDeadline] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
   const [logsOpen, setLogsOpen] = useState(false);
+  const [logsRequested, setLogsRequested] = useState(false);
   const [closePrompt, setClosePrompt] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [notices, setNotices] = useState<Notice[] | null>(null);
+  const [noticeError, setNoticeError] = useState<string | null>(null);
+  const [noticesOpen, setNoticesOpen] = useState(false);
+  const [markingNotices, setMarkingNotices] = useState(false);
   const toastSeq = useRef(0);
+  const refreshSeq = useRef(0);
+  const noticesSeq = useRef(0);
+  const loaded = useRef(false);
+  const logsSection = useRef<HTMLDivElement>(null);
 
   const pushToast = useCallback((kind: Toast["kind"], text: string) => {
     const id = ++toastSeq.current;
-    setToasts((prev) => [...prev, { id, kind, text }]);
+    setToasts((prev) => [...prev.slice(-3), { id, kind, text }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5200);
   }, []);
 
   const refresh = useCallback(async () => {
+    const request = ++refreshSeq.current;
+    setLoadError(null);
+    // 日志与系统自启状态独立加载，避免它们拖住账号页。
+    void api.getLogs(7).then((entries) => {
+      if (request === refreshSeq.current) setLogs(entries);
+    }).catch((e) => {
+      if (request === refreshSeq.current) pushToast("err", `读取签到记录失败：${e}`);
+    });
+    void api.autostartEnabled().then((enabled) => {
+      if (request === refreshSeq.current) setAutostart(enabled);
+    }).catch(() => {
+      if (request === refreshSeq.current) setAutostart(null);
+    });
     try {
-      const [ov, lg, cfg] = await Promise.all([
-        api.overview(),
-        api.getLogs(7),
-        api.getConfig(),
-      ]);
+      const ov = await api.overview();
+      const cfg = await api.getConfig();
+      if (request !== refreshSeq.current) return;
       setOverview(ov);
-      setLogs(lg);
       setConfig(cfg);
+      loaded.current = true;
       setSelected((prev) =>
         prev === SETTINGS_ID || prev === HOME_ID || ov.providers.some((p) => p.id === prev)
           ? prev
           : HOME_ID
       );
     } catch (e) {
-      pushToast("err", `加载失败：${e}`);
+      if (request !== refreshSeq.current) return;
+      if (loaded.current) pushToast("err", `刷新账号失败：${e}`);
+      else setLoadError(String(e));
     }
   }, [pushToast]);
 
+  const refreshNotices = useCallback(async () => {
+    const request = ++noticesSeq.current;
+    try {
+      const items = await api.listNotices();
+      if (request !== noticesSeq.current) return;
+      setNotices(items);
+      setNoticeError(null);
+    } catch (e) {
+      if (request === noticesSeq.current) setNoticeError(`读取提醒失败：${e}`);
+    }
+  }, []);
+
+  const openNotices = useCallback(() => {
+    setClosePrompt(false);
+    setNoticesOpen(true);
+    void refreshNotices();
+  }, [refreshNotices]);
+
   useEffect(() => {
-    void refresh();
-    const unlisten = onCheckinProgress((result: AccountResult) => {
-      if (result.status === "success") {
-        pushToast("ok", `${result.label} 签到成功 +${result.points}`);
-      } else if (result.status === "failed") {
-        pushToast("err", `${result.label} 签到失败：${result.message}`);
+    let active = true;
+    const handleRequest = async () => {
+      if (!active) return;
+      const request = await api.takeWindowRequest();
+      if (!active) return;
+      if (request === "settings" || request === "logs") {
+        setClosePrompt(false);
+        setNoticesOpen(false);
+      }
+      switch (request) {
+        case "close":
+          setNoticesOpen(false);
+          setClosePrompt(true);
+          break;
+        case "notices": openNotices(); break;
+        case "settings": setSelected(SETTINGS_ID); break;
+        case "logs":
+          setSelected(HOME_ID);
+          setLogsOpen(true);
+          setLogsRequested(true);
+          break;
+      }
+    };
+    const accounts = onAccountsChanged(() => { if (active) void refresh(); });
+    const reminders = onNoticesChanged((notice) => {
+      if (!active) return;
+      void refreshNotices();
+      if (notice && document.visibilityState === "visible" && document.hasFocus()) {
+        pushToast(notice.kind, notice.title);
       }
     });
-    // 后台自动同步跑完一轮，界面跟着刷新（跨天同步尤其重要）
-    const unlistenSync = onAccountsSynced(() => {
-      void refresh();
+    const windows = onWindowRequested(() => {
+      void handleRequest().catch((e) => {
+        if (active) pushToast("err", `读取窗口操作失败：${e}`);
+      });
     });
-    // 点了窗口 ×、关闭行为是「每次询问」时，后端会拦下关闭并通知这里
-    const unlistenClose = onCloseRequested(() => setClosePrompt(true));
+    // 先建立订阅，再读取状态，覆盖窗口尚未加载时产生的提醒与托盘操作。
+    void reminders.then(() => { if (active) void refreshNotices(); })
+      .catch((e) => { if (active) setNoticeError(String(e)); });
+    void windows.then(handleRequest)
+      .catch((e) => { if (active) pushToast("err", `读取窗口操作失败：${e}`); });
+    void accounts.catch((e) => {
+      if (active) pushToast("err", `订阅账号更新失败：${e}`);
+    }).then(() => { if (active) void refresh(); });
     return () => {
-      void unlisten.then((fn) => fn());
-      void unlistenSync.then((fn) => fn());
-      void unlistenClose.then((fn) => fn());
+      active = false;
+      ++refreshSeq.current;
+      ++noticesSeq.current;
+      for (const subscription of [accounts, reminders, windows]) {
+        void subscription.then((unlisten) => unlisten()).catch(() => {});
+      }
     };
-  }, [refresh, pushToast]);
+  }, [openNotices, refresh, refreshNotices, pushToast]);
+
+  useEffect(() => {
+    if (!logsRequested || !logsSection.current) return;
+    logsSection.current.scrollIntoView({ block: "start" });
+    setLogsRequested(false);
+  }, [logsRequested, overview, config]);
 
   // 前台轮询（积分和签到状态都会变）
   useEffect(() => {
@@ -95,25 +194,12 @@ export default function App() {
   const runAll = async () => {
     setBusy(true);
     try {
-      const results = await api.checkinAll();
-      const ok = results.filter((r) => r.status === "success").length;
-      const already = results.filter((r) => r.status === "already").length;
-      const failed = results.filter((r) => r.status === "failed");
-      if (failed.length) {
-        pushToast(
-          "warn",
-          `${ok} 成功 / ${already} 已签，${failed.length} 个失败：${failed
-            .map((f) => `${f.label}（${f.message}）`)
-            .join("；")}`
-        );
-      } else {
-        pushToast("ok", `${ok} 个签到成功，${already} 个今日已签`);
-      }
+      const summary = await api.checkinAll();
+      pushToast(summary.kind, summary.message);
     } catch (e) {
       pushToast("err", `签到失败：${e}`);
     } finally {
       setBusy(false);
-      await refresh();
     }
   };
 
@@ -123,7 +209,7 @@ export default function App() {
       const result = await api.checkinAccount(providerId, accountId);
       if (result.status === "success") pushToast("ok", `${label} +${result.points}`);
       else if (result.status === "already") pushToast("warn", `${label} 今日已签`);
-      else pushToast("warn", `${label}：${result.message}`);
+      else pushToast(result.status === "failed" ? "err" : "warn", `${label}：${result.message}`);
     } catch (e) {
       pushToast("err", `${label}：${e}`);
     } finally {
@@ -178,6 +264,9 @@ export default function App() {
       setAuthSession(challenge.sessionId);
       setAuthProvider(providerId);
       setAuthUrl(challenge.authUrl);
+      setAuthDeadline(
+        challenge.expiresInSecs ? Date.now() + challenge.expiresInSecs * 1000 : null,
+      );
       await api.openExternal(challenge.authUrl);
       pushToast("warn", "请在浏览器里确认授权");
     } catch (e) {
@@ -193,16 +282,26 @@ export default function App() {
         const account = await api.pollDeviceAuth(authProvider ?? "qoder", authSession);
         if (account) {
           setAuthSession(null);
+          setAuthDeadline(null);
           pushToast("ok", `已添加账号：${account.label}`);
           await refresh();
         }
       } catch (e) {
         setAuthSession(null);
+        setAuthDeadline(null);
         pushToast("err", `授权失败：${e}`);
       }
     }, 2500);
     return () => clearInterval(timer);
   }, [authSession, pushToast, refresh]);
+
+  // 授权倒计时：上游的 device code 只有 5 分钟左右，过期后网页会报
+  // 「授权链接无效 / 缺少有效的 user_code」，横幅上把剩余时间显示出来
+  useEffect(() => {
+    if (!authDeadline) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [authDeadline]);
 
   // 应用重启后恢复未完成的授权轮询
   useEffect(() => {
@@ -213,6 +312,11 @@ export default function App() {
         if (!cancelled && pending.length > 0) {
           setAuthSession(pending[0].sessionId);
           setAuthUrl(pending[0].authUrl);
+          setAuthDeadline(
+            pending[0].expiresInSecs
+              ? Date.now() + pending[0].expiresInSecs * 1000
+              : null,
+          );
           // 待完成会话自带 provider（命令行入驻时可能直接指定）
           setAuthProvider(pending[0].provider ?? "qoder");
         }
@@ -226,12 +330,15 @@ export default function App() {
   }, []);
 
   const removeAccount = async (providerId: string, accountId: string, label: string) => {
+    setBusy(true);
     try {
       await api.removeAccount(providerId, accountId);
       pushToast("warn", `已移除：${label}`);
       await refresh();
     } catch (e) {
       pushToast("err", `移除失败：${e}`);
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -265,18 +372,36 @@ export default function App() {
       (a) => a.account.provider === providerId && a.account.id === accountId
     );
     const label = view?.account.label ?? accountId;
+    const chatSyncEnabled = Boolean(
+      overview?.agents[providerId]?.chatSyncSupported &&
+      config?.scheduler.agents[providerId]?.chatSyncEnabled
+    );
+    const providerName = overview?.providers.find((provider) => provider.id === providerId)?.name ?? providerId;
     setBusy(true);
+    setSwitchProgress({ providerId, providerName, accountId, accountLabel: label, chatSyncEnabled, stage: "preparing" });
+    let unlisten = () => {};
+    try {
+      unlisten = await onSwitchProgress((progress) => {
+        if (progress.providerId === providerId && progress.accountId === accountId) {
+          setSwitchProgress((current) => current ? { ...current, stage: progress.stage } : current);
+        }
+      });
+    } catch {
+      // 即使进度事件不可用，切换命令仍继续；结果和错误仍由 invoke 返回。
+    }
     try {
       const result = await api.switchClientAccount(providerId, accountId);
       const chatNote = result.chatSync ? `；${result.chatSync.detail}` : "";
+      setSwitchProgress((current) => current ? { ...current, stage: "completed", detail: result.chatSync?.detail } : current);
       pushToast(
         "ok",
         `${label}：已切换客户端账号并重启，同时设为当前账号${result.backup ? "（原登录态已备份）" : ""}${chatNote}`
       );
       await refresh();
     } catch (e) {
-      pushToast("err", `切换失败：${e}`);
+      setSwitchProgress((current) => current ? { ...current, stage: "failed", error: String(e) } : current);
     } finally {
+      unlisten();
       setBusy(false);
     }
   };
@@ -321,32 +446,22 @@ export default function App() {
       .catch((e) => pushToast("err", `保存失败：${e}`));
   }, [pushToast]);
 
-  /** 改某个 agent 自己的自动签到配置（前端乐观更新 + 后端落盘） */
+  /** 仅保存本次改动的调度字段，校验通过后更新显示。 */
   const patchSchedule = useCallback(
     (providerId: string, patch: { enabled?: boolean; startMinute?: number; endMinute?: number }) => {
-      setOverview((prev) => {
-        if (!prev) return prev;
-        const cur = prev.agents[providerId];
-        if (!cur) return prev;
-        return {
-          ...prev,
-          agents: {
-            ...prev.agents,
-            [providerId]: { ...cur, ...patch },
-          },
-        };
-      });
       void api
-        .setAgentSchedule(
-          providerId,
-          patch.enabled ?? overview?.agents[providerId]?.enabled ?? true,
-          patch.startMinute ?? overview?.agents[providerId]?.startMinute ?? 360,
-          patch.endMinute ?? overview?.agents[providerId]?.endMinute ?? 480
-        )
-        .then((cfg) => setConfig(cfg))
+        .setAgentSchedule(providerId, patch)
+        .then((cfg) => {
+          setConfig(cfg);
+          setOverview((prev) => {
+            const agent = prev?.agents[providerId];
+            if (!prev || !agent) return prev;
+            return { ...prev, agents: { ...prev.agents, [providerId]: { ...agent, ...patch } } };
+          });
+        })
         .catch((e) => pushToast("err", `保存失败：${e}`));
     },
-    [overview, pushToast]
+    [pushToast]
   );
 
   const patchRefreshInterval = useCallback(
@@ -393,9 +508,8 @@ export default function App() {
   const syncNow = async () => {
     setSyncing(true);
     try {
-      const count = await api.syncNow();
-      pushToast("ok", `已同步 ${count} 个账号`);
-      await refresh();
+      const summary = await api.syncNow();
+      pushToast(summary.kind, summary.message);
     } catch (e) {
       pushToast("err", `同步失败：${e}`);
     } finally {
@@ -415,6 +529,60 @@ export default function App() {
     },
     [pushToast]
   );
+
+  /** 开启 / 关闭开机自启（真实状态以操作系统为准） */
+  const changeAutostart = useCallback(
+    async (enabled: boolean) => {
+      try {
+        const actual = await api.setAutostart(enabled);
+        setAutostart(actual);
+        pushToast(
+          "ok",
+          actual ? "已开启开机启动（静默驻留托盘）" : "已关闭开机启动"
+        );
+      } catch (e) {
+        pushToast("err", `设置开机启动失败：${e}`);
+      }
+    },
+    [pushToast]
+  );
+
+  /** 自动提醒总开关 */
+  const changeNotifications = useCallback(
+    async (enabled: boolean) => {
+      try {
+        const cfg = await api.setNotificationsEnabled(enabled);
+        setConfig(cfg);
+        pushToast("ok", enabled ? "自动提醒已开启" : "自动提醒已关闭");
+      } catch (e) {
+        pushToast("err", `保存失败：${e}`);
+      }
+    },
+    [pushToast]
+  );
+
+  const testNotification = useCallback(async () => {
+    try {
+      await api.sendTestNotification();
+      openNotices();
+    } catch (e) {
+      pushToast("err", `发送测试提醒失败：${e}`);
+    }
+  }, [openNotices, pushToast]);
+
+  const markNoticesRead = async () => {
+    const ids = notices?.filter((notice) => !notice.read).map((notice) => notice.id) ?? [];
+    if (!ids.length) return;
+    setMarkingNotices(true);
+    try {
+      await api.markNoticesRead(ids);
+      await refreshNotices();
+    } catch (e) {
+      setNoticeError(`标为已读失败：${e}`);
+    } finally {
+      setMarkingNotices(false);
+    }
+  };
 
   /** 关闭确认框的选择结果：执行一次；勾了「记住」才写进配置 */
   const resolveClose = useCallback(
@@ -439,6 +607,52 @@ export default function App() {
       pushToast("err", `${e}`);
     }
   };
+
+  const unread = notices?.filter((notice) => !notice.read).length ?? 0;
+  const noticesButton = (
+    <button className="btn notices-button" onClick={openNotices} aria-haspopup="dialog"
+      aria-label={unread ? `应用内提醒，${unread} 条未读` : "应用内提醒"}
+    >
+      提醒
+      {unread > 0 && <span className="notices-badge" aria-hidden="true">{unread}</span>}
+    </button>
+  );
+  const overlays = (
+    <>
+      <div className="toasts" role="status" aria-live="polite">
+        {toasts.map((t) => (
+          <div key={t.id} className={`toast ${t.kind}`}>{t.text}</div>
+        ))}
+      </div>
+      {closePrompt && (
+        <CloseConfirmDialog
+          onCancel={() => setClosePrompt(false)}
+          onResolve={(action, remember) => void resolveClose(action, remember)}
+        />
+      )}
+      {noticesOpen && (
+        <NotificationsDialog
+          notices={notices}
+          error={noticeError}
+          marking={markingNotices}
+          onMarkRead={() => void markNoticesRead()}
+          onRetry={() => void refreshNotices()}
+          onClose={() => setNoticesOpen(false)}
+        />
+      )}
+      {switchProgress && (
+        <SwitchProgressDialog
+          providerName={switchProgress.providerName}
+          accountLabel={switchProgress.accountLabel}
+          stage={switchProgress.stage}
+          chatSyncEnabled={switchProgress.chatSyncEnabled}
+          detail={switchProgress.detail}
+          error={switchProgress.error}
+          onClose={() => setSwitchProgress(null)}
+        />
+      )}
+    </>
+  );
 
   // 首屏骨架：不等 overview（它要等各平台网络请求，3 秒级）。
   // 立即渲染界面结构 + 骨架占位，数据到了自动填充（45s 轮询 / 事件驱动）。
@@ -479,31 +693,43 @@ export default function App() {
             <div className="brand">
               <span className="brand-name">{selected === SETTINGS_ID ? "设置" : selected === HOME_ID ? "总览" : "CheckinBox"}</span>
             </div>
+            {noticesButton}
           </header>
-          <section className="panel dash">
-            <div className="dash-stats">
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="dash-stat">
-                  <span className="skeleton skeleton-line" />
-                  <span className="skeleton skeleton-value" />
+          {loadError ? (
+            <section className="panel load-error" role="alert">
+              <h2>账号与积分加载失败</h2>
+              <p>{loadError}</p>
+              <button className="btn primary" onClick={() => void refresh()}>重试</button>
+            </section>
+          ) : (
+            <>
+              <section className="panel dash" aria-hidden="true">
+                <div className="dash-stats">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="dash-stat">
+                      <span className="skeleton skeleton-line" />
+                      <span className="skeleton skeleton-value" />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-            <div className="dash-agents">
-              {[0, 1, 2, 3].map((i) => (
-                <div key={i} className="dash-agent skeleton-item">
-                  <span className="skeleton skeleton-mark" />
-                  <span className="skeleton skeleton-line" />
-                  <span className="skeleton skeleton-line short" />
+                <div className="dash-agents">
+                  {[0, 1, 2, 3].map((i) => (
+                    <div key={i} className="dash-agent skeleton-item">
+                      <span className="skeleton skeleton-mark" />
+                      <span className="skeleton skeleton-line" />
+                      <span className="skeleton skeleton-line short" />
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
-          </section>
-          <div className="loading-hint">
-            <div className="loading-mark" />
-            <p>正在加载账号与积分…</p>
-          </div>
+              </section>
+              <div className="loading-hint" role="status">
+                <div className="loading-mark" />
+                <p>正在加载账号与积分…</p>
+              </div>
+            </>
+          )}
         </div>
+        {overlays}
       </div>
     );
   }
@@ -520,6 +746,11 @@ export default function App() {
   const accountNames = Object.fromEntries(
     overview.accounts.map((a) => [`${a.account.provider}:${a.account.id}`, a.account.label])
   );
+  // 授权码剩余秒数（上游 device code 只有 5 分钟左右）
+  const authLeft = authDeadline
+    ? Math.max(0, Math.round((authDeadline - now) / 1000))
+    : null;
+  const authExpired = authLeft !== null && authLeft <= 0;
 
   return (
     <div className="shell">
@@ -557,16 +788,43 @@ export default function App() {
             <div className="auth-text">
               <strong>等待 {providerNames[authProvider ?? ""] ?? "平台"} 授权</strong>
               <span>
-                已在浏览器打开授权页。
+                {authExpired ? (
+                  <>授权码已过期，网页会提示「缺少有效的 user_code」。</>
+                ) : (
+                  <>已在浏览器打开授权页。</>
+                )}
+                {authLeft !== null && !authExpired && <>（{authLeft} 秒内有效）</>}
                 <button className="link" onClick={() => api.openExternal(authUrl)}>
                   重新打开
                 </button>
                 用要登录的账号点「确认授权」。
               </span>
             </div>
-            <button className="btn small" onClick={() => { setAuthSession(null); setAuthProvider(null); }}>
-              取消
-            </button>
+            {authExpired ? (
+              <button
+                className="btn small"
+                onClick={() => {
+                  const provider = authProvider ?? "qoder";
+                  setAuthSession(null);
+                  setAuthProvider(null);
+                  setAuthDeadline(null);
+                  void startDeviceAuth(provider);
+                }}
+              >
+                重新发起
+              </button>
+            ) : (
+              <button
+                className="btn small"
+                onClick={() => {
+                  setAuthSession(null);
+                  setAuthProvider(null);
+                  setAuthDeadline(null);
+                }}
+              >
+                取消
+              </button>
+            )}
           </div>
         )}
 
@@ -580,6 +838,7 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
+            {noticesButton}
             <label className="switch" title="总闸：关掉后所有 agent 都不跑">
               <input
                 type="checkbox"
@@ -621,6 +880,10 @@ export default function App() {
             onSyncNow={syncNow}
             onOpenDataDir={openDataDir}
             onCloseAction={(action) => void changeCloseAction(action)}
+            autostartEnabled={autostart}
+            onAutostartChange={(enabled) => void changeAutostart(enabled)}
+            onNotificationsEnabled={(enabled) => void changeNotifications(enabled)}
+            onTestNotification={() => void testNotification()}
           />
         ) : current ? (
           <AgentGroupPanel
@@ -646,31 +909,19 @@ export default function App() {
           </div>
         )}
 
-        <LogPanel
-          logs={logs}
-          providerId={current?.provider.id ?? null}
-          providerName={current?.provider.name ?? "全部"}
-          providerNames={providerNames}
-          accountNames={accountNames}
-          visible={logsOpen}
-          onToggle={() => setLogsOpen((v) => !v)}
-        />
-
-        <div className="toasts">
-          {toasts.map((t) => (
-            <div key={t.id} className={`toast ${t.kind}`}>
-              {t.text}
-            </div>
-          ))}
-        </div>
-
-        {closePrompt && (
-          <CloseConfirmDialog
-            onCancel={() => setClosePrompt(false)}
-            onResolve={(action, remember) => void resolveClose(action, remember)}
+        <div ref={logsSection}>
+          <LogPanel
+            logs={logs}
+            providerId={current?.provider.id ?? null}
+            providerName={current?.provider.name ?? "全部"}
+            providerNames={providerNames}
+            accountNames={accountNames}
+            visible={logsOpen}
+            onToggle={() => setLogsOpen((v) => !v)}
           />
-        )}
+        </div>
       </div>
+      {overlays}
     </div>
   );
 }

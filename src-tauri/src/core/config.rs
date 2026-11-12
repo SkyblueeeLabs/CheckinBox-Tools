@@ -34,7 +34,7 @@ pub struct AgentScheduleConfig {
     /// 换号时是否同步客户端本地聊天记录（借鉴 Cockpit 的
     /// `share_sessions_on_switch`）。
     ///
-    /// 只对聊天记录**存本地**的客户端有意义（WorkBuddy / Qoder CN）：
+    /// WorkBuddy 按 UID 过滤本地会话，需要切换时合并；Qoder 本地会话默认共享，不用此开关。
     /// 勾选后每次「切换客户端账号」把会话记录带给目标账号；
     /// 不勾选则完全不碰聊天数据（与旧版行为一致）。
     /// MiniMax 的会话在服务端自动同步，此开关对它不存在。
@@ -143,7 +143,7 @@ pub enum CloseAction {
 }
 
 /// 应用配置。
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     #[serde(default)]
@@ -163,6 +163,22 @@ pub struct AppConfig {
     /// 关闭主窗口时的行为（默认每次询问）。
     #[serde(default)]
     pub close_action: CloseAction,
+    /// 是否生成自动提醒（签到失败、低额度、到期、可领取）。
+    #[serde(default = "default_true")]
+    pub notifications_enabled: bool,
+}
+
+impl Default for AppConfig {
+    fn default() -> Self {
+        Self {
+            scheduler: SchedulerConfig::default(),
+            active_accounts: BTreeMap::new(),
+            alert_thresholds: BTreeMap::new(),
+            agent_order: Vec::new(),
+            close_action: CloseAction::default(),
+            notifications_enabled: true,
+        }
+    }
 }
 
 impl AppConfig {
@@ -199,10 +215,7 @@ impl AppConfig {
 
     /// 某 agent 的积分预警阈值（默认 200）。
     pub fn alert_threshold_of(&self, provider: &str) -> u32 {
-        self.alert_thresholds
-            .get(provider)
-            .copied()
-            .unwrap_or(200)
+        self.alert_thresholds.get(provider).copied().unwrap_or(200)
     }
 
     pub fn set_alert_threshold(&mut self, provider: &str, value: u32) {
@@ -273,6 +286,18 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cfg.close_action, CloseAction::Ask);
+        assert!(cfg.notifications_enabled, "旧配置没写通知开关时应默认开启");
+    }
+
+    #[test]
+    fn 通知默认开启并按camelCase落盘() {
+        assert!(AppConfig::default().notifications_enabled);
+        let mut cfg = AppConfig::default();
+        cfg.notifications_enabled = false;
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"notificationsEnabled\":false"));
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert!(!back.notifications_enabled);
     }
 
     #[test]

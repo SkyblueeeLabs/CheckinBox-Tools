@@ -1,10 +1,12 @@
 import type { QuotaPoint } from "../lib/types";
+import { fmtQuotaAmount } from "../lib/api";
 
 interface Props {
   points: QuotaPoint[];
   /** 低于该值时用警示色 */
   threshold?: number;
   height?: number;
+  providerId?: string;
 }
 
 /**
@@ -13,7 +15,7 @@ interface Props {
  * 数据点少时退化成几个方块，不做平滑 —— 保持「仪器面板」的克制感。
  * 只画折线 + 端点，不铺面积、不加网格。
  */
-export default function TrendLine({ points, threshold, height = 30 }: Props) {
+export default function TrendLine({ points, threshold, height = 30, providerId }: Props) {
   if (points.length < 2) {
     return <div className="trend trend-empty">趋势数据收集中…</div>;
   }
@@ -54,7 +56,7 @@ export default function TrendLine({ points, threshold, height = 30 }: Props) {
         {/* 悬浮数值：每个点一个透明命中区，title 显示时间和剩余积分 */}
         {points.map((p, i) => (
           <circle key={i} className="trend-hit" cx={x(i)} cy={y(p.remaining)} r={5}>
-            <title>{`${p.timestamp.slice(5)} · 剩余 ${Math.round(p.remaining)}`}</title>
+            <title>{`${p.timestamp.slice(5)} · 剩余 ${fmtQuotaAmount(p.remaining, providerId)}`}</title>
           </circle>
         ))}
       </svg>
@@ -62,10 +64,10 @@ export default function TrendLine({ points, threshold, height = 30 }: Props) {
       <div className="trend-meta">
         <span className={delta < 0 ? "trend-delta down" : "trend-delta"}>
           {delta > 0 ? "+" : ""}
-          {Math.round(delta)}
+          {fmtQuotaAmount(delta, providerId)}
         </span>
         <span className="trend-range">
-          {points.length} 次 · {Math.round(min)}–{Math.round(max)}
+          {points.length} 次 · {fmtQuotaAmount(min, providerId)}–{fmtQuotaAmount(max, providerId)}
         </span>
       </div>
     </div>

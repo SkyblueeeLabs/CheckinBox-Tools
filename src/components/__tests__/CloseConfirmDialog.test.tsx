@@ -29,7 +29,8 @@ describe("CloseConfirmDialog（关闭确认）", () => {
     render(<CloseConfirmDialog onResolve={onResolve} onCancel={onCancel} />);
 
     fireEvent.click(screen.getByRole("button", { name: "取消" }));
-    fireEvent.keyDown(window, { key: "Escape" });
+    render(<CloseConfirmDialog onResolve={onResolve} onCancel={onCancel} />);
+    fireEvent(screen.getByRole("dialog"), new Event("cancel", { cancelable: true }));
 
     expect(onResolve).not.toHaveBeenCalled();
     expect(onCancel).toHaveBeenCalledTimes(2);

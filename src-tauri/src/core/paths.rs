@@ -11,6 +11,7 @@
 //!
 //! 旧名目录 `AgentCheckinTools` 在首次访问时整体复制到新目录，旧目录保留作备份。
 
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Once;
 
@@ -133,14 +134,17 @@ pub fn ensure_dir(path: &std::path::Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// 原子写文件：先写临时文件再 rename，避免掉电写坏配置。
+/// 在同一目录完整写入临时文件，再原子替换目标文件。
 pub fn atomic_write(path: &std::path::Path, contents: &[u8]) -> anyhow::Result<()> {
-    if let Some(parent) = path.parent() {
-        ensure_dir(parent)?;
-    }
-    let tmp = path.with_extension("tmp");
-    std::fs::write(&tmp, contents)?;
-    std::fs::rename(&tmp, path)?;
+    let parent = path
+        .parent()
+        .filter(|dir| !dir.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    ensure_dir(parent)?;
+    let mut tmp = tempfile::NamedTempFile::new_in(parent)?;
+    tmp.write_all(contents)?;
+    tmp.as_file().sync_all()?;
+    tmp.persist(path)?;
     Ok(())
 }
 
