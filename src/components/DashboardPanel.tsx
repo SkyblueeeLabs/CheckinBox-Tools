@@ -1,4 +1,4 @@
-import type { AgentGroup, Overview } from "../lib/types";
+import type { AgentGroup, AgentVisibility, Overview } from "../lib/types";
 import { fmtCompact, fmtPoints, fmtQuotaAmount, quotaUnit } from "../lib/api";
 import { EXPIRY_WINDOW_DAYS, expiringAccounts } from "../lib/expiry";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
@@ -9,6 +9,8 @@ interface Props {
   groups: AgentGroup[];
   /** 点击某个 agent 卡 → 跳到该平台的面板 */
   onOpenAgent: (id: string) => void;
+  /** 每个平台的显示开关；没列出的平台全部显示 */
+  visibility: Record<string, AgentVisibility>;
 }
 
 /**
@@ -18,13 +20,19 @@ interface Props {
  * 下面是每个 agent 一张卡：官方图标、积分、账号数、今日签到状态，
  * 点击卡片跳到该平台的详情面板。
  */
-export default function DashboardPanel({ overview, groups, onOpenAgent }: Props) {
+export default function DashboardPanel({ overview, groups, onOpenAgent, visibility }: Props) {
+  // 全局指标保持全量口径（与顶栏「今日已签 N/M」一致）；
+  // 首页隐藏只影响下面的到期列表和 agent 卡片，不改汇总数字。
+  const homeVisible = (id: string) => visibility[id]?.home !== false;
+  const visibleGroups = groups.filter((g) => homeVisible(g.provider.id));
   const totalRemaining = groups.reduce((s, g) => s + g.totalRemaining, 0);
   const totalGranted = groups.reduce((s, g) => s + g.totalGranted, 0);
   const accountCount = overview.accounts.length;
   const claimedCount = groups.reduce((s, g) => s + g.claimedToday, 0);
   const claimableCount = groups.reduce((s, g) => s + g.claimableCount, 0);
-  const expiring = expiringAccounts(overview.accounts);
+  const expiring = expiringAccounts(overview.accounts).filter((x) =>
+    homeVisible(x.view.account.provider)
+  );
   const totalExpiring = expiring.reduce((s, x) => s + x.credits.remaining, 0);
   // 到期汇总的计量单位：全部同一单位就说它，混合（Zcode Token + 其它积分）就标出来
   const expiringUnits = [...new Set(expiring.map((x) => quotaUnit(x.view.account.provider)))];
@@ -110,7 +118,12 @@ export default function DashboardPanel({ overview, groups, onOpenAgent }: Props)
 
       {/* ---------- 各 agent 卡 ---------- */}
       <div className="dash-agents">
-        {groups.map((g) => {
+        {visibleGroups.length === 0 && groups.length > 0 && (
+          <p className="empty-state">
+            所有平台已在首页隐藏。点侧栏 Agents 旁的眼睛图标可恢复显示。
+          </p>
+        )}
+        {visibleGroups.map((g) => {
           const icon = agentIcon(g.provider.id);
           const allClaimed = g.accounts.length > 0 && g.claimedToday === g.accounts.length;
           // 不代领的平台（Zcode）说「领取」，其它说「签」

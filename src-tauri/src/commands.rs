@@ -1614,6 +1614,71 @@ pub async fn set_refresh_interval(
     })
 }
 
+/// 设置界面自动刷新间隔（秒）。0 = 关闭前台轮询（仅手动刷新 / 后台同步事件更新）。
+#[tauri::command]
+pub async fn set_ui_refresh_interval(
+    state: State<'_, AppState>,
+    seconds: u32,
+) -> Result<AppConfig, String> {
+    if seconds != 0 && !(10..=3600).contains(&seconds) {
+        return Err("界面刷新间隔需为 0（关闭）或 10–3600 秒".into());
+    }
+    state.update_config(|config| {
+        config.ui_refresh_seconds = seconds;
+        Ok(())
+    })
+}
+
+/// 实时核对 WorkBuddy 当前免费模型（模型目录与客户端对话选择器同源）。
+#[tauri::command]
+pub async fn fetch_workbuddy_free_models(
+    state: State<'_, AppState>,
+    account_id: Option<String>,
+) -> Result<Vec<crate::providers::workbuddy::FreeModel>, String> {
+    let store = state.store.lock().unwrap().clone();
+    let accounts = store.list_of("workbuddy");
+    let account = match account_id {
+        Some(id) => accounts.into_iter().find(|a| a.id == id),
+        None => accounts.into_iter().next(),
+    }
+    .ok_or_else(|| "暂无 WorkBuddy 账号，先导入或添加账号".to_string())?;
+    let cred = store
+        .credential("workbuddy", &account.id)
+        .map_err(|e| e.to_string())?;
+    crate::providers::workbuddy::fetch_free_models(&cred)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 改某个平台的显示开关（侧栏导航 / 首页卡片）。
+/// 隐藏只影响显示，自动签到与后台同步不受影响；None = 该字段不改。
+#[tauri::command]
+pub async fn set_agent_visibility(
+    state: State<'_, AppState>,
+    provider_id: String,
+    sidebar: Option<bool>,
+    home: Option<bool>,
+    launch: Option<bool>,
+) -> Result<AppConfig, String> {
+    if sidebar.is_none() && home.is_none() && launch.is_none() {
+        return Err("没有要修改的显示开关".into());
+    }
+    state.update_config(|config| {
+        let mut vis = config.visibility_of(&provider_id);
+        if let Some(v) = sidebar {
+            vis.sidebar = v;
+        }
+        if let Some(v) = home {
+            vis.home = v;
+        }
+        if let Some(v) = launch {
+            vis.launch = v;
+        }
+        config.agent_visibility.insert(provider_id, vis);
+        Ok(())
+    })
+}
+
 /// 立即同步全部账号（不等间隔）。
 #[tauri::command]
 pub async fn sync_now(app: AppHandle, state: State<'_, AppState>) -> Result<TaskSummary, String> {

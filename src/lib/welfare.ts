@@ -25,12 +25,14 @@ export interface WelfareMeta {
   note?: string;
   /** 领取/生效时段（优先级高于 note，如 Zcode 的 19:00 开放、23:00 生效） */
   timing?: string;
+  /** 每日开放领取的小时（UTC+8），用于「现在可领 / 未到点」实时提示 */
+  openHour?: number;
 }
 
 /** 各平台福利元数据（不含实时数量；面板/首页共用，改文案只改这里） */
 export const WELFARE_META: Record<string, WelfareMeta> = {
   minimax: { cadence: "daily", mode: "auto", unit: "积分" },
-  qoder: { cadence: "daily", mode: "auto", unit: "Credits", note: "10:00 后开放" },
+  qoder: { cadence: "daily", mode: "auto", unit: "Credits", note: "10:00 后开放", openHour: 10 },
   workbuddy: { cadence: "daily", mode: "auto", unit: "积分" },
   zcode: {
     cadence: "daily",
@@ -38,14 +40,60 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
     unit: "Token",
     note: "官方客户端领取",
     timing: "19:00 开放领取 · 23:00-次日9:00 生效",
+    openHour: 19,
   },
   miaoshou: {
     cadence: "oneTime",
     mode: "manual",
     unit: "积分",
-    note: "注册奖励",
+    note: "注册送 200 积分",
   },
 };
+
+/** 免费模型核对信息（时效敏感，标注核对月份）。积分/额度福利见 WELFARE_META。 */
+export interface FreeModelInfo {
+  /** 当前确认免费的模型 */
+  models?: string[];
+  /** 注册 / 一次性积分奖励 */
+  registerBonus?: string;
+  /** current=有免费模型；none=暂无免费模型 */
+  status: "current" | "none";
+  /** 清单由实时接口核对（WorkBuddy 模型目录） */
+  live?: boolean;
+  note?: string;
+  asOf?: string;
+}
+
+export const FREE_STATUS_TEXT: Record<FreeModelInfo["status"], string> = {
+  current: "有免费模型",
+  none: "暂无免费模型",
+};
+
+/** 各平台免费模型核对表（改内容只改这里）。积分/额度统一走 WELFARE_META。 */
+export const FREE_MODELS: Record<string, FreeModelInfo> = {
+  // 实时清单由 fetch_workbuddy_free_models 从模型目录核对；此处为回退标注。
+  workbuddy: { status: "current", live: true, asOf: "2026-11-16" },
+  miaoshou: {
+    status: "current",
+    models: ["LongCat-2.5（官方免费）"],
+    registerBonus: "注册送 200 积分",
+    asOf: "2026-11-16",
+  },
+  zcode: { status: "none", asOf: "2026-11-16" },
+  minimax: { status: "none", asOf: "2026-11-16" },
+  qoder: { status: "none", asOf: "2026-11-16" },
+};
+
+/** 每日开放领取的实时状态（现在可领 / 未到点）；无开放小时的平台返回 null */
+export function welfareOpenState(
+  providerId: string,
+  now: Date = new Date()
+): { open: boolean; label: string } | null {
+  const hour = WELFARE_META[providerId]?.openHour;
+  if (hour === undefined) return null;
+  const open = now.getHours() >= hour;
+  return { open, label: open ? "现在可领" : `${hour}:00 开放` };
+}
 
 export interface WelfareView {
   /** 主文案（含数量，如「每日 +1,400 积分」） */
@@ -77,12 +125,22 @@ export function welfareOf(group: AgentGroup): WelfareView {
   // 时段说明（Zcode 的 19:00 开放 / 23:00 生效）优先于普通说明展示
   const note = meta.timing ?? [meta.note, window].filter(Boolean).join(" · ");
 
+  // 免费模型核对信息，附在悬浮说明里（首页/封面共用）；积分/额度已在主文案
+  const free = FREE_MODELS[group.provider.id];
+  const freeSuffix = free
+    ? free.models?.length
+      ? ` · 免费模型：${free.models.join("、")}`
+      : free.live
+        ? " · 有免费模型（清单实时核对）"
+        : ` · ${FREE_STATUS_TEXT[free.status]}`
+    : "";
+
   if (meta.cadence === "oneTime") {
     return {
       label: "单账号一次性奖励",
       mode: meta.mode,
       note,
-      title: `每个账号一次性${meta.note ?? "福利"} · 需手动领取（无每日签到）`,
+      title: `一次性福利：${meta.note ?? "注册奖励"} · 需手动领取（无每日签到）${freeSuffix}`,
     };
   }
 
@@ -98,7 +156,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
       label: "单账号每日福利",
       mode: meta.mode,
       note,
-      title: `单账号每日福利数量未知${note ? ` · ${note}` : ""}`,
+      title: `单账号每日福利数量未知${note ? ` · ${note}` : ""}${freeSuffix}`,
     };
   }
 
@@ -119,10 +177,10 @@ export function welfareOf(group: AgentGroup): WelfareView {
     meta.mode === "auto"
       ? `单账号每日 ${rangeText} ${meta.unit}${totalPart} · 自动领取${
           window ? `（时间窗 ${window}）` : ""
-        }${meta.timing ? ` · ${meta.timing}` : ""}`
+        }${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`
       : `单账号每日 ${rangeText} ${meta.unit}${totalPart} · 需手动领取${
           meta.note ? `（${meta.note}）` : ""
-        }${meta.timing ? ` · ${meta.timing}` : ""}`;
+        }${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`;
 
   return { label, mode: meta.mode, note, title };
 }

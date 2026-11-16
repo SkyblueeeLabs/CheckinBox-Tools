@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { welfareOf } from "../welfare";
+import { welfareOf, welfareOpenState } from "../welfare";
 import type { AccountView, AgentGroup, CheckinStatus, ProviderView, Quota } from "../types";
 
 function provider(id: string, supportsClaim: boolean): ProviderView {
@@ -125,9 +125,10 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     const w = welfareOf(group("miaoshou", false, [account(0)]));
     expect(w.label).toBe("单账号一次性奖励");
     expect(w.mode).toBe("manual");
-    expect(w.note).toBe("注册奖励");
+    expect(w.note).toBe("注册送 200 积分");
     expect(w.title).toContain("一次性");
     expect(w.title).toContain("无每日签到");
+    expect(w.title).toContain("LongCat-2.5");
   });
 
   it("数量未知（状态未加载/活动未开放）：只报节奏不给数", () => {
@@ -154,5 +155,27 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     const w = welfareOf(group("workbuddy", true, []));
     expect(w.label).toBe("单账号每日福利");
     expect(w.note).toBe("06:00-08:00");
+  });
+
+  it("免费模型核对信息附在悬浮说明：当前免费 / 曾有 / 以官方为准", () => {
+    const ms = welfareOf(group("miaoshou", false, [account(0)]));
+    expect(ms.title).toContain("免费模型：LongCat-2.5（官方免费）");
+    const mm = welfareOf(group("minimax", true, [account(100)]));
+    expect(mm.title).toContain("暂无免费模型");
+    const wb = welfareOf(group("workbuddy", true, [account(100)]));
+    expect(wb.title).toContain("有免费模型（清单实时核对）");
+    const zc = welfareOf(group("zcode", false, [account(0, 300_000_000)]));
+    expect(zc.title).toContain("暂无免费模型");
+  });
+
+  it("开放领取实时状态：到点=现在可领，未到= N:00 开放；无开放小时=null", () => {
+    const at = (h: number) => new Date(2026, 10, 16, h, 0, 0);
+    expect(welfareOpenState("zcode", at(18))).toEqual({ open: false, label: "19:00 开放" });
+    expect(welfareOpenState("zcode", at(19))).toEqual({ open: true, label: "现在可领" });
+    expect(welfareOpenState("zcode", at(23))).toEqual({ open: true, label: "现在可领" });
+    expect(welfareOpenState("qoder", at(9))).toEqual({ open: false, label: "10:00 开放" });
+    expect(welfareOpenState("qoder", at(10))).toEqual({ open: true, label: "现在可领" });
+    expect(welfareOpenState("minimax", at(12))).toBeNull();
+    expect(welfareOpenState("workbuddy", at(12))).toBeNull();
   });
 });

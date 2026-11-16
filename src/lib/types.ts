@@ -307,6 +307,31 @@ export interface SchedulerConfig {
   agents: Record<string, AgentScheduleConfig>;
 }
 
+/** 单个平台的显示开关：隐藏只影响显示，不影响签到与同步 */
+export interface AgentVisibility {
+  sidebar: boolean;
+  home: boolean;
+  /** 该平台的蛋是否上启动页封面 */
+  launch: boolean;
+}
+
+/** WorkBuddy 实时模型目录里的一条模型 */
+export interface FreeModel {
+  id: string;
+  name: string;
+  /** 计费倍率原文（如 "x0.00"） */
+  credits: string;
+  free: boolean;
+}
+
+/** 实时免费模型核对状态（福利提示条用） */
+export interface LiveFreeModels {
+  models: FreeModel[];
+  fetchedAt: number;
+  loading: boolean;
+  error: string | null;
+}
+
 export interface AppConfig {
   scheduler: SchedulerConfig;
   /** 每个 agent 当前激活的账号 id */
@@ -316,6 +341,10 @@ export interface AppConfig {
   closeAction: CloseAction;
   /** 是否生成自动提醒（签到失败、低额度、到期、可领取） */
   notificationsEnabled: boolean;
+  /** 界面自动刷新间隔（秒）；0 = 关闭前台轮询，仅手动刷新 / 后台同步事件更新 */
+  uiRefreshSeconds: number;
+  /** 每个平台的显示开关（侧栏 / 首页）；没列出的平台全部显示 */
+  agentVisibility: Record<string, AgentVisibility>;
 }
 
 export interface DiscoveredAccount {

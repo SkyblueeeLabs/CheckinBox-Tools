@@ -1,4 +1,5 @@
-import { fireEvent, render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
+import type { ComponentProps } from "react";
 import { describe, expect, it, vi } from "vitest";
 import AgentGroupPanel from "../AgentGroupPanel";
 import type { AgentGroup, ProviderView } from "../../lib/types";
@@ -45,7 +46,11 @@ function group(over: Partial<AgentGroup> = {}): AgentGroup {
   };
 }
 
-function renderPanel(g: AgentGroup, onChatSyncChange = noop) {
+function renderPanel(
+  g: AgentGroup,
+  onChatSyncChange = noop,
+  extra: Partial<ComponentProps<typeof AgentGroupPanel>> = {}
+) {
   return render(
     <AgentGroupPanel
       group={g}
@@ -63,6 +68,7 @@ function renderPanel(g: AgentGroup, onChatSyncChange = noop) {
       onAlertChange={noop}
       onScheduleChange={noop}
       onChatSyncChange={onChatSyncChange}
+      {...extra}
     />
   );
 }
@@ -144,5 +150,82 @@ describe("不代领的平台（Zcode）", () => {
       })
     );
     expect(screen.getByText(/今日已领取 1 个/)).toBeInTheDocument();
+  });
+});
+
+describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模型）", () => {
+  it("妙手：一次性注册积分 + 免费模型 chip + 核对月份", () => {
+    renderPanel(
+      group({ provider: provider({ id: "miaoshou", name: "妙手", supportsClaim: false }) })
+    );
+    const brief = screen.getByRole("note", { name: "妙手 福利" });
+    expect(within(brief).getByText("积分/额度")).toBeInTheDocument();
+    expect(within(brief).getByText("一次性")).toBeInTheDocument();
+    expect(within(brief).getByText("注册送 200 积分")).toBeInTheDocument();
+    expect(within(brief).getByText("手动领取")).toBeInTheDocument();
+    expect(within(brief).getByText("免费模型")).toBeInTheDocument();
+    expect(within(brief).getByText("LongCat-2.5（官方免费）")).toBeInTheDocument();
+    expect(within(brief).getByText(/核对 2026-11/)).toBeInTheDocument();
+  });
+
+  it("Zcode：每日限时 Token + 开放状态 chip + 暂无免费模型", () => {
+    renderPanel(
+      group({ provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }) })
+    );
+    const brief = screen.getByRole("note", { name: "Zcode 福利" });
+    expect(within(brief).getByText("每日")).toBeInTheDocument();
+    expect(within(brief).getByText("手动领取")).toBeInTheDocument();
+    expect(within(brief).getByText(/19:00 开放领取/)).toBeInTheDocument();
+    const h = new Date().getHours();
+    expect(within(brief).getByText(h >= 19 ? "现在可领" : "19:00 开放")).toBeInTheDocument();
+    expect(within(brief).getByText("暂无免费模型")).toBeInTheDocument();
+  });
+
+  it("WorkBuddy 未核对：每日自动积分 + 有免费模型待实时核对", () => {
+    renderPanel(group(), noop, { onRefreshFree: noop });
+    const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expect(within(brief).getByText("每日")).toBeInTheDocument();
+    expect(within(brief).getByText("自动领取")).toBeInTheDocument();
+    expect(within(brief).getByText("有免费模型 · 待实时核对")).toBeInTheDocument();
+    expect(within(brief).getByRole("button", { name: "核对最新免费模型" })).toBeInTheDocument();
+  });
+
+  it("minimax：每日自动免费积分 + 暂无免费模型", () => {
+    renderPanel(group({ provider: provider({ id: "minimax", name: "MiniMax Code" }) }));
+    const brief = screen.getByRole("note", { name: "MiniMax Code 福利" });
+    expect(within(brief).getByText("自动领取")).toBeInTheDocument();
+    expect(within(brief).getByText("暂无免费模型")).toBeInTheDocument();
+  });
+
+  it("WorkBuddy 实时免费模型：live chip + 实时标记 + 核对按钮回调", () => {
+    const onRefreshFree = vi.fn();
+    renderPanel(group(), noop, {
+      liveFree: {
+        models: [
+          { id: "hy4", name: "Hy4", credits: "x0.00", free: true },
+          { id: "pro", name: "Pro", credits: "x1", free: false },
+        ],
+        fetchedAt: Date.now(),
+        loading: false,
+        error: null,
+      },
+      onRefreshFree,
+    });
+    const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expect(within(brief).getByText("Hy4")).toBeInTheDocument();
+    expect(within(brief).queryByText("Pro")).not.toBeInTheDocument();
+    expect(within(brief).getByText(/实时/)).toBeInTheDocument();
+    fireEvent.click(within(brief).getByRole("button", { name: "核对最新免费模型" }));
+    expect(onRefreshFree).toHaveBeenCalledOnce();
+  });
+
+  it("实时核对不可用：保留有免费模型标注 + 失败标记", () => {
+    renderPanel(group(), noop, {
+      liveFree: { models: [], fetchedAt: 0, loading: false, error: "HTTP 401" },
+      onRefreshFree: noop,
+    });
+    const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expect(within(brief).getByText(/实时核对不可用/)).toBeInTheDocument();
+    expect(within(brief).getByText(/有免费模型/)).toBeInTheDocument();
   });
 });

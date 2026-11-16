@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { HOME_ID, type AgentGroup } from "../lib/types";
+import { HOME_ID, type AgentGroup, type AgentVisibility, type ProviderView } from "../lib/types";
 import { fmtPoints, fmtQuotaAmount } from "../lib/api";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
+import VisibilityMenu from "./VisibilityMenu";
 
 interface Props {
   groups: AgentGroup[];
@@ -11,6 +12,10 @@ interface Props {
   onOpenSettings: () => void;
   /** 拖拽调序：把完整的新顺序交给上层落盘 */
   onReorder: (order: string[]) => void;
+  /** 全量平台（含被隐藏的），显示管理菜单用 */
+  providers: ProviderView[];
+  visibility: Record<string, AgentVisibility>;
+  onVisibilityChange: (providerId: string, patch: Partial<AgentVisibility>) => void;
 }
 
 /** 设置页的虚拟 id（不是真实 provider）。 */
@@ -45,10 +50,12 @@ const DRAG_THRESHOLD = 10;
  *   - 松手浮动卡消失，条目在落位处淡入（scale 1.06 → 1）。
  * 顺序由后端落盘，重启后保持。
  */
-export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onReorder }: Props) {
+export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onReorder, providers, visibility, onVisibilityChange }: Props) {
   const drag = useRef<DragState | null>(null);
   const lastDragEndAt = useRef(0);
   const [dragId, setDragId] = useState<string | null>(null);
+  /** 平台显示管理菜单（眼睛按钮）开合 */
+  const [visOpen, setVisOpen] = useState(false);
   /** 已按下但还没超过拖拽阈值的条目（不产生任何视觉）；null = 没有按下中 */
   const [pressedId, setPressedId] = useState<string | null>(null);
   const pressedRef = useRef<string | null>(null);
@@ -187,11 +194,41 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
 
       <div className="sidebar-head">
         <span className="sidebar-title">Agents</span>
-        <span className="sidebar-count">{groups.length}</span>
+        <span className="sidebar-count">
+          {groups.length}
+          {providers.length > groups.length ? `/${providers.length}` : ""}
+        </span>
+        <button
+          type="button"
+          className="sidebar-vis-btn"
+          data-vis-toggle
+          aria-label="管理平台显示"
+          aria-haspopup="dialog"
+          aria-expanded={visOpen}
+          title="管理平台显示（侧栏 / 首页）"
+          onClick={() => setVisOpen((v) => !v)}
+        >
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z" />
+            <circle cx="12" cy="12" r="3" />
+          </svg>
+        </button>
+        {visOpen && (
+          <VisibilityMenu
+            providers={providers}
+            visibility={visibility}
+            onChange={onVisibilityChange}
+            onClose={() => setVisOpen(false)}
+          />
+        )}
       </div>
 
       <nav className={`sidebar-list ${dragId ? "is-dragging" : ""}`} ref={listRef}>
-        {groups.length === 0 && <p className="empty-state">还没有账号</p>}
+        {groups.length === 0 && (
+          <p className="empty-state">
+            {providers.length === 0 ? "还没有账号" : "所有平台已隐藏，点上方眼睛图标恢复"}
+          </p>
+        )}
         {displayGroups.map((group) => {
           const isActive = group.provider.id === selected;
           const remaining = group.totalRemaining;

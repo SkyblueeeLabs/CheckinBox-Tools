@@ -1,6 +1,6 @@
-import type { AgentGroup } from "../lib/types";
+import type { AgentGroup, LiveFreeModels } from "../lib/types";
 import { fmtQuotaAmount, quotaLabels } from "../lib/api";
-import { WELFARE_META } from "../lib/welfare";
+import { WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfareOpenState, welfareOf } from "../lib/welfare";
 import TimeInput from "./TimeInput";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import AccountCard from "./AccountCard";
@@ -27,6 +27,9 @@ interface Props {
   onAlertChange: (providerId: string, value: number) => void;
   /** 改「换号同步聊天记录」开关（仅 WorkBuddy 显示） */
   onChatSyncChange: (providerId: string, enabled: boolean) => void;
+  /** WorkBuddy 实时免费模型核对状态 */
+  liveFree?: LiveFreeModels | null;
+  onRefreshFree?: () => void;
 }
 
 /**
@@ -74,6 +77,8 @@ export default function AgentGroupPanel({
   onAlertChange,
   onScheduleChange,
   onChatSyncChange,
+  liveFree,
+  onRefreshFree,
 }: Props) {
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
@@ -87,6 +92,10 @@ export default function AgentGroupPanel({
   const mismatch =
     !!clientAccount && !!activeId && clientAccount.accountId !== activeId;
   const formatMinute = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
+  const free = FREE_MODELS[provider.id];
+  const openState = welfareOpenState(provider.id);
+  const welfare = welfareOf(group);
+  const meta = WELFARE_META[provider.id];
 
   return (
     <section className="panel agent-panel" style={{ ["--agent-accent" as string]: accent }}>
@@ -145,6 +154,84 @@ export default function AgentGroupPanel({
           )}
         </div>
       </header>
+
+      {/* 福利统一口径：第一行积分/额度，第二行免费模型；时效敏感标注核对月份 */}
+      {free && meta && (
+        <div className="welfare-brief" role="note" aria-label={`${provider.name} 福利`}>
+          <div className="wb-row">
+            <span className="wb-label">积分/额度</span>
+            <span className="wb-cadence">{meta.cadence === "daily" ? "每日" : "一次性"}</span>
+            <span className="wb-credits">
+              {meta.cadence === "oneTime" ? free.registerBonus ?? welfare.note : welfare.label}
+            </span>
+            <span className={`wb-mode ${welfare.mode}`}>
+              {welfare.mode === "auto" ? "自动领取" : "手动领取"}
+            </span>
+            {meta.cadence === "daily" && welfare.note && (
+              <span className="wb-note">{welfare.note}</span>
+            )}
+            {openState && (
+              <span className={`wb-open ${openState.open ? "on" : ""}`}>{openState.label}</span>
+            )}
+          </div>
+          <div className="wb-row">
+            <span className="wb-label">免费模型</span>
+            {provider.id === "workbuddy" ? (
+              <>
+                {liveFree?.models
+                  .filter((m) => m.free)
+                  .map((m) => (
+                    <span key={m.id} className="wb-chip" title={`计费倍率 ${m.credits || "未知"}`}>
+                      {m.name}
+                    </span>
+                  ))}
+                {liveFree &&
+                  !liveFree.loading &&
+                  !liveFree.error &&
+                  liveFree.models.length > 0 &&
+                  !liveFree.models.some((m) => m.free) && (
+                    <span className="wb-none">本期目录暂无免费模型</span>
+                  )}
+                {!liveFree && <span className="wb-none">有免费模型 · 待实时核对</span>}
+                {liveFree?.loading && <span className="wb-none">核对中…</span>}
+                {liveFree?.error && (
+                  <span className="wb-none">有免费模型 · 实时核对不可用</span>
+                )}
+                {liveFree && !liveFree.loading && !liveFree.error && (
+                  <span className="wb-live">
+                    实时{" "}
+                    {new Date(liveFree.fetchedAt).toLocaleTimeString("zh-CN", {
+                      hour: "2-digit",
+                      minute: "2-digit",
+                    })}
+                  </span>
+                )}
+                {onRefreshFree && (
+                  <button
+                    className={`wb-refresh ${liveFree?.loading ? "is-loading" : ""}`}
+                    onClick={onRefreshFree}
+                    disabled={liveFree?.loading}
+                    aria-label="核对最新免费模型"
+                    title="从 WorkBuddy 模型目录实时核对当前免费模型"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                      <path d="M21 3v5h-5" />
+                    </svg>
+                  </button>
+                )}
+              </>
+            ) : free.models?.length ? (
+              free.models.map((m) => (
+                <span key={m} className="wb-chip">{m}</span>
+              ))
+            ) : (
+              <span className="wb-none">{FREE_STATUS_TEXT[free.status]}</span>
+            )}
+            {free.asOf && <span className="wb-asof">核对 {free.asOf}</span>}
+          </div>
+        </div>
+      )}
 
       <details className="agent-options">
         <summary>

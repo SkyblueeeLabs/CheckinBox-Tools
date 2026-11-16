@@ -11,6 +11,7 @@ import type {
   CreditPackagePage,
   CreditUsagePage,
   DiscoveredAccount,
+  FreeModel,
   LogEntry,
   Notice,
   Overview,
@@ -70,6 +71,20 @@ export const api = {
   takeWindowRequest: () => invoke<WindowRequest | null>("take_window_request"),
   setAgentOrder: (order: string[]) =>
     invoke<AppConfig>("set_agent_order", { order }),
+  setAgentVisibility: (
+    providerId: string,
+    patch: { sidebar?: boolean; home?: boolean; launch?: boolean }
+  ) =>
+    invoke<AppConfig>("set_agent_visibility", {
+      providerId,
+      sidebar: patch.sidebar ?? null,
+      home: patch.home ?? null,
+      launch: patch.launch ?? null,
+    }),
+  fetchWorkbuddyFreeModels: (accountId?: string) =>
+    invoke<FreeModel[]>("fetch_workbuddy_free_models", {
+      accountId: accountId ?? null,
+    }),
   setAgentSchedule: (
     providerId: string,
     patch: { enabled?: boolean; startMinute?: number; endMinute?: number },
@@ -81,6 +96,8 @@ export const api = {
     invoke<AppConfig>("set_sync_enabled", { enabled }),
   setRefreshInterval: (providerId: string, minutes: number) =>
     invoke<AppConfig>("set_refresh_interval", { providerId, minutes }),
+  setUiRefreshInterval: (seconds: number) =>
+    invoke<AppConfig>("set_ui_refresh_interval", { seconds }),
   syncNow: () => invoke<TaskSummary>("sync_now"),
   openDataDir: () => invoke<void>("open_data_dir"),
   setActiveAccount: (providerId: string, accountId: string) =>

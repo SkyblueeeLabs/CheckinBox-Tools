@@ -40,7 +40,7 @@ const BASE_DEFAULT: &str = "https://www.codebuddy.cn";
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
 /// 请求基址：跟随账号 domain（如 www.codebuddy.ai），没有就用 CN 默认。
-fn base_of(cred: &Value) -> String {
+pub(crate) fn base_of(cred: &Value) -> String {
     match cred["domain"].as_str().filter(|d| !d.is_empty()) {
         Some(d) => format!("https://{d}"),
         None => BASE_DEFAULT.to_string(),
@@ -57,6 +57,113 @@ const PAID_PACKAGES_PATH: &str = "/billing/meter/get-user-resource-paid-packages
 const FREE_PACKAGES_PATH: &str = "/billing/meter/get-user-resource-free-packages";
 const USAGE_PATH: &str = "/billing/meter/get-user-request-usage";
 
+/// 实时模型目录里的一条模型（与客户端对话选择器同源）。
+#[derive(Debug, Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeModel {
+    pub id: String,
+    pub name: String,
+    /// 计费倍率原文（如 "x0.00" / "x0.15"）
+    pub credits: String,
+    pub free: bool,
+}
+
+/// 计费倍率是否为 0（"x0"/"x0.00"/"0"/"0.00"/"免费"/"free" 都算免费）。
+pub fn is_free_multiplier(credits: &str) -> bool {
+    let t = credits.trim();
+    if t.is_empty() {
+        return false;
+    }
+    if t.contains("免费") || t.eq_ignore_ascii_case("free") {
+        return true;
+    }
+    let num = t.trim_start_matches(['x', 'X', '×']);
+    num.parse::<f64>().map(|v| v == 0.0).unwrap_or(false)
+}
+
+#[cfg(test)]
+mod free_model_tests {
+    use super::is_free_multiplier;
+
+    #[test]
+    fn 零倍率与免费字样算免费() {
+        for s in ["x0", "x0.00", "0", "0.00", "X0", "×0", "免费", "free", "Free"] {
+            assert!(is_free_multiplier(s), "{s} 应判为免费");
+        }
+    }
+
+    #[test]
+    fn 非零倍率与空串不算免费() {
+        for s in ["x0.15", "x1", "1", "0.5", "", "  ", "x0.001"] {
+            assert!(!is_free_multiplier(s), "{s} 不应判为免费");
+        }
+    }
+}
+
+/// 拉取实时模型目录，供福利提示核对「当前哪些模型免费」。
+///
+/// 协议对齐 cockpit-tools 的 ModelsService.getTeamsModels：
+/// GET {base}/console/enterprises/{personal|enterpriseId}/models，
+/// 响应 body（或 body.data）含 models: [{id, name, credits, descriptionZh, …}]。
+/// credits 为计费倍率，0 倍率 / 描述带「限免/免费」/ 名字带 Free 视为免费。
+pub async fn fetch_free_models(cred: &Value) -> Result<Vec<FreeModel>> {
+    let scope = cred["enterpriseId"]
+        .as_str()
+        .or_else(|| cred["enterprise_id"].as_str())
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or("personal");
+    let client = reqwest::Client::builder()
+        .user_agent(USER_AGENT)
+        .timeout(std::time::Duration::from_secs(15))
+        .build()?;
+    let resp = client
+        .get(format!(
+            "{}/console/enterprises/{}/models",
+            base_of(cred),
+            scope
+        ))
+        .headers(WorkBuddyProvider::auth_headers(cred))
+        .send()
+        .await?;
+    if !resp.status().is_success() {
+        return Err(anyhow!("模型目录 HTTP {}", resp.status().as_u16()));
+    }
+    let body: Value = resp.json().await?;
+    let payload = body.get("data").filter(|d| d.is_object()).unwrap_or(&body);
+    let models = payload
+        .get("models")
+        .and_then(Value::as_array)
+        .ok_or_else(|| anyhow!("模型目录响应缺少 models 数组"))?;
+    let mut out = Vec::new();
+    for m in models {
+        let id = m["id"].as_str().unwrap_or("").to_string();
+        if id.is_empty() {
+            continue;
+        }
+        let name = m["name"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .unwrap_or(&id)
+            .to_string();
+        let credits = m["credits"].as_str().unwrap_or("").to_string();
+        let desc = m["descriptionZh"]
+            .as_str()
+            .or_else(|| m["description"].as_str())
+            .unwrap_or("");
+        let free = is_free_multiplier(&credits)
+            || desc.contains("限免")
+            || desc.contains("免费")
+            || name.contains("Free");
+        out.push(FreeModel {
+            id,
+            name,
+            credits,
+            free,
+        });
+    }
+    Ok(out)
+}
+
 pub struct WorkBuddyProvider {
     http: reqwest::Client,
 }
@@ -71,7 +178,7 @@ impl WorkBuddyProvider {
         Self { http }
     }
 
-    fn auth_headers(cred: &Value) -> reqwest::header::HeaderMap {
+    pub(crate) fn auth_headers(cred: &Value) -> reqwest::header::HeaderMap {
         let mut headers = reqwest::header::HeaderMap::new();
         if let Some(token) = cred["access_token"].as_str() {
             if let Ok(v) = format!("Bearer {token}").parse() {

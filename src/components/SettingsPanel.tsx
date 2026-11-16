@@ -9,6 +9,18 @@ const CLOSE_OPTIONS: Array<{ value: CloseAction; label: string; desc: string }> 
   { value: "exit", label: "直接退出", desc: "关闭窗口即结束程序" },
 ];
 
+/** 界面自动刷新间隔预设（秒），交互照 Cockpit Tools 的「预设 + 自定义」下拉 */
+const UI_REFRESH_PRESETS: Array<{ value: number; label: string }> = [
+  { value: 0, label: "关闭（仅手动刷新）" },
+  { value: 15, label: "15 秒" },
+  { value: 30, label: "30 秒" },
+  { value: 45, label: "45 秒（默认）" },
+  { value: 60, label: "1 分钟" },
+  { value: 120, label: "2 分钟" },
+  { value: 300, label: "5 分钟" },
+  { value: 600, label: "10 分钟" },
+];
+
 /** 设置页的可折叠卡片：默认收起，点标题展开。 */
 function SetBlock({
   title,
@@ -66,6 +78,7 @@ interface Props {
   onSchedulerEnabled: (enabled: boolean) => void;
   onSyncEnabled: (enabled: boolean) => void;
   onRefreshInterval: (providerId: string, minutes: number) => void;
+  onUiRefreshInterval: (seconds: number) => void;
   onScheduleChange: (
     providerId: string,
     patch: { enabled?: boolean; startMinute?: number; endMinute?: number }
@@ -86,6 +99,7 @@ interface Props {
  * 「自动同步」参考 Cockpit Tools 的 `*_auto_refresh_minutes`：按 agent 各自配间隔，
  * 后台到点就刷新积分 / 签到状态 / 账号资料。跨天时不看间隔，强制同步一次 ——
  * 这样新的一天开始后，「今日已签 / 今日可签」不会停在昨天。
+ * 界面自动刷新（前台轮询）的间隔也在这里开放，预设 + 自定义同样照上游交互。
  */
 export default function SettingsPanel({
   overview,
@@ -95,6 +109,7 @@ export default function SettingsPanel({
   onSchedulerEnabled,
   onSyncEnabled,
   onRefreshInterval,
+  onUiRefreshInterval,
   onScheduleChange,
   onSyncNow,
   onOpenDataDir,
@@ -120,6 +135,21 @@ export default function SettingsPanel({
     });
   const closeLabel =
     CLOSE_OPTIONS.find((o) => o.value === config.closeAction)?.label ?? "";
+
+  // 界面自动刷新：预设下拉 + 自定义秒数（10–3600），照上游 onBlur/Enter 提交
+  const uiSeconds = config.uiRefreshSeconds ?? 45;
+  const uiIsPreset = UI_REFRESH_PRESETS.some((p) => p.value === uiSeconds);
+  const [uiCustomMode, setUiCustomMode] = useState(false);
+  const [uiCustomDraft, setUiCustomDraft] = useState("45");
+  const commitUiCustom = () => {
+    const n = Number(uiCustomDraft);
+    const seconds =
+      uiCustomDraft.trim() === "" || !Number.isFinite(n)
+        ? 45
+        : Math.min(3600, Math.max(10, Math.round(n)));
+    setUiCustomMode(false);
+    onUiRefreshInterval(seconds);
+  };
 
   const providerNames = useMemo(
     () => Object.fromEntries(providers.map((p) => [p.id, p.name])),
@@ -194,8 +224,68 @@ export default function SettingsPanel({
             </label>
           }
         >
+          <div className="set-row">
+            <div className="set-row-label">
+              <span className="set-row-title">界面自动刷新</span>
+              <span className="set-row-desc">
+                窗口打开时按此间隔拉取最新积分与签到状态；关闭后只在手动刷新或后台同步完成时更新
+              </span>
+            </div>
+            <div className="set-row-control">
+              {uiCustomMode ? (
+                <span className="set-inline-input">
+                  <input
+                    type="number"
+                    min={10}
+                    max={3600}
+                    value={uiCustomDraft}
+                    aria-label="自定义界面刷新秒数"
+                    onChange={(e) =>
+                      setUiCustomDraft(e.target.value.replace(/[^\d]/g, ""))
+                    }
+                    onBlur={commitUiCustom}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        commitUiCustom();
+                      } else if (e.key === "Escape") {
+                        setUiCustomMode(false);
+                      }
+                    }}
+                  />
+                  <span className="set-input-unit">秒</span>
+                </span>
+              ) : (
+                <select
+                  className="set-select"
+                  aria-label="界面自动刷新间隔"
+                  value={String(uiSeconds)}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val === "custom") {
+                      setUiCustomDraft(String(uiSeconds > 0 ? uiSeconds : 45));
+                      setUiCustomMode(true);
+                      return;
+                    }
+                    setUiCustomMode(false);
+                    onUiRefreshInterval(Number(val));
+                  }}
+                >
+                  {!uiIsPreset && (
+                    <option value={String(uiSeconds)}>{uiSeconds} 秒</option>
+                  )}
+                  {UI_REFRESH_PRESETS.map((p) => (
+                    <option key={p.value} value={String(p.value)}>
+                      {p.label}
+                    </option>
+                  ))}
+                  <option value="custom">自定义…</option>
+                </select>
+              )}
+            </div>
+          </div>
           <p className="set-hint">
-            后台按下面的间隔刷新每个平台的积分、签到状态和账号资料。
+            后台按下面的间隔刷新每个平台的积分、签到状态和账号资料（与上面的界面刷新相互独立）。
             跨天时会无视间隔强制同步一次，保证「今日已签 / 今日可签」是新的一天的状态。
           </p>
 

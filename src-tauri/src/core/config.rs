@@ -142,6 +142,30 @@ pub enum CloseAction {
     Exit,
 }
 
+/// 单个平台的显示开关（侧栏导航 / 首页卡片）。
+/// 隐藏只影响显示：自动签到与后台同步照常运行。缺省条目 = 全部显示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentVisibility {
+    #[serde(default = "default_true")]
+    pub sidebar: bool,
+    #[serde(default = "default_true")]
+    pub home: bool,
+    /// 该平台的蛋是否上启动页封面（隐藏只影响显示）
+    #[serde(default = "default_true")]
+    pub launch: bool,
+}
+
+impl Default for AgentVisibility {
+    fn default() -> Self {
+        Self {
+            sidebar: true,
+            home: true,
+            launch: true,
+        }
+    }
+}
+
 /// 应用配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -166,6 +190,18 @@ pub struct AppConfig {
     /// 是否生成自动提醒（签到失败、低额度、到期、可领取）。
     #[serde(default = "default_true")]
     pub notifications_enabled: bool,
+    /// 界面自动刷新间隔（秒）：窗口打开时前台轮询 overview 的节奏。
+    /// 0 = 关闭前台轮询，只靠手动刷新和后台同步完成事件更新界面。
+    /// 借鉴 Cockpit Tools 的自动刷新设置（上游按分钟配，前台轮询用秒级更跟手）。
+    #[serde(default = "default_ui_refresh_seconds")]
+    pub ui_refresh_seconds: u32,
+    /// 每个平台的显示开关（侧栏 / 首页）；没列出的平台全部显示。
+    #[serde(default)]
+    pub agent_visibility: BTreeMap<String, AgentVisibility>,
+}
+
+fn default_ui_refresh_seconds() -> u32 {
+    45
 }
 
 impl Default for AppConfig {
@@ -177,6 +213,8 @@ impl Default for AppConfig {
             agent_order: Vec::new(),
             close_action: CloseAction::default(),
             notifications_enabled: true,
+            ui_refresh_seconds: default_ui_refresh_seconds(),
+            agent_visibility: BTreeMap::new(),
         }
     }
 }
@@ -228,6 +266,14 @@ impl AppConfig {
             .agent(provider)
             .refresh_interval_minutes
             .max(1)
+    }
+
+    /// 某平台的显示开关（缺省条目 = 侧栏和首页都显示）。
+    pub fn visibility_of(&self, provider: &str) -> AgentVisibility {
+        self.agent_visibility
+            .get(provider)
+            .copied()
+            .unwrap_or_default()
     }
 
     /// 按用户自定义顺序排序平台 id（未配置的按原顺序排在后面）。
@@ -308,5 +354,63 @@ mod tests {
         assert!(json.contains("\"closeAction\":\"tray\""));
         let back: AppConfig = serde_json::from_str(&json).unwrap();
         assert_eq!(back.close_action, CloseAction::Tray);
+    }
+
+    #[test]
+    fn 界面刷新间隔默认45秒且旧配置兼容() {
+        assert_eq!(AppConfig::default().ui_refresh_seconds, 45);
+        let cfg: AppConfig = serde_json::from_str(
+            r#"{"scheduler":{"enabled":true,"syncEnabled":true,"agents":{}},"activeAccounts":{},"alertThresholds":{},"agentOrder":[]}"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.ui_refresh_seconds, 45);
+    }
+
+    #[test]
+    fn 界面刷新间隔按camelCase落盘并可回读() {
+        let mut cfg = AppConfig::default();
+        cfg.ui_refresh_seconds = 0;
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"uiRefreshSeconds\":0"));
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.ui_refresh_seconds, 0);
+    }
+
+    #[test]
+    fn 显示开关缺省全显示且旧配置兼容() {
+        let cfg = AppConfig::default();
+        assert_eq!(
+            cfg.visibility_of("qoder"),
+            AgentVisibility { sidebar: true, home: true, launch: true }
+        );
+        let old: AppConfig = serde_json::from_str(
+            r#"{"scheduler":{"enabled":true,"syncEnabled":true,"agents":{}}}"#,
+        )
+        .unwrap();
+        assert!(old.visibility_of("qoder").sidebar);
+        assert!(old.visibility_of("qoder").home);
+        assert!(old.visibility_of("qoder").launch);
+        // 只写一个字段时其余保持默认显示
+        let partial: AgentVisibility = serde_json::from_str(r#"{"sidebar":false}"#).unwrap();
+        assert!(!partial.sidebar);
+        assert!(partial.home);
+        assert!(partial.launch);
+    }
+
+    #[test]
+    fn 显示开关按camelCase落盘并可回读() {
+        let mut cfg = AppConfig::default();
+        cfg.agent_visibility.insert(
+            "zcode".into(),
+            AgentVisibility { sidebar: false, home: true, launch: false },
+        );
+        let json = serde_json::to_string(&cfg).unwrap();
+        assert!(json.contains("\"agentVisibility\":{\"zcode\":{\"sidebar\":false,\"home\":true,\"launch\":false}}"));
+        let back: AppConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(
+            back.visibility_of("zcode"),
+            AgentVisibility { sidebar: false, home: true, launch: false }
+        );
+        assert!(back.visibility_of("qoder").sidebar);
     }
 }

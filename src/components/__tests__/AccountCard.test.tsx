@@ -168,6 +168,28 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
   });
 
+  it("卡片上的刷新按钮立即拉取最新积分", () => {
+    const onRefreshQuota = vi.fn();
+    renderCard({}, true, { onRefreshQuota });
+    fireEvent.click(screen.getByRole("button", { name: "刷新积分" }));
+    expect(onRefreshQuota).toHaveBeenCalledOnce();
+  });
+
+  it("刷新中按钮禁用并显示加载动画", () => {
+    renderCard({}, true, { quotaLoading: true });
+    const refresh = screen.getByRole("button", { name: "刷新积分" });
+    expect(refresh).toBeDisabled();
+    expect(refresh.classList.contains("is-loading")).toBe(true);
+  });
+
+  it("Zcode 卡片的刷新按钮叫「刷新额度」", () => {
+    renderCard({
+      account: { id: "z1", provider: "zcode", label: "Zcode 账号", createdAt: 0, origin: "本机" },
+      supportsClaim: false,
+    }, false);
+    expect(screen.getByRole("button", { name: "刷新额度" })).toBeEnabled();
+  });
+
   it("客户端登录中的账号可直接打开客户端", () => {
     const onLaunch = vi.fn();
     renderCard({ isClientLogin: true }, true, { onLaunch });

@@ -2,8 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { api, onAccountsChanged, onNoticesChanged, onSwitchProgress, onWindowRequested } from "./lib/api";
 import { buildGroups } from "./lib/groups";
 import type {
+  AgentVisibility,
   AppConfig,
   CloseAction,
+  LiveFreeModels,
   LogEntry,
   Notice,
   NoticeKind,
@@ -13,6 +15,7 @@ import type {
 import Sidebar, { SETTINGS_ID } from "./components/Sidebar";
 import AgentGroupPanel from "./components/AgentGroupPanel";
 import DashboardPanel from "./components/DashboardPanel";
+import LaunchScreen from "./components/LaunchScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
 import CloseConfirmDialog from "./components/CloseConfirmDialog";
@@ -56,6 +59,12 @@ export default function App() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [logsRequested, setLogsRequested] = useState(false);
   const [closePrompt, setClosePrompt] = useState(false);
+  /** 启动页（赛博鸡蛋孵化舱）：每次进程启动展示一次，进入主界面后不再出现 */
+  const [launchDone, setLaunchDone] = useState(false);
+  /** 「随时看一眼」封面浮层：顶栏蛋图标打开，Esc/返回 关闭，不丢导航状态 */
+  const [coverOpen, setCoverOpen] = useState(false);
+  /** WorkBuddy 实时免费模型核对结果（福利提示条用） */
+  const [liveFree, setLiveFree] = useState<LiveFreeModels | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notices, setNotices] = useState<Notice[] | null>(null);
   const [noticeError, setNoticeError] = useState<string | null>(null);
@@ -130,6 +139,11 @@ export default function App() {
       if (!active) return;
       const request = await api.takeWindowRequest();
       if (!active) return;
+      // 托盘 / 单实例唤起时直接进主界面，不让启动页挡路；无请求时保持启动页
+      if (typeof request === "string") {
+        setLaunchDone(true);
+        setCoverOpen(false);
+      }
       if (request === "settings" || request === "logs") {
         setClosePrompt(false);
         setNoticesOpen(false);
@@ -185,11 +199,16 @@ export default function App() {
     setLogsRequested(false);
   }, [logsRequested, overview, config]);
 
-  // 前台轮询（积分和签到状态都会变）
+  // 前台轮询（积分和签到状态都会变）；间隔在设置里可调，0 = 关闭。
+  // config.json 可手改，非零值钳制到 10–3600 秒，避免 1 秒级轮询打爆上游接口。
+  const rawUiRefresh = config?.uiRefreshSeconds ?? 45;
+  const uiRefreshSeconds =
+    rawUiRefresh <= 0 ? 0 : Math.min(3600, Math.max(10, rawUiRefresh));
   useEffect(() => {
-    const timer = setInterval(() => void refresh(), 45_000);
+    if (uiRefreshSeconds <= 0) return;
+    const timer = setInterval(() => void refresh(), uiRefreshSeconds * 1000);
     return () => clearInterval(timer);
-  }, [refresh]);
+  }, [refresh, uiRefreshSeconds]);
 
   const runAll = async () => {
     setBusy(true);
@@ -227,6 +246,44 @@ export default function App() {
       pushToast("err", `积分刷新失败：${e}`);
     } finally {
       setQuotaLoadingId(null);
+    }
+  };
+
+  /** 启动页按平台领蛋：把该平台所有可签账号依次签完，汇总一条提示 */
+  const claimProvider = async (providerId: string) => {
+    const targets = (overview?.accounts ?? []).filter(
+      (a) => a.account.provider === providerId && a.status?.state === "claimable"
+    );
+    if (targets.length === 0) return;
+    setBusy(true);
+    let ok = 0;
+    let points = 0;
+    let failed = 0;
+    try {
+      for (const t of targets) {
+        try {
+          const r = await api.checkinAccount(providerId, t.account.id);
+          if (r.status === "success") {
+            ok += 1;
+            points += r.points;
+          } else if (r.status === "already") {
+            ok += 1;
+          } else {
+            failed += 1;
+          }
+        } catch {
+          failed += 1;
+        }
+      }
+      pushToast(
+        failed > 0 ? "warn" : "ok",
+        failed > 0
+          ? `领蛋完成：成功 ${ok} 枚，失败 ${failed} 枚`
+          : `领蛋 +${points} 积分（${ok} 枚）`
+      );
+    } finally {
+      setBusy(false);
+      await refresh();
     }
   };
 
@@ -302,6 +359,11 @@ export default function App() {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, [authDeadline]);
+
+  // 有待完成的授权时直接进主界面（授权横幅只在主界面里）
+  useEffect(() => {
+    if (authSession) setLaunchDone(true);
+  }, [authSession]);
 
   // 应用重启后恢复未完成的授权轮询
   useEffect(() => {
@@ -486,6 +548,69 @@ export default function App() {
     [pushToast]
   );
 
+  /** 界面自动刷新间隔（秒）：乐观更新 + 落盘，轮询定时器随 config 重建 */
+  const patchUiRefreshInterval = useCallback(
+    (seconds: number) => {
+      setConfig((prev) => (prev ? { ...prev, uiRefreshSeconds: seconds } : prev));
+      void api
+        .setUiRefreshInterval(seconds)
+        .then((cfg) => setConfig(cfg))
+        .catch((e) => pushToast("err", `保存失败：${e}`));
+    },
+    [pushToast]
+  );
+
+  /** 实时核对 WorkBuddy 当前免费模型（模型目录与客户端对话选择器同源） */
+  const refreshFreeModels = useCallback(async () => {
+    setLiveFree((prev) => ({
+      models: prev?.models ?? [],
+      fetchedAt: prev?.fetchedAt ?? 0,
+      loading: true,
+      error: null,
+    }));
+    try {
+      const models = await api.fetchWorkbuddyFreeModels();
+      setLiveFree({ models, fetchedAt: Date.now(), loading: false, error: null });
+    } catch (e) {
+      setLiveFree((prev) => ({
+        models: prev?.models ?? [],
+        fetchedAt: prev?.fetchedAt ?? 0,
+        loading: false,
+        error: String(e),
+      }));
+    }
+  }, []);
+
+  // 进入 WorkBuddy 面板时自动核对一次最新免费模型
+  useEffect(() => {
+    if (selected === "workbuddy" && !liveFree) void refreshFreeModels();
+  }, [selected, liveFree, refreshFreeModels]);
+
+  /** 平台显示开关：乐观更新 + 落盘；隐藏侧栏时若正停留在该平台页则回首页 */
+  const patchVisibility = useCallback(
+    (providerId: string, patch: Partial<AgentVisibility>) => {
+      setConfig((prev) => {
+        if (!prev) return prev;
+        const cur = prev.agentVisibility[providerId] ?? { sidebar: true, home: true };
+        return {
+          ...prev,
+          agentVisibility: {
+            ...prev.agentVisibility,
+            [providerId]: { ...cur, ...patch },
+          },
+        };
+      });
+      if (patch.sidebar === false) {
+        setSelected((prev) => (prev === providerId ? HOME_ID : prev));
+      }
+      void api
+        .setAgentVisibility(providerId, patch)
+        .then((cfg) => setConfig(cfg))
+        .catch((e) => pushToast("err", `保存失败：${e}`));
+    },
+    [pushToast]
+  );
+
   const toggleMaster = async (enabled: boolean) => {
     try {
       const cfg = await api.setSchedulerEnabled(enabled);
@@ -654,8 +779,31 @@ export default function App() {
     </>
   );
 
+  // 启动页：赛博鸡蛋孵化舱。进入主界面后本次进程不再展示（托盘唤醒不重弹）。
+  if (!launchDone) {
+    return (
+      <div className="shell launch-shell">
+        <LaunchScreen
+          overview={overview}
+          loadError={loadError}
+          busy={busy}
+          visibility={config?.agentVisibility ?? {}}
+          onClaimAll={() => void runAll()}
+          onClaimProvider={(id) => void claimProvider(id)}
+          onOpenProvider={(id) => {
+            setLaunchDone(true);
+            setSelected(id);
+          }}
+          onEnter={() => setLaunchDone(true)}
+          onRetry={() => void refresh()}
+        />
+        {overlays}
+      </div>
+    );
+  }
+
   // 首屏骨架：不等 overview（它要等各平台网络请求，3 秒级）。
-  // 立即渲染界面结构 + 骨架占位，数据到了自动填充（45s 轮询 / 事件驱动）。
+  // 立即渲染界面结构 + 骨架占位，数据到了自动填充（定时轮询 / 事件驱动）。
   if (!overview || !config) {
     return (
       <div className="shell">
@@ -735,6 +883,11 @@ export default function App() {
   }
 
   const groups = buildGroups(overview);
+  // 侧栏只列「侧栏显示」的平台；首页卡片在 DashboardPanel 内按 home 开关过滤。
+  // current 仍用全量 groups：首页卡片点进被侧栏隐藏的平台页也允许。
+  const sidebarGroups = groups.filter(
+    (g) => config.agentVisibility[g.provider.id]?.sidebar !== false
+  );
   const inSettings = selected === SETTINGS_ID;
   const inHome = selected === HOME_ID;
   const current = groups.find((g) => g.provider.id === selected);
@@ -755,25 +908,34 @@ export default function App() {
   return (
     <div className="shell">
       <Sidebar
-        groups={groups}
+        groups={sidebarGroups}
         selected={selected}
         onSelect={setSelected}
         onOpenHome={() => setSelected(HOME_ID)}
         onOpenSettings={() => setSelected(SETTINGS_ID)}
+        providers={overview.providers}
+        visibility={config.agentVisibility}
+        onVisibilityChange={patchVisibility}
         onReorder={(order) => {
+          // order 只含当前可见平台：隐藏的平台保持原槽位，合并成完整顺序再落盘
+          const visible = new Set(order);
+          const queue = [...order];
+          const merged = overview.providers.map((p) =>
+            visible.has(p.id) ? (queue.shift() as string) : p.id
+          );
           // 乐观更新本地顺序，落盘失败再回滚刷新
           setOverview((prev) =>
             prev
               ? {
                   ...prev,
-                  providers: order
+                  providers: merged
                     .map((id) => prev.providers.find((p) => p.id === id))
                     .filter((p): p is NonNullable<typeof p> => !!p),
                 }
               : prev
           );
           void api
-            .setAgentOrder(order)
+            .setAgentOrder(merged)
             .then((cfg) => setConfig(cfg))
             .catch((e) => {
               pushToast("err", `保存顺序失败：${e}`);
@@ -839,6 +1001,16 @@ export default function App() {
 
           <div className="topbar-right">
             {noticesButton}
+            <button
+              className="cover-button"
+              onClick={() => setCoverOpen(true)}
+              aria-label="看一眼赛博鸡蛋"
+              title="看一眼赛博鸡蛋（启动页封面）"
+            >
+              <svg viewBox="0 0 120 150" fill="none" stroke="currentColor" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M60 8 C88 8 108 44 108 82 C108 116 86 142 60 142 C34 142 12 116 12 82 C12 44 32 8 60 8 Z" />
+              </svg>
+            </button>
             <label className="switch" title="总闸：关掉后所有 agent 都不跑">
               <input
                 type="checkbox"
@@ -865,6 +1037,7 @@ export default function App() {
           <DashboardPanel
             overview={overview}
             groups={groups}
+            visibility={config.agentVisibility}
             onOpenAgent={(id) => setSelected(id)}
           />
         ) : inSettings ? (
@@ -876,6 +1049,7 @@ export default function App() {
             onSchedulerEnabled={toggleMaster}
             onSyncEnabled={toggleSync}
             onRefreshInterval={patchRefreshInterval}
+            onUiRefreshInterval={patchUiRefreshInterval}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
             onSyncNow={syncNow}
             onOpenDataDir={openDataDir}
@@ -902,6 +1076,8 @@ export default function App() {
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
             onAlertChange={patchAlert}
             onChatSyncChange={patchChatSync}
+            liveFree={liveFree}
+            onRefreshFree={() => void refreshFreeModels()}
           />
         ) : (
           <div className="empty-state">
@@ -921,6 +1097,25 @@ export default function App() {
           />
         </div>
       </div>
+      {coverOpen && (
+        <div className="cover-overlay" role="dialog" aria-label="赛博鸡蛋封面">
+          <LaunchScreen
+            overview={overview}
+            loadError={loadError}
+            busy={busy}
+            visibility={config.agentVisibility}
+            onClaimAll={() => void runAll()}
+            onClaimProvider={(id) => void claimProvider(id)}
+            onOpenProvider={(id) => {
+              setCoverOpen(false);
+              setSelected(id);
+            }}
+            onEnter={() => setCoverOpen(false)}
+            onBack={() => setCoverOpen(false)}
+            onRetry={() => void refresh()}
+          />
+        </div>
+      )}
       {overlays}
     </div>
   );

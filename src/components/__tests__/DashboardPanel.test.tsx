@@ -71,6 +71,7 @@ describe("DashboardPanel（7 天内到期）", () => {
       <DashboardPanel
         overview={overview}
         groups={buildGroups(overview)}
+        visibility={{}}
         onOpenAgent={vi.fn()}
       />
     );
@@ -87,6 +88,7 @@ describe("DashboardPanel（7 天内到期）", () => {
       <DashboardPanel
         overview={overview}
         groups={buildGroups(overview)}
+        visibility={{}}
         onOpenAgent={vi.fn()}
       />
     );
@@ -102,5 +104,21 @@ describe("DashboardPanel（7 天内到期）", () => {
     expect(card.querySelector(".dash-agent-welfare")?.getAttribute("title")).toContain(
       "数量未知"
     );
+  });
+
+  it("首页隐藏的平台：卡片与到期列表不显示，全局指标保持全量口径", () => {
+    render(
+      <DashboardPanel
+        overview={overview}
+        groups={buildGroups(overview)}
+        visibility={{ qoder: { sidebar: true, home: false, launch: true } }}
+        onOpenAgent={vi.fn()}
+      />
+    );
+    expect(document.querySelector(".dash-agent")).toBeNull();
+    expect(screen.queryByText("7 天内到期")).not.toBeInTheDocument();
+    expect(screen.getByText(/所有平台已在首页隐藏/)).toBeInTheDocument();
+    // 汇总仍含被隐藏平台（500+100=600），与顶栏口径一致
+    expect(document.querySelectorAll(".dash-stat-value")[0].textContent).toBe("600");
   });
 });

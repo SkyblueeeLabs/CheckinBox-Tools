@@ -50,6 +50,8 @@ function config(): AppConfig {
     alertThresholds: {},
     closeAction: "ask",
     notificationsEnabled: true,
+    uiRefreshSeconds: 45,
+    agentVisibility: {},
   };
 }
 
@@ -57,7 +59,8 @@ const noop = vi.fn();
 
 function renderSettings(
   onCloseAction: (action: "ask" | "tray" | "exit") => void = noop,
-  onNotificationsEnabled: (enabled: boolean) => void = noop
+  onNotificationsEnabled: (enabled: boolean) => void = noop,
+  onUiRefreshInterval: (seconds: number) => void = noop
 ) {
   return render(
     <SettingsPanel
@@ -68,6 +71,7 @@ function renderSettings(
       onSchedulerEnabled={noop}
       onSyncEnabled={noop}
       onRefreshInterval={noop}
+      onUiRefreshInterval={onUiRefreshInterval}
       onScheduleChange={noop}
       onSyncNow={noop}
       onOpenDataDir={noop}
@@ -140,5 +144,29 @@ describe("SettingsPanel（设置页 tab）", () => {
 
     fireEvent.click(toggle);
     expect(onNotificationsEnabled).toHaveBeenCalledWith(false);
+  });
+
+  it("界面自动刷新间隔：预设直接生效，可关闭，自定义秒数钳制到 10–3600", () => {
+    const onUiRefreshInterval = vi.fn();
+    renderSettings(noop, noop, onUiRefreshInterval);
+    fireEvent.click(screen.getByRole("button", { name: /自动同步/ }));
+
+    const select = screen.getByRole("combobox", { name: "界面自动刷新间隔" });
+    expect(select).toHaveValue("45");
+
+    fireEvent.change(select, { target: { value: "60" } });
+    expect(onUiRefreshInterval).toHaveBeenCalledWith(60);
+
+    fireEvent.change(select, { target: { value: "0" } });
+    expect(onUiRefreshInterval).toHaveBeenCalledWith(0);
+
+    fireEvent.change(select, { target: { value: "custom" } });
+    const input = screen.getByRole("spinbutton", { name: "自定义界面刷新秒数" });
+    fireEvent.change(input, { target: { value: "9999" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(onUiRefreshInterval).toHaveBeenCalledWith(3600);
+    expect(
+      screen.queryByRole("spinbutton", { name: "自定义界面刷新秒数" })
+    ).not.toBeInTheDocument();
   });
 });

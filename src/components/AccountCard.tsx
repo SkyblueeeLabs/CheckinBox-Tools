@@ -110,6 +110,7 @@ export default function AccountCard({
       ? `打开${view.providerName}领取`
       : "打开客户端";
   const checkinLabel = hasError && state !== "claimable" ? "重试" : "签到";
+  const refreshLabel = unit.unit === "Token" ? "刷新额度" : "刷新积分";
   // 积分和签到状态常报同一个错（同一个 401）：只显示一次，别把卡片撑高
   const shownQuotaError = quotaError && quotaError !== error ? quotaError : null;
   // 账号 id 副名字（与签到记录共用的打码开关）
@@ -211,6 +212,18 @@ export default function AccountCard({
           <span>{canSwitchClient ? "切换并打开" : launchLabel}</span>
         </button>
         <div className="acct-tools">
+          <button
+            className={`acct-tool acct-refresh ${quotaLoading ? "is-loading" : ""}`}
+            onClick={onRefreshQuota}
+            disabled={busy || quotaLoading}
+            aria-label={refreshLabel}
+            title={quotaLoading ? "正在刷新…" : `${refreshLabel}（立即拉取最新数据）`}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
+          </button>
           {view.supportsClaim && (
             <button
               className="acct-tool"
