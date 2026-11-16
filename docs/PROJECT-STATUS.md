@@ -341,7 +341,7 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
    **2026-11-05 修复「切换后丢账号态」**：根因是切换流程的**捕获时机**——
    旧流程「先捕获客户端登录态 → 再关客户端 → 写入目标凭据」，而 MiniMax 客户端
    约每小时自己刷新一次 token 并**轮换 refresh token**。实测事故（09:33:49 捕获
-   Skyblueee_3360 → 09:33:51 客户端刷新轮换了 RT → 09:34:2x 切回该账号时把
+   账号 A → 09:33:51 客户端刷新轮换了 RT → 09:34:2x 切回该账号时把
    已作废的 RT 写进 auth.json → 客户端启动刷新 `invalid_grant` →
    **`delete_credentials` 删掉凭据**退回登录页，用户被迫重新录入）。
    修复：`client_switch::switch` 拆成 `begin_switch`（关客户端）+ `finish_switch`
@@ -508,8 +508,8 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
       refresh token 每次刷新都轮换，而 `overview`（前端每 45 秒轮询）走的是
       **纯凭据层** `ensure_fresh_cred_minimax_only`，**刷新后没有把新 RT 回写账号池**。
       于是池里留的是已作废的旧 RT，下次刷新必然 `invalid_grant`，账号永久失效，
-      只能重新导入或切客户端账号（2026-10-26 实测：`Skyblueee` 失效 5.7 小时、
-      `Skyblueee-a` 复活后 54 分钟再次失效）。
+      只能重新导入或切客户端账号（2026-10-26 实测：账号 A 失效 5.7 小时、
+      账号 B 复活后 54 分钟再次失效）。
       修法分两步，最终对齐了官方 MiniMax CLI 与 Cockpit Tools 的做法：
       1. 刷新结果必须落盘（RT 轮换与回写成对发生）；
       2. `commands.rs::ensure_fresh_cred` 改成**账号池感知**，做三道防线：
