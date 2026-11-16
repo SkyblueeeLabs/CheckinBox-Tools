@@ -1,0 +1,76 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "已存在的 tag（如 v0.1.0）"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: "src-tauri -> target"
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Build and create draft release
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: ${{ github.event.inputs.tag || github.ref_name }}
+          releaseName: "CheckinBox ${{ github.event.inputs.tag || github.ref_name }}"
+          releaseBody: |
+            Windows 安装包与免安装版见下方 Assets。
+
+            - `*_x64-setup.exe`：推荐，中文安装向导，用户级安装
+            - `*_x64_zh-CN.msi`：企业部署（组策略 / 批量分发）
+            - `*_portable.exe`：免安装便携版
+
+            安装包未做代码签名，首次运行可能提示「未知发布者」：点「更多信息 → 仍要运行」即可。
+          releaseDraft: true
+          prerelease: false
+          args: --features custom-protocol
+
+      - name: Upload portable exe and checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          PORTABLE="CheckinBox_${TAG#v}_portable.exe"
+          cp src-tauri/target/release/CheckinBox.exe "$PORTABLE"
+          {
+            sha256sum "$PORTABLE"
+            (cd src-tauri/target/release/bundle/nsis && sha256sum *.exe)
+            (cd src-tauri/target/release/bundle/msi && sha256sum *.msi)
+          } > SHA256SUMS.txt
+          gh release upload "$TAG" "$PORTABLE" SHA256SUMS.txt --clobber

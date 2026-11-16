@@ -158,6 +158,29 @@ npx tauri build --features custom-protocol
 - 卸载会移除程序文件、快捷方式和注册表项，但保留 `%APPDATA%\CheckinBox\` 数据目录。
 - 静默安装 / 卸载：`setup.exe /S`、`uninstall.exe /S`。
 
+### 发布到 GitHub Releases（自动）
+
+推 `v*` tag 会触发 [`.github/workflows/release.yml`](.github/workflows/release.yml)，在
+`windows-latest` 上构建并创建 **draft Release**：
+
+```bash
+# 1. 先同步三处版本号：package.json / src-tauri/tauri.conf.json / src-tauri/Cargo.toml
+# 2. 提交后打 tag 并推送
+git tag v0.1.0
+git push origin v0.1.0
+```
+
+Release 资产：
+
+- `CheckinBox_<版本>_x64-setup.exe`：NSIS 安装包（推荐）
+- `CheckinBox_<版本>_x64_zh-CN.msi`：企业部署
+- `CheckinBox_<版本>_portable.exe`：免安装便携版
+- `SHA256SUMS.txt`：校验和
+
+构建完成后到 Actions 确认结果、到 Releases 检查资产，再点发布。也可以在
+Actions → Release → Run workflow 手动填一个已存在的 tag 重跑。不需要额外 secret，
+使用仓库内置的 `GITHUB_TOKEN`。
+
 ### 测试
 
 ```bash
