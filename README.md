@@ -203,7 +203,7 @@ npx tsc --noEmit                            # 前端类型检查
 - 活动周期按「今天 10:00 起的窗口」判定，不能把昨天的 CLAIMED 当成今天已签。
 - 请求必须带设备风控头（`Cosy-MachineToken / MachineCode / MachineType`）。
 - 登录态是 Electron safeStorage（`v10` + AES-256-GCM），同一 Windows 用户可解可写。
-- 本机导入会解密 `auth.v1.dat` 读取当前登录账号；Qoder 没有自动刷新逻辑，客户端轮换凭据后重新导入即可。
+- 本机导入会解密 `auth.v1.dat` 读取当前登录账号；access token 临期时自动调用 `/api/v1/deviceToken/refresh` 续期，轮换后的 refresh token 回写账号池。旧 refresh token 不会立即失效，不会把桌面客户端顶下线。
 
 ### WorkBuddy（腾讯 CodeBuddy）
 

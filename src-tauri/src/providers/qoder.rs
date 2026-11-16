@@ -38,6 +38,7 @@ const WEB_BASE: &str = "https://qoder.com.cn";
 const OPENAPI_BASE: &str = "https://openapi.qoder.com.cn";
 const CAMPAIGNS_PATH: &str = "/sash/api/v1/me/campaigns";
 const DEVICE_POLL_PATH: &str = "/api/v1/deviceToken/poll";
+const DEVICE_REFRESH_PATH: &str = "/api/v1/deviceToken/refresh";
 const DEVICE_LOGIN_PATH: &str = "/device/selectAccounts";
 const USERINFO_PATH: &str = "/api/v1/userinfo";
 const SASH_CLIENT_TYPE: &str = "10";
@@ -445,6 +446,55 @@ fn daily_cycle(rows: &[Value], now: &chrono::DateTime<chrono::Local>) -> Cycle {
     }
 }
 
+/// 解析续期响应：兼容顶层 / `data` 包装，返回更新后的凭据。
+/// 响应示例：`{device_token, refresh_token, expires_at, refresh_token_expires_at}`。
+fn parse_refresh_response(cred: &Value, body: &Value) -> Result<Value> {
+    let data = body
+        .get("data")
+        .filter(|d| d.is_object())
+        .unwrap_or(body);
+    let token = data["device_token"]
+        .as_str()
+        .or_else(|| data["token"].as_str())
+        .or_else(|| data["access_token"].as_str())
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("续期响应里没有 device_token（上游可能已变更）"))?;
+
+    let now_ms = chrono::Utc::now().timestamp_millis();
+    let mut fresh = cred.clone();
+    fresh["access_token"] = json!(token);
+    if let Some(rt) = data["refresh_token"].as_str().filter(|s| !s.is_empty()) {
+        fresh["refresh_token"] = json!(rt);
+    }
+    if let Some(uid) = data["user_id"].as_str().filter(|s| !s.is_empty()) {
+        fresh["user_id"] = json!(uid);
+    }
+
+    let expires_at = data["expires_at"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp_millis())
+        .or_else(|| data["expires_in"].as_i64().map(|secs| now_ms + secs * 1000))
+        .or_else(|| data["expires_in_ms"].as_i64().map(|ms| now_ms + ms));
+    if let Some(ms) = expires_at.filter(|ms| *ms > 0) {
+        fresh["expires_at"] = json!(ms);
+    }
+
+    let refresh_expires_at = data["refresh_token_expires_at"]
+        .as_str()
+        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
+        .map(|dt| dt.timestamp_millis())
+        .or_else(|| {
+            data["refresh_token_expires_in"]
+                .as_i64()
+                .map(|secs| now_ms + secs * 1000)
+        });
+    if let Some(ms) = refresh_expires_at.filter(|ms| *ms > 0) {
+        fresh["refresh_expires_at"] = json!(ms);
+    }
+    Ok(fresh)
+}
+
 #[async_trait]
 impl Provider for QoderProvider {
     fn id(&self) -> &'static str {
@@ -464,12 +514,52 @@ impl Provider for QoderProvider {
     }
 
     /// 从本机客户端登录态导入（解密 `auth.v1.dat`，只读）。
-    /// Qoder 没有自动刷新逻辑，导入的是客户端当下的凭据；
-    /// 客户端轮换或过期后重新导入即可。
+    /// access token 临期时由 `ensure_fresh_cred` 调用 `refresh` 续期。
     async fn discover(&self) -> Result<Vec<(Account, Value)>> {
         Ok(crate::core::client_switch::qoder_client_login()
             .into_iter()
             .collect())
+    }
+
+    /// 用 refresh token 续期；服务端会轮换 refresh token，新值一并回写。
+    ///
+    /// 协议来自实测：`POST /api/v1/deviceToken/refresh`，body `{refresh_token}`，
+    /// 响应含 `device_token` / `refresh_token` / `expires_at`。
+    /// 旧 refresh token 不会立即失效，因此不会把桌面客户端顶下线。
+    async fn refresh(&self, _account: &Account, cred: &Value) -> Result<Option<Value>> {
+        let refresh_token = cred["refresh_token"]
+            .as_str()
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("凭据里没有 refresh token，无法续期；请在 Qoder 客户端重新登录后导入"))?;
+        let refresh_expires_at = cred["refresh_expires_at"].as_i64().unwrap_or(0);
+        if refresh_expires_at > 0 && refresh_expires_at <= chrono::Utc::now().timestamp_millis() {
+            return Err(anyhow!(
+                "refresh token 已过期，请在 Qoder 客户端重新登录后重新导入"
+            ));
+        }
+
+        let resp = self
+            .http
+            .post(format!("{OPENAPI_BASE}{DEVICE_REFRESH_PATH}"))
+            .header("Accept", "application/json")
+            .json(&json!({ "refresh_token": refresh_token }))
+            .send()
+            .await?;
+        let status = resp.status();
+        let body: Value = resp.json().await.unwrap_or(Value::Null);
+        if !status.is_success() {
+            let msg = body["message"]
+                .as_str()
+                .or_else(|| body["errorMessage"].as_str())
+                .or_else(|| body["msg"].as_str())
+                .unwrap_or("");
+            return Err(anyhow!(
+                "Qoder 续期失败（HTTP {} {}）：请在客户端重新登录后重新导入",
+                status.as_u16(),
+                msg
+            ));
+        }
+        parse_refresh_response(cred, &body).map(Some)
     }
 
     async fn status(&self, _account: &Account, cred: &Value) -> Result<CheckinStatus> {
@@ -1043,5 +1133,61 @@ mod tests {
         assert_eq!(account.provider, "qoder");
         assert!(!account.id.is_empty());
         assert!(cred["access_token"].as_str().is_some_and(|s| !s.is_empty()));
+    }
+
+    #[test]
+    fn 续期响应解析_轮换rt并保留其他字段() {
+        let old = json!({
+            "access_token": "dt-old",
+            "refresh_token": "drt-old",
+            "machine_id": "m1",
+            "region": "cn",
+            "expires_at": 1_000,
+        });
+        let fresh = parse_refresh_response(
+            &old,
+            &json!({
+                "device_token": "dt-new",
+                "refresh_token": "drt-new",
+                "expires_at": "2026-12-16T00:00:00Z",
+                "refresh_token_expires_at": "2027-12-16T00:00:00Z",
+                "user_id": "u1",
+            }),
+        )
+        .expect("应能解析续期响应");
+        assert_eq!(fresh["access_token"], "dt-new");
+        assert_eq!(fresh["refresh_token"], "drt-new");
+        assert_eq!(fresh["machine_id"], "m1");
+        assert_eq!(fresh["region"], "cn");
+        assert_eq!(fresh["user_id"], "u1");
+        assert!(fresh["expires_at"].as_i64().unwrap() > 1_000);
+        assert!(fresh["refresh_expires_at"].as_i64().unwrap() > 0);
+    }
+
+    #[test]
+    fn 续期响应缺少token时报错() {
+        let err = parse_refresh_response(&json!({}), &json!({ "refresh_token": "x" }));
+        assert!(err.is_err());
+    }
+
+    /// 真机验证：用本机 Qoder 登录态真实调用续期接口（不写账号池）。
+    /// 服务端会轮换 refresh token，但旧值不会立即失效，桌面客户端不受影响。
+    #[test]
+    #[ignore = "会真实调用 Qoder 续期接口，手动跑：cargo test -- --ignored 本机Qoder续期接口能刷新"]
+    fn 本机Qoder续期接口能刷新() {
+        let Some((account, cred)) = crate::core::client_switch::qoder_client_login() else {
+            panic!("本机没有可用的 Qoder 登录态");
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let fresh = rt
+            .block_on(QoderProvider::new().refresh(&account, &cred))
+            .expect("续期请求失败")
+            .expect("续期没有返回新凭据");
+        assert!(fresh["access_token"].as_str().is_some_and(|s| !s.is_empty()));
+        assert_ne!(
+            fresh["access_token"].as_str(),
+            cred["access_token"].as_str(),
+            "续期后 access token 应变化"
+        );
     }
 }

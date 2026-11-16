@@ -1939,6 +1939,9 @@ async fn ensure_fresh_cred(
     account: &Account,
     cred: &serde_json::Value,
 ) -> serde_json::Value {
+    if account.provider == "qoder" {
+        return ensure_fresh_qoder(state, account, cred).await;
+    }
     if account.provider != "minimax" {
         // 其他平台的 token 有效期是「天」级，池里的快照直接够用
         return cred.clone();
@@ -1999,6 +2002,69 @@ fn needs_refresh(cred: &serde_json::Value, now_ms: i64) -> bool {
         .and_then(|v| v.as_i64())
         .unwrap_or(0);
     expires <= now_ms + 5 * 60_000
+}
+
+/// 凭据到期时间（毫秒）：MiniMax 用 `expires_at_ms`，Qoder 用 `expires_at`。
+fn cred_expiry_ms(cred: &serde_json::Value) -> i64 {
+    cred.get("expires_at_ms")
+        .and_then(|v| v.as_i64())
+        .or_else(|| cred.get("expires_at").and_then(|v| v.as_i64()))
+        .unwrap_or(0)
+}
+
+/// Qoder：剩余不足 5 分钟才续期；没有到期时间视为未知，不主动续期
+/// （避免每轮同步都去换一次 refresh token）。
+fn qoder_needs_refresh(cred: &serde_json::Value, now_ms: i64) -> bool {
+    let expires = cred_expiry_ms(cred);
+    expires > 0 && expires <= now_ms + 5 * 60_000
+}
+
+/// Qoder 凭据续期：access token 临期时用 refresh token 换新并回写账号池。
+///
+/// 客户端当前登录的正是这个账号时，优先采纳 `auth.v1.dat` 里客户端自己
+/// 续期过的凭据；否则走 `POST /api/v1/deviceToken/refresh`。服务端会轮换
+/// refresh token，但旧值不会立即失效，所以不会把桌面客户端顶下线。
+async fn ensure_fresh_qoder(
+    state: &AppState,
+    account: &Account,
+    cred: &serde_json::Value,
+) -> serde_json::Value {
+    let lock = refresh_lock_for(account).await;
+    let _guard = lock.lock().await;
+
+    let latest = state
+        .store
+        .lock()
+        .unwrap()
+        .credential(&account.provider, &account.id)
+        .unwrap_or_else(|_| cred.clone());
+    if latest != *cred {
+        return latest;
+    }
+
+    if !qoder_needs_refresh(&latest, chrono::Utc::now().timestamp_millis()) {
+        return latest;
+    }
+
+    // 客户端当前登录的就是这个账号：它文件里的凭据可能刚续期过，优先采纳
+    if let Some((same, fresh)) = crate::core::client_switch::qoder_client_login() {
+        if same.id == account.id && cred_expiry_ms(&fresh) > cred_expiry_ms(&latest) {
+            persist_cred(state, account, &fresh);
+            return fresh;
+        }
+    }
+
+    let Some(provider) = state.provider("qoder") else {
+        return latest;
+    };
+    match provider.refresh(account, &latest).await {
+        Ok(Some(fresh)) => {
+            persist_cred(state, account, &fresh);
+            fresh
+        }
+        // 续期失败（RT 已过期等）返回原凭据，调用方按普通错误如实展示
+        _ => latest,
+    }
 }
 
 fn persist_cred(state: &AppState, account: &Account, cred: &serde_json::Value) {
@@ -2702,6 +2768,26 @@ mod tests {
         // 老凭据没这个字段时宁可多刷一次，也不要因为"看着没过期"而永远不刷
         assert!(needs_refresh(&json!({ "access_token": "x" }), 0));
         assert!(needs_refresh(&serde_json::Value::Null, 0));
+    }
+
+    #[test]
+    fn qoder临期才刷新_未知到期不主动刷新() {
+        let now = 1_000_000i64;
+        // 还剩 1 小时 → 不刷
+        assert!(!qoder_needs_refresh(
+            &json!({ "expires_at": now + 3_600_000 }),
+            now
+        ));
+        // 还剩 4 分钟 → 刷
+        assert!(qoder_needs_refresh(
+            &json!({ "expires_at": now + 4 * 60_000 }),
+            now
+        ));
+        // 已过期 → 刷
+        assert!(qoder_needs_refresh(&json!({ "expires_at": now - 1 }), now));
+        // 没给到期时间 → 不主动刷（避免每轮同步都换一次 RT）
+        assert!(!qoder_needs_refresh(&json!({ "access_token": "x" }), now));
+        assert!(!qoder_needs_refresh(&json!({ "expires_at": 0 }), now));
     }
 
     #[tokio::test]

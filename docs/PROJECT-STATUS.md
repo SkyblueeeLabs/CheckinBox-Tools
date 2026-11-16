@@ -46,7 +46,7 @@
 |---|---|---|
 | 平台适配器抽象（`Provider` trait；新增平台还要在 `AppState::new` 和 `commands.rs` 几处 `matches!` 登记） | ✅ | `src-tauri/src/core/provider.rs` |
 | MiniMax Code：本机导入 / 状态 / 领取 / 积分 | ✅ 真机验证 | `providers/minimax.rs` |
-| Qoder CN：本机客户端导入 / 设备授权 / 活动领取 / 积分 / 真实昵称 | ✅ 真机验证 | `providers/qoder.rs` |
+| Qoder CN：本机客户端导入 / 设备授权 / 活动领取 / 积分 / 真实昵称 / token 自动续期 | ✅ 真机验证 | `providers/qoder.rs` |
 | 妙手：本机导入 / 积分（**无每日签到**） | ✅ 真机验证 | `providers/miaoshou.rs` |
 | WorkBuddy（CodeBuddy）：Cockpit 账号库多账号导入 / 本机客户端导入 / 积分 / 签到（当前账号域未开活动时如实显示） | ✅ 真机验证（4 账号积分正常） | `providers/workbuddy.rs` |
 | Zcode（智谱 Z.ai）：本机导入 / **余额展示 + 领取提醒**。**刻意不代领** —— 每日 3 亿 GLM-5.3-Flash Token 的领取要过阿里云验证码，只有官方客户端的 Electron 渲染进程能生成 | ✅ 真机验证（解密 + 余额/预览接口已通） | `providers/zcode.rs` |
