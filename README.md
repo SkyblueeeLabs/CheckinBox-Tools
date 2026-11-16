@@ -2,16 +2,15 @@
 
 > 今日的赛博鸡蛋，领了嘛？
 
-![release](https://img.shields.io/github/v/release/SkyblueeeLabs/CheckinBox-Tools) ![downloads](https://img.shields.io/github/downloads/SkyblueeeLabs/CheckinBox-Tools/total) ![stack](https://img.shields.io/badge/Tauri_2-6366f1) ![rust](https://img.shields.io/badge/Rust-stable-orange) ![react](https://img.shields.io/badge/React-18-61dafb) ![platform](https://img.shields.io/badge/Windows-10%2F11-0078d4)
+![release](https://img.shields.io/github/v/release/SkyblueeeLabs/CheckinBox-Tools) ![downloads](https://img.shields.io/github/downloads/SkyblueeeLabs/CheckinBox-Tools/total) ![website](https://img.shields.io/badge/website-online-14887c) ![stars](https://img.shields.io/github/stars/SkyblueeeLabs/CheckinBox-Tools) ![stack](https://img.shields.io/badge/Tauri_2-6366f1) ![rust](https://img.shields.io/badge/Rust-stable-orange) ![react](https://img.shields.io/badge/React-18-61dafb) ![platform](https://img.shields.io/badge/Windows-10%2F11-0078d4)
 
-**CheckinBox** 是一个 Windows 桌面工具，把本机已登录的 AI 编程客户端接进来。
+**CheckinBox** 是一个 Windows 桌面工具。它把本机已登录的 AI 编程客户端接进来，每日积分收进一个窗口。
+开电脑先看蛋：能领的点一下，领完进主界面；自动签到、账号续期、换号保留聊天记录，都在后台跑。
 
-每次启动先打开「赛博孵化舱」：每个平台一枚蛋，今天能领的会发光，点一下就能领；
-领完直接进主界面。之后的事交给后台——自动签到、多账号凭据保鲜、换号保留聊天记录、
-积分趋势和提醒，都收在同一个窗口里。
-
-> **直接下载使用**：[GitHub Releases](https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest) ——
-> 提供 Windows 安装包、MSI 和免安装便携版。想从源码构建或参与开发，见[从源码构建](#从源码构建开发者)。
+> **官网**：[skyblueeelabs.github.io/CheckinBox-Tools](https://skyblueeelabs.github.io/CheckinBox-Tools/)
+>
+> **直接下载**：[GitHub Releases](https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest) ——
+> Windows 安装包、MSI 和免安装便携版。想从源码构建或参与开发，见[从源码构建](#从源码构建开发者)。
 
 ![启动页：赛博孵化舱](docs/images/launch.png)
 
@@ -19,7 +18,7 @@
 
 - **一个平台一枚蛋**：已领是裂壳金蛋，可领是青光脉动，需手动领取是青圈，空巢 / 今日无可领是暗蛋，读取失败可以当场重试。
 - **点「领」就领**：单个平台会把该平台所有可签账号依次签完；「一键领蛋」扫描全部平台，只处理真正可领的账号。
-- **数字一眼看清**：已领 / 总账号、今日积分、还剩几枚待领，与主界面同一口径。
+- **数字一眼看清**：已领 / 总账号、今日积分、还剩几枚待领，和主界面数字对得上。
 - **不挡路**：每次进程启动只展示一次，进入主界面后不再弹出；托盘唤醒直接进主界面。顶栏的蛋图标可以随时打开封面浮层再看一眼，Esc / 返回回到原页面，导航状态不丢。
 - **隐藏不等于停用**：在侧栏 Agents 旁的眼睛按钮里可以关掉某平台的侧栏、首页卡片或封面蛋。隐藏只影响显示，自动签到与后台同步照常运行。
 
@@ -34,7 +33,7 @@
 - **失败如实报错**：宁可显示「签到失败：xxx」，也不谎报「已签到」。失败流水有 10 分钟节流，不会刷屏。
 - **前台刷新可调**：设置页提供界面自动刷新间隔（0 / 15 / 30 / 45 / 60 / 120 / 300 / 600 秒或自定义 10–3600 秒），与后台同步间隔相互独立；设为 0 后只在手动刷新或后台同步完成时更新界面。
 
-### 多账号管理
+### 账号管理
 
 - **两个入口**：点「从本机导入」读取本机客户端登录态（MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器设备授权。
 - **账号池里的每个号都是「活的」**：客户端同一时刻只能登一个账号，但 CheckinBox 会给不在客户端的账号自动续期（refresh token 轮换后回写），早上的自动签到照样能签。
@@ -104,7 +103,8 @@
 
 ## 下载使用
 
-**最新版**：<https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest>
+- **官网**：<https://skyblueeelabs.github.io/CheckinBox-Tools/>
+- **最新版**：<https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest>
 
 | 文件 | 适用场景 |
 |---|---|
@@ -295,7 +295,7 @@ src/                        React 前端
                             AgentGroupPanel / AccountCard / QuotaCard / TrendLine
                             LogPanel / SettingsPanel / BackupPanel
   lib/api.ts                invoke 封装 + 事件订阅
-  lib/groups.ts             overview → 分组（多账号排序）
+  lib/groups.ts             overview → 分组（账号排序）
   lib/welfare.ts            福利与免费模型口径
   lib/mask.ts               账号 id 打码
   styles.css                全部样式（单文件，按区块分节注释）
