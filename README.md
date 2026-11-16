@@ -33,7 +33,7 @@
 
 ### 多账号管理
 
-- **三种导入方式**：本机客户端登录态一键导入；MiniMax / Qoder / WorkBuddy 走浏览器设备授权；装了 [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools) 的话，WorkBuddy 会直接读取它的加密账号库，多账号一次进来。
+- **两个入口**：点「从本机导入」读取本机客户端登录态（MiniMax / 妙手 / WorkBuddy）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器设备授权。
 - **账号池里的每个号都是「活的」**：客户端同一时刻只能登一个账号，但 CheckinBox 会给不在客户端的账号自动续期（refresh token 轮换后回写），早上的自动签到照样能签。
 - **一眼分清账号**：账号卡显示「客户端登录」徽标和平台色头像描边；支持设为当前账号、签到、打开/切换客户端、查看明细、刷新积分或额度、移除账号。
 - **侧栏拖拽调序**，顺序持久化；隐藏平台不会打乱剩余平台的顺序。
@@ -66,7 +66,7 @@
 |---|---|---|---|---|---|
 | **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取，连签有额外加成 | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 浏览器设备授权 |
-| **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / Cockpit Tools 账号库 |
+| **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（只有注册奖励） | ✅ | ✅ | 本机导入 |
 | **Zcode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 只展示 + 提醒，不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
 
@@ -208,7 +208,7 @@ npx tsc --noEmit                            # 前端类型检查
 
 - 凭据在 `state.vscdb` 的 safeStorage Buffer 里，解密链与 Qoder 同款。
 - 接口基址跟随账号 domain（`.cn` / `.ai`），网关要求浏览器 UA + `X-User-Id` + `X-Domain`。
-- 兼容 Cockpit Tools 的加密账号库；导入后凭据复制进本工具账号池，运行时不依赖 Cockpit。
+- 导入后凭据复制进本工具账号池，运行时不依赖外部工具。
 - 积分到期取 `PackageEndTime`；免费模型从模型目录实时核对。
 
 ### 妙手（美团 CatPaw）
@@ -287,6 +287,10 @@ docs/
 调用的是各客户端的**非公开内部接口**，归各厂商所有，可能随时变更或下线。
 本项目与各厂商无任何隶属、授权或合作关系，仅供个人学习自用，禁止商业用途。
 使用前请自行评估并遵守相关服务条款与法律法规，风险由使用者承担。
+
+## 致谢
+
+- [Cockpit Tools](https://github.com/jlcodes99/cockpit-tools)
 
 ---
 
