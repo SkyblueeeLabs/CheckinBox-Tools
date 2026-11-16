@@ -2,13 +2,16 @@
 
 > 今日的赛博鸡蛋，领了嘛？
 
-![stack](https://img.shields.io/badge/Tauri_2-6366f1) ![rust](https://img.shields.io/badge/Rust-stable-orange) ![react](https://img.shields.io/badge/React-18-61dafb) ![platform](https://img.shields.io/badge/Windows-10%2F11-0078d4)
+![release](https://img.shields.io/github/v/release/SkyblueeeLabs/CheckinBox-Tools) ![downloads](https://img.shields.io/github/downloads/SkyblueeeLabs/CheckinBox-Tools/total) ![stack](https://img.shields.io/badge/Tauri_2-6366f1) ![rust](https://img.shields.io/badge/Rust-stable-orange) ![react](https://img.shields.io/badge/React-18-61dafb) ![platform](https://img.shields.io/badge/Windows-10%2F11-0078d4)
 
 **CheckinBox** 是一个 Windows 桌面工具，把本机已登录的 AI 编程客户端接进来。
 
 每次启动先打开「赛博孵化舱」：每个平台一枚蛋，今天能领的会发光，点一下就能领；
 领完直接进主界面。之后的事交给后台——自动签到、多账号凭据保鲜、换号保留聊天记录、
 积分趋势和提醒，都收在同一个窗口里。
+
+> **直接下载使用**：[GitHub Releases](https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest) ——
+> 提供 Windows 安装包、MSI 和免安装便携版。想从源码构建或参与开发，见[从源码构建](#从源码构建开发者)。
 
 ![启动页：赛博孵化舱](docs/images/launch.png)
 
@@ -99,7 +102,32 @@
 
 ![拖拽调序](docs/images/drag-reorder.png)
 
-## 快速开始
+## 下载使用
+
+**最新版**：<https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest>
+
+| 文件 | 适用场景 |
+|---|---|
+| `CheckinBox_<版本>_x64-setup.exe` | **推荐**：中文安装向导，用户级安装，不需要管理员权限 |
+| `CheckinBox_<版本>_x64_zh-CN.msi` | 企业部署（组策略 / 批量分发） |
+| `CheckinBox_<版本>_portable.exe` | 免安装，双击即用 |
+| `SHA256SUMS.txt` | 下载校验 |
+
+- 系统要求：Windows 10/11；Win11 自带 WebView2，Win10 没装的话需要先装 Evergreen Runtime。
+- 安装包未做代码签名，首次运行可能提示「未知发布者」：点「更多信息 → 仍要运行」。
+- 安装版装到 `%LOCALAPPDATA%\CheckinBox\`；卸载会保留 `%APPDATA%\CheckinBox\` 数据目录。
+- 便携版的配置和账号数据同样在 `%APPDATA%\CheckinBox\`，换 exe 不影响数据。
+
+### 第一次使用
+
+1. **导入账号**：点「从本机导入」读取本机客户端登录态（MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器授权。
+2. **启动页领蛋**：每天打开先看赛博孵化舱，点「一键领蛋」或单个平台的「领」。
+3. **进入主界面**：首页看总览，平台面板管理账号、积分和调度。
+4. **自动签到**：确认总闸和每个平台的时间窗，之后交给托盘常驻。
+5. **换号**：账号卡里点「切换并打开客户端」，需要保留聊天记录时先打开「换号同步聊天记录」。
+6. **按需调设置**：关闭窗口行为、开机启动、提醒、界面刷新间隔、平台显示开关都在设置页。
+
+## 从源码构建（开发者）
 
 ### 环境要求
 
@@ -112,16 +140,7 @@ npm install                 # 前端依赖
 npm run tauri:dev           # 开发模式
 ```
 
-### 使用流程
-
-1. **导入账号**：点「从本机导入」读取本机客户端登录态（MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器授权。
-2. **启动页领蛋**：每天打开先看赛博孵化舱，点「一键领蛋」或单个平台的「领」。
-3. **进入主界面**：首页看总览，平台面板管理账号、积分和调度。
-4. **自动签到**：确认总闸和每个平台的时间窗，之后交给托盘常驻。
-5. **换号**：账号卡里点「切换并打开客户端」，需要保留聊天记录时先打开「换号同步聊天记录」。
-6. **按需调设置**：关闭窗口行为、开机启动、提醒、界面刷新间隔、平台显示开关都在设置页。
-
-### 打包独立 exe（免装环境，约 5 MB）
+### 打包独立 exe（免装环境，约 6 MB）
 
 ```bash
 taskkill //IM CheckinBox.exe //F        # 构建前先结束正在运行的实例
