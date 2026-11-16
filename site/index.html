@@ -1,0 +1,379 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>CheckinBox — 今日的赛博鸡蛋，领了嘛？</title>
+    <meta
+      name="description"
+      content="CheckinBox 是一个 Windows 桌面工具。开电脑先看一眼蛋：哪个平台能领、哪个已经领了，点一下就行；签到、续期、换号留在后台。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="CheckinBox — 今日的赛博鸡蛋，领了嘛？" />
+    <meta
+      property="og:description"
+      content="启动页每个平台一枚蛋，点一下就能领；自动签到、账号续期、换号保留聊天记录。支持 MiniMax Code / Qoder CN / WorkBuddy / 妙手 / Zcode。"
+    />
+    <meta property="og:image" content="https://skyblueeelabs.github.io/CheckinBox-Tools/assets/launch.png" />
+    <meta name="theme-color" content="#f7f4ee" />
+    <link rel="icon" type="image/png" href="assets/favicon.png" />
+    <link rel="apple-touch-icon" href="assets/apple-touch-icon.png" />
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <a class="skip" href="#main">跳到主要内容</a>
+
+    <svg class="sprite" aria-hidden="true">
+      <symbol id="i-egg" viewBox="0 0 24 24">
+        <path d="M12 2.5c3.4 0 6.5 5.7 6.5 10.2A6.5 6.5 0 0 1 12 19.2a6.5 6.5 0 0 1-6.5-6.5C5.5 8.2 8.6 2.5 12 2.5Z" />
+        <path d="M8.4 11.8c1.4 1 3 1 4.4 0" />
+      </symbol>
+      <symbol id="i-bolt" viewBox="0 0 24 24">
+        <path d="M13 2 4.5 13.5H11L10 22l8.5-11.5H12L13 2Z" />
+      </symbol>
+      <symbol id="i-layers" viewBox="0 0 24 24">
+        <path d="m12 3 9 5-9 5-9-5 9-5Z" />
+        <path d="m3 13 9 5 9-5" />
+      </symbol>
+      <symbol id="i-sync" viewBox="0 0 24 24">
+        <path d="M21 12a9 9 0 1 1-9-9c2.5 0 4.9 1 6.7 2.7L21 8" />
+        <path d="M21 3v5h-5" />
+      </symbol>
+      <symbol id="i-chart" viewBox="0 0 24 24">
+        <path d="M4 20V11M10 20V5M16 20v-6M22 20H2" />
+      </symbol>
+      <symbol id="i-tray" viewBox="0 0 24 24">
+        <rect x="3" y="4" width="18" height="12" rx="2" />
+        <path d="M3 12h4l2 3h6l2-3h4M8 20h8" />
+      </symbol>
+      <symbol id="i-download" viewBox="0 0 24 24">
+        <path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5" />
+        <path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2" />
+      </symbol>
+      <symbol id="i-github" viewBox="0 0 24 24">
+        <path d="M9 19c-4 1.5-4-2.5-6-3m12 6v-3.9c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.6 4.6 0 0 0-1.3-3.2 4.2 4.2 0 0 0-.1-3.2s-1.1-.3-3.5 1.3a12 12 0 0 0-6.2 0C7.5 2 6.4 2.3 6.4 2.3a4.2 4.2 0 0 0-.1 3.2A4.6 4.6 0 0 0 5 8.7c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V22" />
+      </symbol>
+      <symbol id="i-arrow" viewBox="0 0 24 24">
+        <path d="M5 12h14m0 0-6-6m6 6-6 6" />
+      </symbol>
+      <symbol id="i-check" viewBox="0 0 24 24">
+        <path d="m5 12.5 4.5 4.5L19 7" />
+      </symbol>
+      <symbol id="i-shield" viewBox="0 0 24 24">
+        <path d="M12 3 5 6v6c0 4.5 3 7.5 7 9 4-1.5 7-4.5 7-9V6l-7-3Z" />
+        <path d="m9 12 2 2 4-4" />
+      </symbol>
+      <symbol id="i-star" viewBox="0 0 24 24">
+        <path d="m12 3 2.7 5.6 6.1.9-4.4 4.3 1 6.1-5.4-2.9-5.4 2.9 1-6.1L3.2 9.5l6.1-.9L12 3Z" />
+      </symbol>
+      <symbol id="i-windows" viewBox="0 0 24 24">
+        <path d="M3 5.5 10.5 4v7H3V5.5ZM12 3.7 21 2v9h-9V3.7ZM3 13h7.5v7L3 18.5V13ZM12 13h9v9l-9-1.7V13Z" />
+      </symbol>
+    </svg>
+
+    <header class="site-header">
+      <div class="wrap header-inner">
+        <a class="brand" href="./" aria-label="CheckinBox 首页">
+          <img class="brand-mark" src="assets/apple-touch-icon.png" alt="" width="34" height="34" />
+          <span>CheckinBox</span>
+        </a>
+        <nav class="nav" aria-label="主导航">
+          <a href="#features">功能</a>
+          <a href="#platforms">平台</a>
+          <a href="#screenshots">截图</a>
+          <a href="#download">下载</a>
+          <a href="#faq">问答</a>
+        </nav>
+        <a class="btn btn-ghost btn-sm" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools" target="_blank" rel="noreferrer">
+          <svg class="icon" aria-hidden="true"><use href="#i-github" /></svg>
+          GitHub
+        </a>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero">
+        <div class="wrap hero-grid">
+          <div class="hero-copy">
+            <p class="eyebrow">CHECKINBOX · 赛博孵化舱</p>
+            <h1>今日的<span class="hl">赛博鸡蛋</span>，<br />领了嘛？</h1>
+            <p class="lead">
+              把几个 AI 编程客户端的每日积分收进一个窗口。开电脑先看蛋：
+              能领的点一下，领完进主界面；自动签到、账号续期、换号保留聊天记录，
+              都在后台跑。
+            </p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest" target="_blank" rel="noreferrer">
+                <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
+                下载 Windows 版
+              </a>
+              <a class="btn btn-outline" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools" target="_blank" rel="noreferrer">
+                <svg class="icon" aria-hidden="true"><use href="#i-github" /></svg>
+                查看源码
+              </a>
+            </div>
+            <ul class="meta-row">
+              <li><svg class="icon" aria-hidden="true"><use href="#i-windows" /></svg>Windows 10 / 11</li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-shield" /></svg>账号数据只在本机</li>
+              <li>开源免费</li>
+            </ul>
+          </div>
+
+          <figure class="hero-shot">
+            <div class="shot-frame">
+              <img src="assets/launch.png" alt="CheckinBox 启动页：每个平台一枚赛博鸡蛋，显示待领与已领状态" width="1280" height="800" />
+            </div>
+            <span class="float-chip chip-claim"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg>一键领蛋</span>
+            <span class="float-chip chip-auto"><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>自动签到</span>
+            <figcaption>启动页 · 每个平台一枚蛋</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section class="section" id="features">
+        <div class="wrap">
+          <header class="section-head">
+            <p class="eyebrow">它能帮你省掉什么</p>
+            <h2>每天第一眼，就知道领没领</h2>
+            <p class="section-sub">签到只是入口，平时它就在托盘里待着。</p>
+          </header>
+
+          <div class="feature-grid">
+            <article class="card">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-egg" /></svg></span>
+              <h3>启动先看蛋</h3>
+              <p>一个平台一枚蛋。已领的是裂壳金蛋，能领的会发光，要手动领的是青圈，没号的是暗蛋。点「领」就领，领完再进主界面。</p>
+            </article>
+            <article class="card">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg></span>
+              <h3>到点自己领</h3>
+              <p>每个平台有自己的时间窗，账号之间随机错开。晚开软件也会在窗内补跑；签失败就报失败，不会假装已签。</p>
+            </article>
+            <article class="card">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-sync" /></svg></span>
+              <h3>账号自己续期</h3>
+              <p>没登在客户端上的账号，token 快过期时会自己刷新。凭据用 Windows DPAPI 加密，只留在这台机器。</p>
+            </article>
+            <article class="card">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-layers" /></svg></span>
+              <h3>换号不丢会话</h3>
+              <p>点一下换号：关客户端、备份、写凭据、再启动。WorkBuddy 和 Qoder 的本地聊天记录可以留着，动之前先备份。</p>
+            </article>
+            <article class="card">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-chart" /></svg></span>
+              <h3>积分和到期提醒</h3>
+              <p>剩余、已用、发放和批次都能看，还有最近 7 天的趋势。低于阈值标红；7 天内到期或有新的可领，会提醒你。</p>
+            </article>
+            <article class="card">
+              <span class="card-icon"><svg class="icon" aria-hidden="true"><use href="#i-tray" /></svg></span>
+              <h3>关窗口也不停</h3>
+              <p>关窗口可以缩到托盘，开机也能静默启动。窗口不开，签到和同步照样跑。</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt" id="platforms">
+        <div class="wrap">
+          <header class="section-head">
+            <p class="eyebrow">支持的平台</p>
+            <h2>一个窗口支持多个平台</h2>
+            <p class="section-sub">只读取你本机已登录的客户端状态，不额外要密码。</p>
+          </header>
+
+          <div class="platform-grid">
+            <article class="platform">
+              <img src="assets/minimax.png" alt="" width="48" height="48" />
+              <h3>MiniMax Code</h3>
+              <p>每天领，连签有加成</p>
+            </article>
+            <article class="platform">
+              <img src="assets/qoder.png" alt="" width="48" height="48" />
+              <h3>Qoder CN</h3>
+              <p>每天 10:00 活动领取</p>
+            </article>
+            <article class="platform">
+              <img src="assets/workbuddy.png" alt="" width="48" height="48" />
+              <h3>WorkBuddy</h3>
+              <p>签到活动制</p>
+            </article>
+            <article class="platform">
+              <img src="assets/miaoshou.png" alt="" width="48" height="48" />
+              <h3>妙手</h3>
+              <p>积分和套餐</p>
+            </article>
+            <article class="platform">
+              <img src="assets/zcode.png" alt="" width="48" height="48" />
+              <h3>Zcode</h3>
+              <p>看余额，提醒领取</p>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="screenshots">
+        <div class="wrap">
+          <header class="section-head">
+            <p class="eyebrow">界面一览</p>
+            <h2>界面积分信息清晰</h2>
+            <p class="section-sub">首页、账号卡、签到记录，数字对得上。</p>
+          </header>
+
+          <div class="shots">
+            <figure class="shot wide">
+              <img src="assets/dashboard.png" alt="CheckinBox 首页总览：剩余积分、今日已签、平台卡片" width="1080" height="680" />
+              <figcaption>首页总览</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="assets/agent-panel.png" alt="平台面板：账号卡片、积分和签到状态" width="1080" height="680" />
+              <figcaption>平台面板</figcaption>
+            </figure>
+            <figure class="shot">
+              <img src="assets/checkin-logs.png" alt="签到记录：按平台过滤，账号可打码" width="1080" height="680" />
+              <figcaption>签到记录</figcaption>
+            </figure>
+          </div>
+        </div>
+      </section>
+
+      <section class="section section-alt" id="start">
+        <div class="wrap">
+          <header class="section-head">
+            <p class="eyebrow">第一次使用</p>
+            <h2>三步开始，之后交给托盘</h2>
+          </header>
+          <ol class="steps">
+            <li>
+              <span class="step-no">01</span>
+              <h3>下载并安装</h3>
+              <p>装安装包，或者直接用便携版。Windows 10/11；Win10 要装 WebView2。</p>
+            </li>
+            <li>
+              <span class="step-no">02</span>
+              <h3>导入账号</h3>
+              <p>点「从本机导入」，把已经登录的客户端读进来；也可以用浏览器授权加号。</p>
+            </li>
+            <li>
+              <span class="step-no">03</span>
+              <h3>领蛋，然后放着</h3>
+              <p>在启动页点「一键领蛋」。时间窗确认一次，之后就不用管了。</p>
+            </li>
+          </ol>
+        </div>
+      </section>
+
+      <section class="section download" id="download">
+        <div class="wrap download-grid">
+          <div class="download-copy">
+            <p class="eyebrow">下载</p>
+            <h2>把今天的蛋领了</h2>
+            <p class="section-sub">最新版都在 GitHub Releases：安装包、MSI、免安装版，一页下完。</p>
+            <div class="cta-row">
+              <a class="btn btn-primary" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest" target="_blank" rel="noreferrer">
+                <svg class="icon" aria-hidden="true"><use href="#i-download" /></svg>
+                前往最新 Release
+              </a>
+            </div>
+            <p class="fineprint">安装包未做代码签名，首次运行可能提示「未知发布者」：点「更多信息 → 仍要运行」。</p>
+          </div>
+
+          <div class="package-list">
+            <article class="package recommended">
+              <span class="tag">推荐</span>
+              <h3>NSIS 安装包</h3>
+              <p>中文向导，装到当前用户，不用管理员权限。</p>
+              <code>CheckinBox_&lt;版本&gt;_x64-setup.exe</code>
+            </article>
+            <article class="package">
+              <h3>MSI</h3>
+              <p>给企业部署和批量分发用。</p>
+              <code>CheckinBox_&lt;版本&gt;_x64_zh-CN.msi</code>
+            </article>
+            <article class="package">
+              <h3>免安装便携版</h3>
+              <p>双击就能用，配置和账号还在本机数据目录。</p>
+              <code>CheckinBox_&lt;版本&gt;_portable.exe</code>
+            </article>
+          </div>
+        </div>
+      </section>
+
+      <section class="section" id="faq">
+        <div class="wrap faq-wrap">
+          <header class="section-head">
+            <p class="eyebrow">问答</p>
+            <h2>上手前可能想知道的</h2>
+          </header>
+
+          <details>
+            <summary>为什么 Windows 会提示「未知发布者」？</summary>
+            <p>安装包没买代码签名证书。点「更多信息 → 仍要运行」就行；源码和构建流程都在 GitHub，不放心可以自己核。</p>
+          </details>
+          <details>
+            <summary>我的账号和 token 存在哪里？</summary>
+            <p>都在本机 <code>%APPDATA%\CheckinBox\</code>。token 用 Windows DPAPI 加密，绑定当前用户；日志和界面里看不到明文。</p>
+          </details>
+          <details>
+            <summary>需要一直开着客户端吗？</summary>
+            <p>不用。导入后凭据存在账号池里，快过期会自己续；客户端只在导入和换号时用一下。</p>
+          </details>
+          <details>
+            <summary>换号会把聊天记录弄丢吗？</summary>
+            <p>默认不碰聊天数据。开了「换号同步聊天记录」后，会先把数据库和 WAL/SHM 备份到单独目录，再合并；同步失败也不影响换号。</p>
+          </details>
+          <details>
+            <summary>会不会把客户端顶下线？</summary>
+            <p>MiniMax 有运行中护栏，状态不明就不刷。Qoder 续期会换 refresh token，但旧的不会马上失效，桌面端照常用。</p>
+          </details>
+          <details>
+            <summary>支持哪些平台和系统？</summary>
+            <p>Windows 10/11，支持 MiniMax Code、Qoder CN、WorkBuddy、妙手、Zcode。这些接口不是公开的，客户端一改版就可能变。</p>
+          </details>
+        </div>
+      </section>
+
+      <section class="section contribute" id="contribute">
+        <div class="wrap contribute-card">
+          <div class="contribute-copy">
+            <p class="eyebrow">开源共建</p>
+            <h2>有想法就来提 PR，顺手点个 Star</h2>
+            <p class="section-sub">
+              这些客户端接口经常改，欢迎来补平台、修 Bug、改文档和界面。
+              觉得有用就点个 Star，让更多人看到。
+            </p>
+          </div>
+          <div class="contribute-actions">
+            <a class="btn btn-primary" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools" target="_blank" rel="noreferrer">
+              <svg class="icon" aria-hidden="true"><use href="#i-star" /></svg>
+              点个 Star
+            </a>
+            <a class="btn btn-outline" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/pulls" target="_blank" rel="noreferrer">提交 PR</a>
+            <a class="btn btn-outline" href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/issues" target="_blank" rel="noreferrer">反馈 Issue</a>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="site-footer">
+      <div class="wrap footer-grid">
+        <div>
+          <a class="brand" href="./">
+            <img class="brand-mark" src="assets/apple-touch-icon.png" alt="" width="34" height="34" />
+            <span>CheckinBox</span>
+          </a>
+          <p class="footer-note">一个窗口，管完每天的签到。</p>
+        </div>
+        <nav aria-label="页脚链接">
+          <a href="https://github.com/SkyblueeeLabs/CheckinBox-Tools" target="_blank" rel="noreferrer">GitHub</a>
+          <a href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/latest" target="_blank" rel="noreferrer">Releases</a>
+          <a href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/issues" target="_blank" rel="noreferrer">反馈</a>
+          <a href="https://github.com/jlcodes99/cockpit-tools" target="_blank" rel="noreferrer">致谢</a>
+        </nav>
+      </div>
+      <div class="wrap disclaimer">
+        <p>非官方工具，与各厂商无隶属或授权关系。调用的是客户端非公开接口，仅供个人学习自用，禁止商业用途。</p>
+        <p>© <span id="year">2026</span> CheckinBox</p>
+      </div>
+    </footer>
+  </body>
+</html>
