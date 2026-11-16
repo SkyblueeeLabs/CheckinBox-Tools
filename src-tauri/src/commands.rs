@@ -626,7 +626,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 docs_url: p.docs_url().to_string(),
                 supports_discovery: matches!(
                     p.id(),
-                    "minimax" | "miaoshou" | "workbuddy" | "zcode"
+                    "minimax" | "miaoshou" | "workbuddy" | "zcode" | "qoder"
                 ),
                 supports_oauth: matches!(p.id(), "qoder" | "minimax" | "workbuddy"),
                 configured: !store.list_of(p.id()).is_empty(),
@@ -2465,7 +2465,8 @@ pub async fn scheduler_loop(app: AppHandle) {
 //   CheckinBox --device-auth qoder
 // ---------------------------------------------------------------------------
 
-/// 把所有「读本机客户端登录态」的平台账号导入账号池（MiniMax / 妙手）。
+/// 把所有「读本机客户端登录态」的平台账号导入账号池
+/// （MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）。
 pub fn cli_import_local() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
@@ -2473,7 +2474,7 @@ pub fn cli_import_local() -> Result<(), String> {
         let providers: Vec<Arc<dyn Provider>> = state
             .providers
             .iter()
-            .filter(|p| matches!(p.id(), "minimax" | "miaoshou" | "workbuddy" | "zcode"))
+            .filter(|p| matches!(p.id(), "minimax" | "qoder" | "miaoshou" | "workbuddy" | "zcode"))
             .cloned()
             .collect();
 

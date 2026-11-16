@@ -33,7 +33,7 @@
 
 ### 多账号管理
 
-- **两个入口**：点「从本机导入」读取本机客户端登录态（MiniMax / 妙手 / WorkBuddy）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器设备授权。
+- **两个入口**：点「从本机导入」读取本机客户端登录态（MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器设备授权。
 - **账号池里的每个号都是「活的」**：客户端同一时刻只能登一个账号，但 CheckinBox 会给不在客户端的账号自动续期（refresh token 轮换后回写），早上的自动签到照样能签。
 - **一眼分清账号**：账号卡显示「客户端登录」徽标和平台色头像描边；支持设为当前账号、签到、打开/切换客户端、查看明细、刷新积分或额度、移除账号。
 - **侧栏拖拽调序**，顺序持久化；隐藏平台不会打乱剩余平台的顺序。
@@ -65,7 +65,7 @@
 | 平台 | 客户端登录态 | 每日签到 | 积分查询 | 客户端换号 | 账号导入方式 |
 |---|---|---|---|---|---|
 | **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取，连签有额外加成 | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
-| **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 浏览器设备授权 |
+| **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（只有注册奖励） | ✅ | ✅ | 本机导入 |
 | **Zcode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 只展示 + 提醒，不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
@@ -114,7 +114,7 @@ npm run tauri:dev           # 开发模式
 
 ### 使用流程
 
-1. **导入账号**：MiniMax / 妙手 / WorkBuddy 点「从本机导入」；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器授权。
+1. **导入账号**：点「从本机导入」读取本机客户端登录态（MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）；MiniMax / Qoder / WorkBuddy 也可以点「添加账号」走浏览器授权。
 2. **启动页领蛋**：每天打开先看赛博孵化舱，点「一键领蛋」或单个平台的「领」。
 3. **进入主界面**：首页看总览，平台面板管理账号、积分和调度。
 4. **自动签到**：确认总闸和每个平台的时间窗，之后交给托盘常驻。
@@ -203,6 +203,7 @@ npx tsc --noEmit                            # 前端类型检查
 - 活动周期按「今天 10:00 起的窗口」判定，不能把昨天的 CLAIMED 当成今天已签。
 - 请求必须带设备风控头（`Cosy-MachineToken / MachineCode / MachineType`）。
 - 登录态是 Electron safeStorage（`v10` + AES-256-GCM），同一 Windows 用户可解可写。
+- 本机导入会解密 `auth.v1.dat` 读取当前登录账号；Qoder 没有自动刷新逻辑，客户端轮换凭据后重新导入即可。
 
 ### WorkBuddy（腾讯 CodeBuddy）
 

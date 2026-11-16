@@ -463,6 +463,15 @@ impl Provider for QoderProvider {
         "https://docs.qoder.cn/"
     }
 
+    /// 从本机客户端登录态导入（解密 `auth.v1.dat`，只读）。
+    /// Qoder 没有自动刷新逻辑，导入的是客户端当下的凭据；
+    /// 客户端轮换或过期后重新导入即可。
+    async fn discover(&self) -> Result<Vec<(Account, Value)>> {
+        Ok(crate::core::client_switch::qoder_client_login()
+            .into_iter()
+            .collect())
+    }
+
     async fn status(&self, _account: &Account, cred: &Value) -> Result<CheckinStatus> {
         let (status, body) = self.fetch_campaigns(cred).await?;
 
@@ -1022,5 +1031,17 @@ mod tests {
             }
             other => panic!("应为 NotYet，实际 {other:?}"),
         }
+    }
+
+    /// 真机验证：本机 Qoder 客户端登录态能解出账号（只读，不写账号池）。
+    #[test]
+    #[ignore = "依赖本机 Qoder 登录态，手动跑：cargo test -- --ignored 本机Qoder登录态能解出"]
+    fn 本机Qoder登录态能解出() {
+        let Some((account, cred)) = crate::core::client_switch::qoder_client_login() else {
+            panic!("本机没有可解的 Qoder 登录态");
+        };
+        assert_eq!(account.provider, "qoder");
+        assert!(!account.id.is_empty());
+        assert!(cred["access_token"].as_str().is_some_and(|s| !s.is_empty()));
     }
 }

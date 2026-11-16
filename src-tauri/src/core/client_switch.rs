@@ -675,7 +675,7 @@ pub fn qoder_client_login() -> Option<(crate::core::provider::Account, Value)> {
         },
         created_at: chrono::Utc::now().timestamp(),
         last_used: None,
-        origin: "Qoder 客户端登录态（切换时捕获）".to_string(),
+        origin: "Qoder 客户端登录态".to_string(),
     };
     let cred = json!({
         "access_token": auth["token"].as_str().unwrap_or(""),
