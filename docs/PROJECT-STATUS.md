@@ -394,6 +394,7 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
 11. **妙手只有余额与下次刷新**：余额接口返回 `availableCredits` / `planName` /
     `nextRefreshTime`，没有注册奖励或每月发放的历史流水，`expireTime` 体验版也
     不返回；界面如实显示「平台未提供」，下次刷新按本地时区单独一行。
+    界面的「注册送 1,000 / 每月自动发 200」按平台规则写死，不从接口推算。
 12. **MiniMax 会员配额接口暂缓**（2026-11-12 决定）：手上没有订阅了会员套餐的账号，
     接口返回结构未经实测，不做猜测实现；现有 `credit/details` 逻辑一行不动。
     上游自己只改了一半（前端仍按旧字段解析），照抄反而会显示错数据。

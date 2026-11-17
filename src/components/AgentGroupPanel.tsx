@@ -160,14 +160,14 @@ export default function AgentGroupPanel({
         <div className="welfare-brief" role="note" aria-label={`${provider.name} 福利`}>
           <div className="wb-row">
             <span className="wb-label">积分/额度</span>
-            <span className="wb-cadence">{meta.cadence === "daily" ? "每日" : "一次性"}</span>
+            <span className="wb-cadence">
+              {meta.cadence === "daily" ? "每日" : meta.cadence === "monthly" ? "每月" : "一次性"}
+            </span>
             <span className="wb-credits">
               {meta.cadence === "oneTime" ? free.registerBonus ?? welfare.note : welfare.label}
             </span>
-            <span className={`wb-mode ${welfare.mode}`}>
-              {welfare.mode === "auto" ? "自动领取" : "手动领取"}
-            </span>
-            {meta.cadence === "daily" && welfare.note && (
+            <span className={`wb-mode ${welfare.mode}`}>{welfare.modeText}</span>
+            {meta.cadence !== "oneTime" && welfare.note && (
               <span className="wb-note">{welfare.note}</span>
             )}
             {openState && (

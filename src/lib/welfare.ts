@@ -7,11 +7,11 @@ import { fmtCompact, fmtPoints, formatMinute } from "./api";
  * 数量是实时的（从账号状态/额度算），节奏与领取方式是平台自身的规则：
  *   * minimax / workbuddy / qoder —— 每日签到，工具可自动领取（时间窗内错峰）
  *   * zcode —— 每日 Token 额度，只能官方客户端过验证码领取（supports_claim=false）
- *   * miaoshou —— 没有每日签到，积分来自套餐与**一次性**注册奖励
+ *   * miaoshou —— 没有每日签到；注册送 1,000 积分，之后每月自动发 200 积分（无需领取）
  */
 
-/** 福利节奏：每日 / 一次性 */
-export type WelfareCadence = "daily" | "oneTime";
+/** 福利节奏：每日 / 每月 / 一次性 */
+export type WelfareCadence = "daily" | "monthly" | "oneTime";
 
 /** 领取方式：自动 / 手动 */
 export type WelfareMode = "auto" | "manual";
@@ -27,6 +27,10 @@ export interface WelfareMeta {
   timing?: string;
   /** 每日开放领取的小时（UTC+8），用于「现在可领 / 未到点」实时提示 */
   openHour?: number;
+  /** 每月固定发放的积分数（目前只有妙手；平台规则，不从接口推算） */
+  monthlyPoints?: number;
+  /** 领取方式徽标文案（默认「自动领取 / 手动领取」；无需领取的平台写「自动发放」） */
+  modeText?: string;
 }
 
 /** 各平台福利元数据（不含实时数量；面板/首页共用，改文案只改这里） */
@@ -43,10 +47,12 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
     openHour: 19,
   },
   miaoshou: {
-    cadence: "oneTime",
-    mode: "manual",
+    cadence: "monthly",
+    mode: "auto",
     unit: "积分",
-    note: "注册送 200 积分",
+    monthlyPoints: 200,
+    note: "注册送 1,000 积分",
+    modeText: "自动发放",
   },
 };
 
@@ -76,7 +82,6 @@ export const FREE_MODELS: Record<string, FreeModelInfo> = {
   miaoshou: {
     status: "current",
     models: ["LongCat-2.5（官方免费）"],
-    registerBonus: "注册送 200 积分",
     asOf: "2026-11-16",
   },
   zcode: { status: "none", asOf: "2026-11-16" },
@@ -99,6 +104,8 @@ export interface WelfareView {
   /** 主文案（含数量，如「每日 +1,400 积分」） */
   label: string;
   mode: WelfareMode;
+  /** 领取方式徽标文案（如「自动领取 / 自动发放 / 手动领取」） */
+  modeText: string;
   /** 右侧补充说明（时间窗 / 领取方式） */
   note: string;
   /** 悬浮完整说明 */
@@ -114,6 +121,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
   };
 
   const fmt = (n: number) => (meta.unit === "Token" ? fmtCompact(n) : fmtPoints(n));
+  const modeText = meta.modeText ?? (meta.mode === "auto" ? "自动领取" : "手动领取");
 
   // 时间窗（自动领取的执行区间）与平台说明并列展示，如
   // 「10:00 后开放 · 06:00-08:00」—— 前者是平台规则，后者是工具的执行窗口
@@ -135,10 +143,23 @@ export function welfareOf(group: AgentGroup): WelfareView {
         : ` · ${FREE_STATUS_TEXT[free.status]}`
     : "";
 
+  if (meta.cadence === "monthly") {
+    const per = meta.monthlyPoints;
+    const label = per ? `单账号每月 +${fmt(per)} ${meta.unit}` : "单账号每月福利";
+    return {
+      label,
+      mode: meta.mode,
+      modeText,
+      note: meta.note ?? "",
+      title: `${label} · ${modeText}${meta.note ? ` · ${meta.note}` : ""} · 无每日签到${freeSuffix}`,
+    };
+  }
+
   if (meta.cadence === "oneTime") {
     return {
       label: "单账号一次性奖励",
       mode: meta.mode,
+      modeText,
       note,
       title: `一次性福利：${meta.note ?? "注册奖励"} · 需手动领取（无每日签到）${freeSuffix}`,
     };
@@ -155,6 +176,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
     return {
       label: "单账号每日福利",
       mode: meta.mode,
+      modeText,
       note,
       title: `单账号每日福利数量未知${note ? ` · ${note}` : ""}${freeSuffix}`,
     };
@@ -182,5 +204,5 @@ export function welfareOf(group: AgentGroup): WelfareView {
           meta.note ? `（${meta.note}）` : ""
         }${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`;
 
-  return { label, mode: meta.mode, note, title };
+  return { label, mode: meta.mode, modeText, note, title };
 }

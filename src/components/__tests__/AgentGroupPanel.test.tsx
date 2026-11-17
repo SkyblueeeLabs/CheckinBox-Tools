@@ -154,15 +154,16 @@ describe("不代领的平台（Zcode）", () => {
 });
 
 describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模型）", () => {
-  it("妙手：一次性注册积分 + 免费模型 chip + 核对月份", () => {
+  it("妙手：注册送 1,000 + 每月 200 + 免费模型 chip + 核对月份", () => {
     renderPanel(
       group({ provider: provider({ id: "miaoshou", name: "妙手", supportsClaim: false }) })
     );
     const brief = screen.getByRole("note", { name: "妙手 福利" });
     expect(within(brief).getByText("积分/额度")).toBeInTheDocument();
-    expect(within(brief).getByText("一次性")).toBeInTheDocument();
-    expect(within(brief).getByText("注册送 200 积分")).toBeInTheDocument();
-    expect(within(brief).getByText("手动领取")).toBeInTheDocument();
+    expect(within(brief).getByText("每月")).toBeInTheDocument();
+    expect(within(brief).getByText("单账号每月 +200 积分")).toBeInTheDocument();
+    expect(within(brief).getByText("注册送 1,000 积分")).toBeInTheDocument();
+    expect(within(brief).getByText("自动发放")).toBeInTheDocument();
     expect(within(brief).getByText("免费模型")).toBeInTheDocument();
     expect(within(brief).getByText("LongCat-2.5（官方免费）")).toBeInTheDocument();
     expect(within(brief).getByText(/核对 2026-11/)).toBeInTheDocument();

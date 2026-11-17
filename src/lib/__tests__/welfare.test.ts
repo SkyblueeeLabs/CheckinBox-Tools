@@ -121,12 +121,14 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.title).toContain("23:00-次日9:00 生效");
   });
 
-  it("妙手：单账号一次性奖励，无每日签到", () => {
+  it("妙手：注册送 1,000，之后每月 +200，自动发放（无需领取）", () => {
     const w = welfareOf(group("miaoshou", false, [account(0)]));
-    expect(w.label).toBe("单账号一次性奖励");
-    expect(w.mode).toBe("manual");
-    expect(w.note).toBe("注册送 200 积分");
-    expect(w.title).toContain("一次性");
+    expect(w.label).toBe("单账号每月 +200 积分");
+    expect(w.mode).toBe("auto");
+    expect(w.modeText).toBe("自动发放");
+    expect(w.note).toBe("注册送 1,000 积分");
+    expect(w.title).toContain("自动发放");
+    expect(w.title).toContain("注册送 1,000 积分");
     expect(w.title).toContain("无每日签到");
     expect(w.title).toContain("LongCat-2.5");
   });

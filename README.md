@@ -69,7 +69,7 @@
 | **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取，连签有额外加成 | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / 浏览器授权 |
-| **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（只有注册奖励） | ✅ | ✅ | 本机导入 |
+| **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（注册送 1,000，每月自动发 200） | ✅ | ✅ | 本机导入 |
 | **Zcode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 只展示 + 提醒，不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
 
 > **Zcode 为什么只提醒不代领**：每日 3 亿 GLM-5.3-Flash Token 只能在官方客户端领取，
@@ -257,7 +257,7 @@ npx tsc --noEmit                            # 前端类型检查
 ### 妙手（美团 CatPaw）
 
 - 鉴权要**同时**带 `X-Auth-Token` 和 `access-token`（同值），少一个返回 4011。
-- 没有每日签到，积分来自套餐。
+- 没有每日签到；注册送 1,000 积分，之后每月自动发 200 积分，不用领取。
 - `nextRefreshTime` 是套餐刷新时间而不是积分到期；到期取订阅接口的 `expireTime`。
 
 详细的协议、踩坑记录与加固设计见 [docs/PROJECT-STATUS.md](docs/PROJECT-STATUS.md) 和
