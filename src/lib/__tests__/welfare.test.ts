@@ -149,6 +149,15 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.title).toContain("第 4/7 天 +1,000");
   });
 
+  it("WorkBuddy：每日签到 100，注册 2,000 / 每月 500 自动到账", () => {
+    const w = welfareOf(group("workbuddy", true, [account(100)]));
+    expect(w.label).toBe("单账号 +100 积分/日");
+    expect(w.mode).toBe("auto");
+    expect(w.modeText).toBe("自动领取");
+    expect(w.note).toBe("注册送 2,000 · 每月 +500 自动到账 · 06:00-08:00");
+    expect(w.title).toContain("注册送 2,000");
+  });
+
   it("数量未知（状态未加载/活动未开放）：只报节奏不给数", () => {
     const w = welfareOf(group("qoder", true, [account(null)]));
     expect(w.label).toBe("单账号每日福利");
@@ -172,7 +181,7 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
   it("没有账号的自动平台仍显示时间窗", () => {
     const w = welfareOf(group("workbuddy", true, []));
     expect(w.label).toBe("单账号每日福利");
-    expect(w.note).toBe("06:00-08:00");
+    expect(w.note).toBe("注册送 2,000 · 每月 +500 自动到账 · 06:00-08:00");
   });
 
   it("免费模型核对信息附在悬浮说明：当前免费 / 曾有 / 以官方为准", () => {

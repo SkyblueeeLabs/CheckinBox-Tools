@@ -187,6 +187,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
     expect(within(brief).getByText("每日")).toBeInTheDocument();
     expect(within(brief).getByText("自动领取")).toBeInTheDocument();
+    expect(within(brief).getByText(/注册送 2,000 · 每月 \+500 自动到账/)).toBeInTheDocument();
     expect(within(brief).getByText("有免费模型 · 待实时核对")).toBeInTheDocument();
     expect(within(brief).getByRole("button", { name: "核对最新免费模型" })).toBeInTheDocument();
   });

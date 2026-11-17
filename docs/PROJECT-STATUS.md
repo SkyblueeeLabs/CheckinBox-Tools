@@ -279,6 +279,7 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
 
 ### WorkBuddy（`providers/workbuddy.rs`）
 
+- 福利口径：每日签到 100 积分；注册送 2,000、每月 500 自动到账（只有每日需要签到）。
 - 凭据来源（discover 按「Cockpit 库 → 本机客户端」顺序）：
   1. **Cockpit Tools 账号库**（多账号）：`~/.cockpit_tools/workbuddy_accounts/<id>.json`
      是 AES-256-GCM 信封（`nonce`/`ciphertext` 字段），密钥是

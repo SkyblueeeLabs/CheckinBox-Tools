@@ -68,7 +68,7 @@
 |---|---|---|---|---|---|
 | **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取（基础 400，第 4/7 天 1,000） | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 本机导入 / 浏览器授权 |
-| **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / 浏览器授权 |
+| **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 每日 100（注册送 2,000，每月 500 自动到账） | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（注册送 1,000，每月自动发 200） | ✅ | ✅ | 本机导入 |
 | **Zcode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 只展示 + 提醒，不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
 
@@ -250,6 +250,7 @@ npx tsc --noEmit                            # 前端类型检查
 ### WorkBuddy（腾讯 CodeBuddy）
 
 - 凭据在 `state.vscdb` 的 safeStorage Buffer 里，解密链与 Qoder 同款。
+- 每日签到 100 积分；注册送 2,000、每月 500 自动到账，不用领取（只有每日要签到）。
 - 接口基址跟随账号 domain（`.cn` / `.ai`），网关要求浏览器 UA + `X-User-Id` + `X-Domain`。
 - 导入后凭据复制进本工具账号池，运行时不依赖外部工具。
 - 积分到期取 `PackageEndTime`；免费模型从模型目录实时核对。

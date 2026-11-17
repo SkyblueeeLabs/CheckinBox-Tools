@@ -5,7 +5,8 @@ import { fmtCompact, fmtPoints, formatMinute } from "./api";
  * 各平台「福利」画像（首页展示用）。
  *
  * 数量是实时的（从账号状态/额度算），节奏与领取方式是平台自身的规则：
- *   * minimax / workbuddy / qoder —— 每日签到，工具可自动领取（时间窗内错峰）
+ *   * minimax / qoder / workbuddy —— 每日签到，工具可自动领取（时间窗内错峰）
+ *   * workbuddy —— 每日 100；注册送 2,000、每月 500 自动到账（只有每日要签到）
  *   * zcode —— 每日 Token 额度，只能官方客户端过验证码领取（supports_claim=false）
  *   * miaoshou —— 没有每日签到；注册送 1,000 积分，之后每月自动发 200 积分（无需领取）
  */
@@ -37,7 +38,12 @@ export interface WelfareMeta {
 export const WELFARE_META: Record<string, WelfareMeta> = {
   minimax: { cadence: "daily", mode: "auto", unit: "积分" },
   qoder: { cadence: "daily", mode: "auto", unit: "Credits", note: "10:00 后开放", openHour: 10 },
-  workbuddy: { cadence: "daily", mode: "auto", unit: "积分" },
+  workbuddy: {
+    cadence: "daily",
+    mode: "auto",
+    unit: "积分",
+    note: "注册送 2,000 · 每月 +500 自动到账",
+  },
   zcode: {
     cadence: "daily",
     mode: "manual",
@@ -220,7 +226,9 @@ export function welfareOf(group: AgentGroup): WelfareView {
     meta.mode === "auto"
       ? `单账号每日 ${rangeText} ${meta.unit}${totalPart} · 自动领取${
           window ? `（时间窗 ${window}）` : ""
-        }${cycleNote ? ` · ${cycleNote}` : ""}${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`
+        }${meta.note ? ` · ${meta.note}` : ""}${cycleNote ? ` · ${cycleNote}` : ""}${
+          meta.timing ? ` · ${meta.timing}` : ""
+        }${freeSuffix}`
       : `单账号每日 ${rangeText} ${meta.unit}${totalPart} · 需手动领取${
           meta.note ? `（${meta.note}）` : ""
         }${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`;
