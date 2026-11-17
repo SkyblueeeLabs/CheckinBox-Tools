@@ -59,6 +59,20 @@ pub enum ClaimState {
     Unknown,
 }
 
+/// 周期签到面板的一天（MiniMax 的 7 天连签等）。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CheckinDay {
+    /// 周期内的第几天（1 起）
+    pub day_no: i32,
+    pub is_today: bool,
+    /// 这一天的奖励积分（已含上游给的加成）
+    pub points: i64,
+    #[serde(default)]
+    pub bonus_points: i64,
+    pub claimed: bool,
+}
+
 /// 签到状态快照。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -76,6 +90,9 @@ pub struct CheckinStatus {
     /// 额外奖励积分（连签第 4/7 天那种）
     #[serde(default)]
     pub bonus_points: i64,
+    /// 本轮周期面板（上游原样给出每天的奖励）；没有该数据的平台为空
+    #[serde(default)]
+    pub days: Vec<CheckinDay>,
 }
 
 impl Default for CheckinStatus {
@@ -87,6 +104,7 @@ impl Default for CheckinStatus {
             message: String::new(),
             day_index: None,
             bonus_points: 0,
+            days: Vec::new(),
         }
     }
 }

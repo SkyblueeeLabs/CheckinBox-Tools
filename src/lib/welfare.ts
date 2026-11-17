@@ -123,6 +123,23 @@ export function welfareOf(group: AgentGroup): WelfareView {
   const fmt = (n: number) => (meta.unit === "Token" ? fmtCompact(n) : fmtPoints(n));
   const modeText = meta.modeText ?? (meta.mode === "auto" ? "自动领取" : "手动领取");
 
+  // 上游给的周期面板（MiniMax 7 天）：第 4/7 天 1,000、其余 400。
+  // 只展示上游数据，不在前端硬编码天数规则。
+  const cycle = group.accounts
+    .map((a) => a.status?.days)
+    .find((days) => days && days.length > 0);
+  const cycleBase = cycle?.length ? Math.min(...cycle.map((d) => d.points)) : null;
+  const cycleBonus = cycle?.filter((d) => d.points > (cycleBase ?? 0)) ?? [];
+  const cycleNote =
+    cycleBonus.length > 0
+      ? `第 ${cycleBonus.map((d) => d.dayNo).join("/")} 天 +${[
+          ...new Set(cycleBonus.map((d) => d.points)),
+        ]
+          .sort((a, b) => a - b)
+          .map(fmt)
+          .join("/")}`
+      : "";
+
   // 时间窗（自动领取的执行区间）与平台说明并列展示，如
   // 「10:00 后开放 · 06:00-08:00」—— 前者是平台规则，后者是工具的执行窗口
   const window = meta.mode === "auto"
@@ -131,7 +148,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
       )}`
     : "";
   // 时段说明（Zcode 的 19:00 开放 / 23:00 生效）优先于普通说明展示
-  const note = meta.timing ?? [meta.note, window].filter(Boolean).join(" · ");
+  const note = meta.timing ?? [meta.note, cycleNote, window].filter(Boolean).join(" · ");
 
   // 免费模型核对信息，附在悬浮说明里（首页/封面共用）；积分/额度已在主文案
   const free = FREE_MODELS[group.provider.id];
@@ -167,9 +184,13 @@ export function welfareOf(group: AgentGroup): WelfareView {
 
   // **单账号**数量：各账号今日积分（Zcode 为每日 Token 额度），0 = 未加载/未开放。
   // 卡片主文案只说单账号拿多少；多账号合计放在悬浮说明里。
-  const amounts = group.accounts.map((a) =>
-    group.provider.id === "zcode" ? (a.quota?.totalGranted ?? 0) : (a.status?.points ?? 0)
-  );
+  const amounts = group.accounts.map((a) => {
+    if (group.provider.id === "zcode") return a.quota?.totalGranted ?? 0;
+    // 有周期面板时按基础档报数（第 4/7 天加成写在说明里，不把加成说成每天都有）
+    const days = a.status?.days;
+    if (days && days.length > 0) return Math.min(...days.map((d) => d.points));
+    return a.status?.points ?? 0;
+  });
   const known = amounts.filter((v) => v > 0);
 
   if (known.length === 0) {
@@ -199,7 +220,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
     meta.mode === "auto"
       ? `单账号每日 ${rangeText} ${meta.unit}${totalPart} · 自动领取${
           window ? `（时间窗 ${window}）` : ""
-        }${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`
+        }${cycleNote ? ` · ${cycleNote}` : ""}${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`
       : `单账号每日 ${rangeText} ${meta.unit}${totalPart} · 需手动领取${
           meta.note ? `（${meta.note}）` : ""
         }${meta.timing ? ` · ${meta.timing}` : ""}${freeSuffix}`;

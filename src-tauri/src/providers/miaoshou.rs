@@ -138,6 +138,7 @@ impl Provider for MiaoshouProvider {
             message: "妙手无每日签到，积分来自套餐与注册奖励".to_string(),
             day_index: None,
             bonus_points: 0,
+            days: Vec::new(),
         })
     }
 

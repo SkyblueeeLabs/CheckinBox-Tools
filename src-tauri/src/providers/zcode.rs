@@ -322,6 +322,7 @@ fn parse_status(data: &Value, now: i64) -> CheckinStatus {
             message: format!("已领取 {} · {}", plan_name(p), plan_model(p)),
             day_index: None,
             bonus_points: 0,
+            days: Vec::new(),
         }
     } else {
         CheckinStatus {
@@ -331,6 +332,7 @@ fn parse_status(data: &Value, now: i64) -> CheckinStatus {
             message: "当前无生效中的套餐，点「打开 Zcode 领取」去官方客户端领取".to_string(),
             day_index: None,
             bonus_points: 0,
+            days: Vec::new(),
         }
     }
 }
@@ -354,6 +356,7 @@ fn parse_claimable(data: &Value) -> Option<CheckinStatus> {
         ),
         day_index: None,
         bonus_points: 0,
+        days: Vec::new(),
     })
 }
 

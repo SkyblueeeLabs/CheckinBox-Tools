@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { welfareOf, welfareOpenState } from "../welfare";
-import type { AccountView, AgentGroup, CheckinStatus, ProviderView, Quota } from "../types";
+import type { AccountView, AgentGroup, CheckinDay, CheckinStatus, ProviderView, Quota } from "../types";
 
 function provider(id: string, supportsClaim: boolean): ProviderView {
   return {
@@ -26,7 +26,7 @@ function quota(granted: number): Quota {
   };
 }
 
-function account(points: number | null, granted = 0): AccountView {
+function account(points: number | null, granted = 0, days?: CheckinDay[]): AccountView {
   const status: CheckinStatus | null =
     points === null
       ? null
@@ -36,6 +36,7 @@ function account(points: number | null, granted = 0): AccountView {
           streakDays: 0,
           message: "",
           bonusPoints: 0,
+          days,
         };
   return {
     account: { id: "a1", provider: "x", label: "账号", createdAt: 0, origin: "" },
@@ -131,6 +132,21 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.title).toContain("注册送 1,000 积分");
     expect(w.title).toContain("无每日签到");
     expect(w.title).toContain("LongCat-2.5");
+  });
+
+  it("MiniMax：按上游 7 天面板说明第 4/7 天加成，每日按基础档报数", () => {
+    const days: CheckinDay[] = [400, 400, 400, 1000, 400, 400, 1000].map((points, i) => ({
+      dayNo: i + 1,
+      isToday: i === 5,
+      points,
+      bonusPoints: 0,
+      claimed: i < 6,
+    }));
+    // 今天（第 6 天）实际是 400；福利条按基础档 400 报，加成写在说明里
+    const w = welfareOf(group("minimax", true, [account(400, 0, days)]));
+    expect(w.label).toBe("单账号 +400 积分/日");
+    expect(w.note).toBe("第 4/7 天 +1,000 · 06:00-08:00");
+    expect(w.title).toContain("第 4/7 天 +1,000");
   });
 
   it("数量未知（状态未加载/活动未开放）：只报节奏不给数", () => {

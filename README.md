@@ -66,7 +66,7 @@
 
 | 平台 | 客户端登录态 | 每日签到 | 积分查询 | 客户端换号 | 账号导入方式 |
 |---|---|---|---|---|---|
-| **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取，连签有额外加成 | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
+| **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取（基础 400，第 4/7 天 1,000） | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 签到活动制 | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（注册送 1,000，每月自动发 200） | ✅ | ✅ | 本机导入 |

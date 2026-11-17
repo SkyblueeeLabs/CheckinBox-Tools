@@ -117,6 +117,12 @@ export default function AccountCard({
   const masked = useMasked(account.provider);
   // 7 天内到期的积分（没有就是 null，不占位置）
   const expiring = expiringCredits(view.quota);
+  // 周期面板（MiniMax 7 天）的逐天奖励，悬浮在「第 X/7 天」上
+  const cycleTitle = status?.days?.length
+    ? `本轮奖励：${status.days
+        .map((d) => `第${d.dayNo}天 ${fmtPoints(d.points)}`)
+        .join(" · ")}`
+    : undefined;
 
   return (
     <article className={`acct-card ${state} ${view.isClientLogin ? "client-current" : ""} ${hasError ? "error" : ""} ${open ? "open" : ""}`}>
@@ -276,7 +282,7 @@ export default function AccountCard({
             )}
 
             <div className="acct-meta">
-              {status?.dayIndex ? <span>第 {status.dayIndex}/7 天</span> : null}
+              {status?.dayIndex ? <span title={cycleTitle}>第 {status.dayIndex}/7 天</span> : null}
               {status && status.streakDays > 0 ? (
                 <span>连签 {status.streakDays} 天</span>
               ) : null}

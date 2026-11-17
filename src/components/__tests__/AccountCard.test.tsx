@@ -71,6 +71,28 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(screen.getByText("可领 +400")).toBeInTheDocument();
   });
 
+  it("周期面板：第 X/7 天的悬浮提示带本轮逐天奖励", () => {
+    renderCard({
+      status: {
+        state: "claimed",
+        points: 400,
+        streakDays: 6,
+        message: "今日已签到",
+        bonusPoints: 0,
+        dayIndex: 6,
+        days: [400, 400, 400, 1000, 400, 400, 1000].map((points, i) => ({
+          dayNo: i + 1,
+          isToday: i === 5,
+          points,
+          bonusPoints: 0,
+          claimed: i < 6,
+        })),
+      },
+    });
+    expand();
+    expect(screen.getByTitle(/本轮奖励：第1天 400/)).toHaveTextContent("第 6/7 天");
+  });
+
   it("关闭该 agent 的打码开关后，卡片副名字显示完整 id", () => {
     localStorage.setItem("checkinbox-log-mask:minimax", "0");
     renderCard({

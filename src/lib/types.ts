@@ -19,6 +19,17 @@ export interface TaskSummary {
   message: string;
 }
 
+/** 周期签到面板的一天（MiniMax 的 7 天连签等，上游原样给出奖励） */
+export interface CheckinDay {
+  /** 周期内第几天（1 起） */
+  dayNo: number;
+  isToday: boolean;
+  /** 这一天的奖励积分（已含上游加成） */
+  points: number;
+  bonusPoints: number;
+  claimed: boolean;
+}
+
 export interface CheckinStatus {
   state: ClaimState;
   points: number;
@@ -26,6 +37,8 @@ export interface CheckinStatus {
   message: string;
   dayIndex?: number | null;
   bonusPoints: number;
+  /** 本轮周期面板；平台没有该数据时为空 */
+  days?: CheckinDay[];
 }
 
 export interface CreditItem {

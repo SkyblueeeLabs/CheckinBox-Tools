@@ -18,7 +18,7 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 
 use crate::core::provider::{
-    Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+    Account, CheckinDay, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
 };
 use crate::core::launcher::ClientProcessState;
 use crate::core::tz;
@@ -665,6 +665,18 @@ impl Provider for MiniMaxProvider {
 
         let empty = Vec::new();
         let days = body["data"]["days"].as_array().unwrap_or(&empty);
+        // 上游原样给每天的奖励（第 4/7 天 1,000，其余 400），前端按它展示周期规则。
+        let panel: Vec<CheckinDay> = days
+            .iter()
+            .map(|d| CheckinDay {
+                day_no: d["day_no"].as_i64().unwrap_or(0) as i32,
+                is_today: d["is_today"].as_bool().unwrap_or(false),
+                points: d["points"].as_i64().unwrap_or(0)
+                    + d["bonus_points"].as_i64().unwrap_or(0),
+                bonus_points: d["bonus_points"].as_i64().unwrap_or(0),
+                claimed: d["status"].as_i64().unwrap_or(0) == STATUS_CLAIMED,
+            })
+            .collect();
         let Some(today) = days
             .iter()
             .find(|d| d["is_today"].as_bool().unwrap_or(false))
@@ -672,6 +684,7 @@ impl Provider for MiniMaxProvider {
             return Ok(CheckinStatus {
                 state: ClaimState::NotAvailable,
                 message: "上游没有返回今天的签到信息".to_string(),
+                days: panel,
                 ..Default::default()
             });
         };
@@ -699,6 +712,7 @@ impl Provider for MiniMaxProvider {
             message,
             day_index,
             bonus_points: bonus,
+            days: panel,
         })
     }
 
@@ -1097,6 +1111,30 @@ pub fn migrate_device_key_ids(store: &mut crate::core::store::AccountStore) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 只读探针：打印上游签到面板原始数据（核实每日积分口径 / 连签天数）。
+    /// 手动跑：`cargo test --lib -- --ignored 状态原始数据探针 --nocapture`
+    #[tokio::test]
+    #[ignore = "依赖本机 MiniMax 登录态与网络，手动跑"]
+    async fn 状态原始数据探针() {
+        let store = crate::core::store::AccountStore::load().expect("加载账号池失败");
+        let account = store
+            .list_of("minimax")
+            .into_iter()
+            .next()
+            .expect("账号池里没有 minimax 账号");
+        let cred = store
+            .credential("minimax", &account.id)
+            .expect("凭据解密失败");
+        let provider = MiniMaxProvider::new();
+        let tz = urlenc(&tz::iana_timezone());
+        let url = format!("{BASE}{STATUS_PATH}?timezone_id={tz}");
+        let body: Value = provider
+            .get_json(&url, &account, &cred)
+            .await
+            .expect("签到状态请求失败");
+        eprintln!("{}", serde_json::to_string_pretty(&body).unwrap());
+    }
 
     #[test]
     fn 客户端登录态_刷新许可规则() {

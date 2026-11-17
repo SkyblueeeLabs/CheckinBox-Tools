@@ -589,6 +589,7 @@ impl Provider for QoderProvider {
                 message: format!("可签到 +{points} Credits"),
                 day_index: None,
                 bonus_points: 0,
+                days: Vec::new(),
             },
             Cycle::Claimed(points) => CheckinStatus {
                 state: ClaimState::Claimed,
@@ -597,6 +598,7 @@ impl Provider for QoderProvider {
                 message: format!("今日已领取 +{points} Credits"),
                 day_index: None,
                 bonus_points: 0,
+                days: Vec::new(),
             },
             Cycle::NotYet { reset_minute } => {
                 let reset_text = format!("{:02}:{:02}", reset_minute / 60, reset_minute % 60);
@@ -607,6 +609,7 @@ impl Provider for QoderProvider {
                     message: format!("今日活动 {reset_text}（UTC+8）开启"),
                     day_index: None,
                     bonus_points: 0,
+                    days: Vec::new(),
                 }
             }
             Cycle::NotIssued { reset_minute } => {
@@ -618,6 +621,7 @@ impl Provider for QoderProvider {
                     message: format!("已过 {reset_text}，但今天的活动尚未下发（上游可能已变更）"),
                     day_index: None,
                     bonus_points: 0,
+                    days: Vec::new(),
                 }
             }
         });
