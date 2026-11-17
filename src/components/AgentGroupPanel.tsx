@@ -1,6 +1,6 @@
 import type { AgentGroup, LiveFreeModels } from "../lib/types";
 import { fmtQuotaAmount, quotaLabels } from "../lib/api";
-import { WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfareOpenState, welfareOf } from "../lib/welfare";
+import { WELFARE_KIND_TEXT, WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfareOpenState, welfareOf } from "../lib/welfare";
 import TimeInput from "./TimeInput";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import AccountCard from "./AccountCard";
@@ -160,19 +160,17 @@ export default function AgentGroupPanel({
         <div className="welfare-brief" role="note" aria-label={`${provider.name} 福利`}>
           <div className="wb-row">
             <span className="wb-label">积分/额度</span>
-            <span className="wb-cadence">
-              {meta.cadence === "daily" ? "每日" : meta.cadence === "monthly" ? "每月" : "一次性"}
-            </span>
-            <span className="wb-credits">
-              {meta.cadence === "oneTime" ? free.registerBonus ?? welfare.note : welfare.label}
-            </span>
-            <span className={`wb-mode ${welfare.mode}`}>{welfare.modeText}</span>
-            {meta.cadence !== "oneTime" && welfare.note && (
-              <span className="wb-note">{welfare.note}</span>
-            )}
+            {welfare.benefits.map((b) => (
+              <span className="wb-benefit" key={b.kind}>
+                <span className="wb-cadence">{WELFARE_KIND_TEXT[b.kind]}</span>
+                <span className="wb-credits">{b.label}</span>
+                {b.modeText && <span className={`wb-mode ${b.mode}`}>{b.modeText}</span>}
+              </span>
+            ))}
             {openState && (
               <span className={`wb-open ${openState.open ? "on" : ""}`}>{openState.label}</span>
             )}
+            {welfare.note && <span className="wb-note">{welfare.note}</span>}
           </div>
           <div className="wb-row">
             <span className="wb-label">免费模型</span>

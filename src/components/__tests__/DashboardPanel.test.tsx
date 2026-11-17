@@ -96,7 +96,7 @@ describe("DashboardPanel（7 天内到期）", () => {
     // qoder 状态未加载（points=0）→ 只报节奏，不编数量
     const card = document.querySelector(".dash-agent")!;
     expect(card.querySelector(".welfare-amount")?.textContent).toBe("单账号每日福利");
-    expect(card.querySelector(".welfare-mode")?.textContent).toBe("自动");
+    expect(card.querySelector(".welfare-mode")?.textContent).toBe("自动领取");
     expect(card.querySelector(".welfare-note")?.textContent).toBe(
       "10:00 后开放 · 06:00-08:00"
     );

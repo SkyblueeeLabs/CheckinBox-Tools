@@ -2335,6 +2335,15 @@ button:disabled {
   color: var(--green);
   background: color-mix(in srgb, var(--green) 12%, var(--surface));
 }
+.wb-mode.credit {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 9%, var(--surface));
+}
+.wb-benefit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
 .wb-mode.manual {
   color: #b8820a;
   background: color-mix(in srgb, var(--orange) 16%, var(--surface));
@@ -2421,6 +2430,15 @@ button:disabled {
 .welfare-mode.auto {
   color: var(--green);
   background: color-mix(in srgb, var(--green) 12%, #fff);
+}
+.welfare-mode.credit {
+  color: var(--green);
+  background: color-mix(in srgb, var(--green) 9%, #fff);
+}
+.welfare-benefit {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 .welfare-mode.manual {
   color: #b8820a;

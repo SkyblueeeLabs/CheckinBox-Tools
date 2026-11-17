@@ -154,16 +154,17 @@ describe("不代领的平台（Zcode）", () => {
 });
 
 describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模型）", () => {
-  it("妙手：注册送 1,000 + 每月 200 + 免费模型 chip + 核对月份", () => {
+  it("妙手：注册送 1,000 + 每月 200 统一自动到账 + 免费模型 chip + 核对月份", () => {
     renderPanel(
       group({ provider: provider({ id: "miaoshou", name: "妙手", supportsClaim: false }) })
     );
     const brief = screen.getByRole("note", { name: "妙手 福利" });
     expect(within(brief).getByText("积分/额度")).toBeInTheDocument();
-    expect(within(brief).getByText("每月")).toBeInTheDocument();
-    expect(within(brief).getByText("单账号每月 +200 积分")).toBeInTheDocument();
+    expect(within(brief).getByText("注册")).toBeInTheDocument();
     expect(within(brief).getByText("注册送 1,000 积分")).toBeInTheDocument();
-    expect(within(brief).getByText("自动发放")).toBeInTheDocument();
+    expect(within(brief).getByText("每月")).toBeInTheDocument();
+    expect(within(brief).getByText("每月 +200 积分")).toBeInTheDocument();
+    expect(within(brief).getAllByText("自动到账")).toHaveLength(2);
     expect(within(brief).getByText("免费模型")).toBeInTheDocument();
     expect(within(brief).getByText("LongCat-2.5（官方免费）")).toBeInTheDocument();
     expect(within(brief).getByText(/核对 2026-11/)).toBeInTheDocument();
@@ -182,12 +183,17 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     expect(within(brief).getByText("暂无免费模型")).toBeInTheDocument();
   });
 
-  it("WorkBuddy 未核对：每日自动积分 + 有免费模型待实时核对", () => {
+  it("WorkBuddy 未核对：每日自动 + 注册/每月自动到账 + 免费模型待核对", () => {
     renderPanel(group(), noop, { onRefreshFree: noop });
     const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
     expect(within(brief).getByText("每日")).toBeInTheDocument();
     expect(within(brief).getByText("自动领取")).toBeInTheDocument();
-    expect(within(brief).getByText(/注册送 2,000 · 每月 \+500 自动到账/)).toBeInTheDocument();
+    expect(within(brief).getByText("注册")).toBeInTheDocument();
+    expect(within(brief).getByText("注册送 2,000 积分")).toBeInTheDocument();
+    expect(within(brief).getByText("每月")).toBeInTheDocument();
+    expect(within(brief).getByText("每月 +500 积分")).toBeInTheDocument();
+    expect(within(brief).getAllByText("自动到账")).toHaveLength(2);
+    expect(within(brief).getByText("06:00-08:00")).toBeInTheDocument();
     expect(within(brief).getByText("有免费模型 · 待实时核对")).toBeInTheDocument();
     expect(within(brief).getByRole("button", { name: "核对最新免费模型" })).toBeInTheDocument();
   });

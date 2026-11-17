@@ -186,12 +186,17 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, visibili
               </div>
 
               <div className="dash-agent-welfare" title={welfare.title}>
-                <span className="welfare-amount">{welfare.label}</span>
-                <span className={`welfare-mode ${welfare.mode}`}>
-                  {welfare.mode === "auto" ? "自动" : "需手动"}
-                </span>
-                {welfare.note && (
-                  <span className="welfare-note">{welfare.note}</span>
+                {welfare.benefits.map((b) => (
+                  <span className="welfare-benefit" key={b.kind}>
+                    <span className="welfare-amount">{b.label}</span>
+                    {b.modeText && (
+                      <span className={`welfare-mode ${b.mode}`}>{b.modeText}</span>
+                    )}
+                  </span>
+                ))}
+                {welfare.note && <span className="welfare-note">{welfare.note}</span>}
+                {welfare.freeText && (
+                  <span className="welfare-note">{welfare.freeText}</span>
                 )}
               </div>
             </button>
