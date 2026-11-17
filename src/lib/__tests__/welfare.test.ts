@@ -195,13 +195,14 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(zc.title).toContain("暂无免费模型");
   });
 
-  it("开放领取实时状态：到点=现在可领，未到= N:00 开放；无开放小时=null", () => {
+  it("开放领取实时状态：仅手动领取平台提示；自动领取/无开放时间为 null", () => {
     const at = (h: number) => new Date(2026, 10, 16, h, 0, 0);
     expect(welfareOpenState("zcode", at(18))).toEqual({ open: false, label: "19:00 开放" });
     expect(welfareOpenState("zcode", at(19))).toEqual({ open: true, label: "现在可领" });
     expect(welfareOpenState("zcode", at(23))).toEqual({ open: true, label: "现在可领" });
-    expect(welfareOpenState("qoder", at(9))).toEqual({ open: false, label: "10:00 开放" });
-    expect(welfareOpenState("qoder", at(10))).toEqual({ open: true, label: "现在可领" });
+    // Qoder 由工具自动领取：时间到了不等于还没领，不显示「现在可领」
+    expect(welfareOpenState("qoder", at(9))).toBeNull();
+    expect(welfareOpenState("qoder", at(10))).toBeNull();
     expect(welfareOpenState("minimax", at(12))).toBeNull();
     expect(welfareOpenState("workbuddy", at(12))).toBeNull();
   });

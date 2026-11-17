@@ -192,6 +192,14 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     expect(within(brief).getByRole("button", { name: "核对最新免费模型" })).toBeInTheDocument();
   });
 
+  it("Qoder：自动领取平台不显示「现在可领」标签，只保留开放时间说明", () => {
+    renderPanel(group({ provider: provider({ id: "qoder", name: "Qoder CN" }) }));
+    const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
+    expect(within(brief).queryByText("现在可领")).not.toBeInTheDocument();
+    expect(within(brief).queryByText("10:00 开放")).not.toBeInTheDocument();
+    expect(within(brief).getByText(/10:00 后开放/)).toBeInTheDocument();
+  });
+
   it("minimax：每日自动免费积分 + 暂无免费模型", () => {
     renderPanel(group({ provider: provider({ id: "minimax", name: "MiniMax Code" }) }));
     const brief = screen.getByRole("note", { name: "MiniMax Code 福利" });

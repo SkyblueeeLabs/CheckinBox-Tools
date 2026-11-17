@@ -26,7 +26,7 @@ export interface WelfareMeta {
   note?: string;
   /** 领取/生效时段（优先级高于 note，如 Zcode 的 19:00 开放、23:00 生效） */
   timing?: string;
-  /** 每日开放领取的小时（UTC+8），用于「现在可领 / 未到点」实时提示 */
+  /** 每日开放领取的小时（UTC+8），仅「需要手动领取」的平台用于实时提示 */
   openHour?: number;
   /** 每月固定发放的积分数（目前只有妙手；平台规则，不从接口推算） */
   monthlyPoints?: number;
@@ -37,7 +37,7 @@ export interface WelfareMeta {
 /** 各平台福利元数据（不含实时数量；面板/首页共用，改文案只改这里） */
 export const WELFARE_META: Record<string, WelfareMeta> = {
   minimax: { cadence: "daily", mode: "auto", unit: "积分" },
-  qoder: { cadence: "daily", mode: "auto", unit: "Credits", note: "10:00 后开放", openHour: 10 },
+  qoder: { cadence: "daily", mode: "auto", unit: "Credits", note: "10:00 后开放" },
   workbuddy: {
     cadence: "daily",
     mode: "auto",
@@ -95,13 +95,18 @@ export const FREE_MODELS: Record<string, FreeModelInfo> = {
   qoder: { status: "none", asOf: "2026-11-16" },
 };
 
-/** 每日开放领取的实时状态（现在可领 / 未到点）；无开放小时的平台返回 null */
+/** 每日开放领取的实时状态（现在可领 / 未到点）。
+ *
+ * 只给**需要手动领取**的平台用（Zcode）：自动领取的平台由工具在时间窗内处理，
+ * 时间到了不代表还没领，再显示「现在可领」会误报；其余平台返回 null。
+ */
 export function welfareOpenState(
   providerId: string,
   now: Date = new Date()
 ): { open: boolean; label: string } | null {
-  const hour = WELFARE_META[providerId]?.openHour;
-  if (hour === undefined) return null;
+  const meta = WELFARE_META[providerId];
+  const hour = meta?.openHour;
+  if (hour === undefined || meta?.mode !== "manual") return null;
   const open = now.getHours() >= hour;
   return { open, label: open ? "现在可领" : `${hour}:00 开放` };
 }
