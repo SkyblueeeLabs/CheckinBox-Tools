@@ -240,6 +240,8 @@ export interface Overview {
   plans: Record<string, number>;
   /** 应用数据目录 */
   dataDir: string;
+  /** 账号池加载失败等需要让用户知道的警告（正常为 null） */
+  storeWarning?: string | null;
 }
 
 export interface AgentGroup {

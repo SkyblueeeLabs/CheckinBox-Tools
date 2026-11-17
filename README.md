@@ -283,8 +283,9 @@ npx tsc --noEmit                            # 前端类型检查
 .\src-tauri\target\release\CheckinBox.exe --restore-client-backup minimax <操作id>
 ```
 
-> release 版没有控制台，命令结果会写进
-> `%APPDATA%\CheckinBox\client_login_backups\<平台>\_cli-output.txt` 并自动打开。
+> release 版没有控制台：`--import-local` 的结果写到
+> `%APPDATA%\CheckinBox\_cli-output.txt`，备份 / 回滚命令的结果写到
+> `%APPDATA%\CheckinBox\client_login_backups\<平台>\_cli-output.txt`，都会自动打开。
 
 ## 项目结构
 

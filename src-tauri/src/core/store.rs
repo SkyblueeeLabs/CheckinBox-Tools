@@ -9,6 +9,7 @@ use base64::Engine;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
 
 use super::dpapi;
 use super::paths::{accounts_file, atomic_write};
@@ -38,15 +39,33 @@ impl AccountStore {
 
     /// 从磁盘加载；文件不存在时返回空账号池。
     pub fn load() -> Result<Self> {
-        let path = accounts_file();
+        Self::load_from(&accounts_file())
+    }
+
+    /// 解析失败时先把原文件改名为 `accounts.json.corrupt-<时间戳>` 再报错：
+    /// 调用方会以空池继续运行，后续任意一次保存都会重写 accounts.json ——
+    /// 不备份就等于把用户账号静默删掉。
+    fn load_from(path: &Path) -> Result<Self> {
         if !path.exists() {
             return Ok(Self::default());
         }
-        let raw = std::fs::read_to_string(&path)?;
+        let raw = std::fs::read_to_string(path)?;
         if raw.trim().is_empty() {
             return Ok(Self::default());
         }
-        serde_json::from_str(&raw).map_err(|e| anyhow!("账号池文件解析失败：{e}"))
+        match serde_json::from_str(&raw) {
+            Ok(store) => Ok(store),
+            Err(err) => {
+                let backup = backup_corrupt(path);
+                Err(anyhow!(
+                    "账号池文件解析失败：{err}{}",
+                    match backup {
+                        Some(b) => format!("；原文件已备份到 {}", b.display()),
+                        None => "；备份原文件失败，请先手动复制 accounts.json".to_string(),
+                    }
+                ))
+            }
+        }
     }
 
     /// 原子写盘。
@@ -127,5 +146,92 @@ impl AccountStore {
 
     pub fn contains(&self, provider: &str, id: &str) -> bool {
         self.accounts.contains_key(&Self::key(provider, id))
+    }
+}
+
+/// 把解析失败的账号池文件改名留档，成功时返回备份路径。
+fn backup_corrupt(path: &Path) -> Option<PathBuf> {
+    let stamp = chrono::Local::now().format("%Y%m%d-%H%M%S");
+    let base = path.display();
+    let mut target = PathBuf::from(format!("{base}.corrupt-{stamp}"));
+    let mut seq = 1;
+    while target.exists() {
+        target = PathBuf::from(format!("{base}.corrupt-{stamp}-{seq}"));
+        seq += 1;
+    }
+    std::fs::rename(path, &target).ok().map(|_| target)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn temp_file(tag: &str) -> PathBuf {
+        let nanos = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let dir = std::env::temp_dir().join(format!(
+            "checkinbox-store-{tag}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        dir.join("accounts.json")
+    }
+
+    #[test]
+    fn 损坏的账号池会先备份再报错() {
+        let path = temp_file("corrupt");
+        std::fs::write(&path, b"{ this is not json").unwrap();
+
+        let err = AccountStore::load_from(&path).unwrap_err().to_string();
+
+        assert!(err.contains("解析失败"), "错误文案应说明解析失败：{err}");
+        assert!(!path.exists(), "原文件应被移走，避免后续保存覆盖");
+        let dir = path.parent().unwrap();
+        let backups: Vec<_> = std::fs::read_dir(dir)
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .filter(|e| {
+                e.file_name()
+                    .to_string_lossy()
+                    .starts_with("accounts.json.corrupt-")
+            })
+            .collect();
+        assert_eq!(backups.len(), 1, "应留一份损坏文件备份");
+        assert_eq!(
+            std::fs::read(backups[0].path()).unwrap(),
+            b"{ this is not json"
+        );
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn 正常账号池能原样读回() {
+        let path = temp_file("roundtrip");
+        let mut store = AccountStore::default();
+        store.accounts.insert(
+            AccountStore::key("minimax", "u1"),
+            StoredAccount {
+                account: Account {
+                    id: "u1".into(),
+                    provider: "minimax".into(),
+                    label: "测试账号".into(),
+                    created_at: 1,
+                    last_used: None,
+                    origin: "测试".into(),
+                },
+                credential: "AAAA".into(),
+            },
+        );
+        std::fs::write(&path, serde_json::to_string_pretty(&store).unwrap()).unwrap();
+
+        let loaded = AccountStore::load_from(&path).unwrap();
+
+        assert_eq!(loaded.accounts.len(), 1);
+        assert_eq!(loaded.accounts["minimax:u1"].account.label, "测试账号");
+        assert!(path.exists(), "正常读取不应移动文件");
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 }

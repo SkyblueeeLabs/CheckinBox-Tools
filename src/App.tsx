@@ -74,6 +74,7 @@ export default function App() {
   const refreshSeq = useRef(0);
   const noticesSeq = useRef(0);
   const loaded = useRef(false);
+  const storeWarningShown = useRef<string | null>(null);
   const logsSection = useRef<HTMLDivElement>(null);
 
   const pushToast = useCallback((kind: Toast["kind"], text: string) => {
@@ -103,6 +104,10 @@ export default function App() {
       setOverview(ov);
       setConfig(cfg);
       loaded.current = true;
+      if (ov.storeWarning && ov.storeWarning !== storeWarningShown.current) {
+        storeWarningShown.current = ov.storeWarning;
+        pushToast("warn", ov.storeWarning);
+      }
       setSelected((prev) =>
         prev === SETTINGS_ID || prev === HOME_ID || ov.providers.some((p) => p.id === prev)
           ? prev
@@ -295,11 +300,20 @@ export default function App() {
         pushToast("warn", "没有找到本机客户端登录态");
         return;
       }
-      await api.addDiscoveredAccount(providerId);
+      const saved = await api.addDiscoveredAccount(providerId);
       // 已在池里的账号这次不会重复入库；一个新账号都没有时，
       // 大概率是「客户端登录的还是老号」—— 直接告诉用户该怎么做
       const fresh = found.filter((f) => !f.alreadyAdded);
-      if (fresh.length > 0) {
+      const savedIds = new Set(
+        saved.filter((a) => a.provider === providerId).map((a) => a.id)
+      );
+      const missing = fresh.filter((f) => !savedIds.has(f.account.id));
+      if (missing.length > 0) {
+        pushToast(
+          "err",
+          `导入没有写入：${missing.map((f) => f.account.label).join("、")}，请重试`
+        );
+      } else if (fresh.length > 0) {
         pushToast("ok", `已导入 ${fresh.length} 个账号：${fresh.map((f) => f.account.label).join("、")}`);
       } else {
         pushToast(

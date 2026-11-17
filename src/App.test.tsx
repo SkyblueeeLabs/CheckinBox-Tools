@@ -139,6 +139,82 @@ describe("桌面窗口", () => {
     });
   });
 
+  it("导入真正落盘后按实际结果提示成功", async () => {
+    const ov: Overview = {
+      ...overview,
+      providers: [
+        {
+          id: "qoder", name: "Qoder CN", accent: "#6a5acd", docsUrl: "",
+          supportsDiscovery: true, supportsOAuth: true, configured: false,
+          hasClient: true, supportsClaim: true,
+        },
+      ],
+    };
+    const account = {
+      id: "acc-1", provider: "qoder", label: "测试号",
+      createdAt: 1, lastUsed: null, origin: "Qoder 客户端登录态",
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      switch (command) {
+        case "overview": return ov;
+        case "get_config": return config;
+        case "autostart_enabled": return false;
+        case "discover_accounts": return [{ provider: "qoder", alreadyAdded: false, account }];
+        case "add_discovered_account": return [account];
+        default: return [];
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
+    const nav = document.querySelector(".sidebar-list") as HTMLElement;
+    fireEvent.click(within(nav).getByRole("button", { name: /Qoder CN/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "从本机导入" }));
+
+    expect(await screen.findByText(/已导入 1 个账号：测试号/)).toBeInTheDocument();
+  });
+
+  it("导入没有真正写入时不谎报成功", async () => {
+    const ov: Overview = {
+      ...overview,
+      providers: [
+        {
+          id: "qoder", name: "Qoder CN", accent: "#6a5acd", docsUrl: "",
+          supportsDiscovery: true, supportsOAuth: true, configured: false,
+          hasClient: true, supportsClaim: true,
+        },
+      ],
+    };
+    const discovered = {
+      provider: "qoder",
+      alreadyAdded: false,
+      account: {
+        id: "acc-1", provider: "qoder", label: "测试号",
+        createdAt: 1, lastUsed: null, origin: "Qoder 客户端登录态",
+      },
+    };
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      switch (command) {
+        case "overview": return ov;
+        case "get_config": return config;
+        case "autostart_enabled": return false;
+        case "discover_accounts": return [discovered];
+        // 二次发现成功但实际没有落盘：不能弹“已导入”
+        case "add_discovered_account": return [];
+        default: return [];
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
+    const nav = document.querySelector(".sidebar-list") as HTMLElement;
+    fireEvent.click(within(nav).getByRole("button", { name: /Qoder CN/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "从本机导入" }));
+
+    expect(await screen.findByText(/导入没有写入：测试号/)).toBeInTheDocument();
+    expect(screen.queryByText(/已导入 1 个账号/)).not.toBeInTheDocument();
+  });
+
   it("顶栏蛋图标随时打开封面浮层，Esc 返回原页面", async () => {
     const ov2: Overview = {
       ...overview,

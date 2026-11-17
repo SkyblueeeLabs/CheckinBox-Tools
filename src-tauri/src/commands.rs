@@ -21,6 +21,8 @@ pub struct AppState {
     /// 账号池。Arc 包一层：providers 层 401 抢救路径的落盘钩子（POOL 全局）
     /// 要和这里持有同一份实例
     pub store: Arc<Mutex<AccountStore>>,
+    /// 启动时账号池加载失败的原因（如文件损坏已备份）。正常启动为 None。
+    pub store_warning: Option<String>,
     pub config: Mutex<AppConfig>,
     pub scheduler: Mutex<SchedulerState>,
     pub auth_sessions: Mutex<BTreeMap<String, AuthSession>>,
@@ -50,7 +52,10 @@ impl AppState {
             workbuddy.clone(),
             Arc::new(crate::providers::zcode::ZcodeProvider::new()),
         ];
-        let mut store = AccountStore::load().unwrap_or_default();
+        let (mut store, store_warning) = match AccountStore::load() {
+            Ok(store) => (store, None),
+            Err(err) => (AccountStore::default(), Some(err.to_string())),
+        };
         // 旧版本把 MiniMax 登录态记录键的 hash 当账号 id（设备级，换号不变），
         // 会造成「导入新号覆盖旧号」。启动时把池里的旧时代条目归位一次（幂等）。
         crate::providers::minimax::migrate_device_key_ids(&mut store);
@@ -60,6 +65,7 @@ impl AppState {
         let _ = POOL.set(store.clone());
         Self {
             store,
+            store_warning,
             config: Mutex::new(AppConfig::load().unwrap_or_default()),
             scheduler: Mutex::new(SchedulerState::load().unwrap_or_default()),
             auth_sessions: Mutex::new(load_pending_auth()),
@@ -278,6 +284,9 @@ pub struct Overview {
     pub plans: BTreeMap<String, u32>,
     /// 应用数据目录（账号池 / 配置 / 日志都在这里）
     pub data_dir: String,
+    /// 账号池加载失败等需要让用户知道的警告（正常为 None）
+    #[serde(default)]
+    pub store_warning: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -700,6 +709,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         agents: agents_view,
         plans,
         data_dir,
+        store_warning: state.store_warning.clone(),
     })
 }
 
@@ -2537,6 +2547,10 @@ pub fn cli_import_local() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {
         let state = AppState::new();
+        let mut body = String::new();
+        if let Some(warning) = &state.store_warning {
+            body.push_str(&format!("注意：{warning}\n\n"));
+        }
         let providers: Vec<Arc<dyn Provider>> = state
             .providers
             .iter()
@@ -2544,30 +2558,76 @@ pub fn cli_import_local() -> Result<(), String> {
             .cloned()
             .collect();
 
+        let mut imported = 0usize;
+        let mut failed = 0usize;
         for provider in providers {
-            let found = match provider.discover().await {
-                Ok(f) => f,
-                Err(e) => {
-                    println!("  {} 发现失败：{e}", provider.display_name());
-                    continue;
+            match provider.discover().await {
+                Ok(found) if found.is_empty() => {
+                    body.push_str(&format!(
+                        "{}：本机客户端没有登录态\n",
+                        provider.display_name()
+                    ));
                 }
-            };
-            if found.is_empty() {
-                println!("  {}：本机客户端没有登录态", provider.display_name());
-                continue;
+                Ok(found) => {
+                    for (account, cred) in found {
+                        match state.store.lock().unwrap().upsert(account.clone(), &cred) {
+                            Ok(()) => {
+                                imported += 1;
+                                body.push_str(&format!(
+                                    "已导入 {} · {}\n",
+                                    provider.display_name(),
+                                    account.label
+                                ));
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                body.push_str(&format!(
+                                    "{} · {} 写入失败：{e}\n",
+                                    provider.display_name(),
+                                    account.label
+                                ));
+                            }
+                        }
+                    }
+                }
+                Err(e) => {
+                    failed += 1;
+                    body.push_str(&format!("{} 发现失败：{e}\n", provider.display_name()));
+                }
             }
-            for (account, cred) in found {
-                state
-                    .store
-                    .lock()
-                    .unwrap()
-                    .upsert(account.clone(), &cred)
-                    .map_err(|e| e.to_string())?;
-                println!("  已导入 {} · {}", provider.display_name(), account.label);
-            }
+        }
+        body.push_str(&format!("\n共导入 {imported} 个账号。\n"));
+        body.push_str(&format!(
+            "账号池文件：{}\n",
+            crate::core::paths::accounts_file().display()
+        ));
+        body.push_str(
+            "若导入前 CheckinBox 正在运行，请退出后重新打开——运行中的界面不会自动加载本次导入。\n",
+        );
+        cli_show("导入本机客户端登录态", &body);
+        if imported == 0 && failed > 0 {
+            return Err("导入失败，详见结果文件".into());
         }
         Ok(())
     })
+}
+
+/// 命令行结果落盘并打开。
+///
+/// release 版是 `windows_subsystem = "windows"`（不弹控制台），`println!`
+/// 的内容用户根本看不见。换号备份类命令用 `cli_emit` 写到按平台的备份目录；
+/// 导入这类跨平台命令用这里写到数据目录根下。
+fn cli_show(title: &str, body: &str) {
+    println!("{title}\n{body}");
+    let dir = crate::core::paths::data_dir();
+    if std::fs::create_dir_all(&dir).is_ok() {
+        let out = dir.join("_cli-output.txt");
+        if std::fs::write(&out, format!("{title}\n{body}\n")).is_ok() {
+            let _ = std::process::Command::new("explorer.exe")
+                .arg(&out)
+                .spawn();
+        }
+    }
 }
 
 /// 命令行输出。
