@@ -134,7 +134,7 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.note).toBe("");
     expect(w.title).toContain("自动到账");
     expect(w.title).toContain("无每日签到");
-    expect(w.title).toContain("LongCat-2.5");
+    expect(w.title).toContain("限时免费 · 以官方客户端为准");
   });
 
   it("MiniMax：按上游 7 天面板说明第 4/7 天加成，每日按基础档报数", () => {
@@ -198,8 +198,8 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
 
   it("免费模型核对信息：首页紧凑提示 + 悬浮完整说明", () => {
     const ms = welfareOf(group("miaoshou", false, [account(0)]));
-    expect(ms.title).toContain("免费模型：LongCat-2.5（官方免费）");
-    expect(ms.freeText).toBe("免费模型 LongCat-2.5（官方免费）");
+    expect(ms.title).toContain("免费模型：限时免费 · 以官方客户端为准");
+    expect(ms.freeText).toBe("免费模型 限时免费 · 以官方客户端为准");
     const mm = welfareOf(group("minimax", true, [account(100)]));
     expect(mm.title).toContain("暂无免费模型");
     expect(mm.freeText).toBe("");

@@ -79,8 +79,10 @@ export const FREE_MODELS: Record<string, FreeModelInfo> = {
   workbuddy: { status: "current", live: true, asOf: "2026-11-16" },
   miaoshou: {
     status: "current",
-    models: ["LongCat-2.5（官方免费）"],
-    asOf: "2026-11-16",
+    // 模型目录走 SSO + 客户端本地 IPC，工具拿不到实时清单；不写死具体模型，
+    // 避免限时免费结束后还继续宣称免费。
+    note: "限时免费 · 以官方客户端为准",
+    asOf: "2026-11-17",
   },
   zcode: { status: "none", asOf: "2026-11-16" },
   minimax: { status: "none", asOf: "2026-11-16" },
@@ -224,17 +226,23 @@ export function welfareOf(group: AgentGroup): WelfareView {
 
   // 4) 免费模型（单独一行；首页只给紧凑提示，完整清单在悬浮说明里）
   const free = FREE_MODELS[group.provider.id];
-  const freeText = free?.models?.length
-    ? `免费模型 ${free.models.join("、")}`
-    : free?.live
-      ? "免费模型 实时核对"
-      : "";
+  const freeText = free
+    ? free.models?.length
+      ? `免费模型 ${free.models.join("、")}`
+      : free.live
+        ? "免费模型 实时核对"
+        : free.note
+          ? `免费模型 ${free.note}`
+          : ""
+    : "";
   const freeSuffix = free
     ? free.models?.length
       ? ` · 免费模型：${free.models.join("、")}`
       : free.live
         ? " · 有免费模型（清单实时核对）"
-        : ` · ${FREE_STATUS_TEXT[free.status]}`
+        : free.note
+          ? ` · 免费模型：${free.note}`
+          : ` · ${FREE_STATUS_TEXT[free.status]}`
     : "";
 
   return {

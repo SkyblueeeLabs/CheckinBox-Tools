@@ -311,6 +311,10 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
 - 鉴权要**同时**带 `X-Auth-Token` 和 `access-token`（同值），少一个 `4011`。
 - **没有每日签到**：`credit/register` 只是「注册到积分中心 + 新用户奖励」，老用户返回
   「用户已注册」。积分来自套餐。别去实现「每日领取」。
+- **免费模型拿不到实时清单**（2026-11-17 实测）：客户端模型目录
+  `/api/agent/maas/model-types` 走 SSO（ai.catpaw.meituan.com）+ 本地 catdesk IPC，
+  用积分中心的 catx token 请求是 404 / SSO 失败；本地也没有可读缓存。界面只写
+  「限时免费 · 以官方客户端为准」，**不写死具体模型名**，避免限时活动结束后继续宣称免费。
 
 ---
 

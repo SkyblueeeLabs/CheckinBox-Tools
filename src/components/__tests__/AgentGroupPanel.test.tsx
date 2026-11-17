@@ -166,7 +166,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     expect(within(brief).getByText("每月 +200 积分")).toBeInTheDocument();
     expect(within(brief).getAllByText("自动到账")).toHaveLength(2);
     expect(within(brief).getByText("免费模型")).toBeInTheDocument();
-    expect(within(brief).getByText("LongCat-2.5（官方免费）")).toBeInTheDocument();
+    expect(within(brief).getByText("限时免费 · 以官方客户端为准")).toBeInTheDocument();
     expect(within(brief).getByText(/核对 2026-11/)).toBeInTheDocument();
   });
 

@@ -224,7 +224,7 @@ export default function AgentGroupPanel({
                 <span key={m} className="wb-chip">{m}</span>
               ))
             ) : (
-              <span className="wb-none">{FREE_STATUS_TEXT[free.status]}</span>
+              <span className="wb-none">{free.note ?? FREE_STATUS_TEXT[free.status]}</span>
             )}
             {free.asOf && <span className="wb-asof">核对 {free.asOf}</span>}
           </div>
