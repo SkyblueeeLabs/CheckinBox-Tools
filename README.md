@@ -119,6 +119,15 @@
 - 安装版装到 `%LOCALAPPDATA%\CheckinBox\`；卸载会保留 `%APPDATA%\CheckinBox\` 数据目录。
 - 便携版的配置和账号数据同样在 `%APPDATA%\CheckinBox\`，换 exe 不影响数据。
 
+### 自动更新
+
+- **安装版（NSIS）**：启动后自动检查更新；设置 → 软件更新可关闭自动检查或手动检查。更新弹窗显示版本、更新内容和下载进度，安装后重启生效。
+- **便携版 / MSI 版**：不自动安装，会提示下载新版；账号和配置不会丢。
+- **从 v0.1.0 升级**：旧版没有更新模块，需要手动下载安装一次 v0.2.0；之后才能自动更新。
+- **维护者发版**：先更新 `CHANGELOG.md` 对应版本段落，再打 `v<version>` tag。Release workflow 会生成 `latest.json`；草稿 Release 发布后 `releases/latest` 才能读到它。
+- 更新签名使用 Tauri updater 密钥（GitHub Secrets：`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），和 Windows Authenticode 是两套东西。
+- 维护细节见 [docs/auto-update.md](docs/auto-update.md)。
+
 ### 第一次使用
 
 1. **导入账号**：点「从本机导入」读取本机客户端登录态（MiniMax / Qoder / 妙手 / WorkBuddy / Zcode / Trae CN）；MiniMax / Qoder / WorkBuddy / Trae CN 也可以点「添加账号」走浏览器授权。

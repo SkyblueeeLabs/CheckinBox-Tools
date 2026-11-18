@@ -33,3 +33,7 @@ settings.json
 _cli-output.txt
 client_login_backups/
 
+# 发布临时产物（由 scripts 生成，随 Release 上传）
+latest.json
+latest-notes.md
+

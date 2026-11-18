@@ -3,5 +3,9 @@
   "identifier": "default",
   "description": "主窗口权限：前端只用到事件订阅（listen/unlisten/emit）。自定义命令不走 ACL，无需在此声明。",
   "windows": ["main"],
-  "permissions": ["core:event:default"]
+  "permissions": [
+    "core:event:default",
+    "updater:default",
+    "process:default"
+  ]
 }

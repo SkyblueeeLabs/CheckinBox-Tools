@@ -351,8 +351,46 @@ export interface LiveFreeModels {
   error: string | null;
 }
 
+export interface UpdateConfig {
+  autoCheck?: boolean;
+  checkIntervalHours?: number;
+  skippedVersion?: string;
+  lastCheckAt?: number;
+  lastRunVersion?: string;
+  pendingNotesVersion?: string;
+  pendingNotes?: string;
+}
+
+export interface UpdateConfigPatch {
+  autoCheck?: boolean;
+  checkIntervalHours?: number;
+  skippedVersion?: string;
+  lastCheckAt?: number;
+  lastRunVersion?: string;
+  pendingNotesVersion?: string;
+  pendingNotes?: string;
+}
+
+export interface OldInstallInfo {
+  displayName: string;
+  version: string;
+  installLocation: string;
+  uninstallString: string;
+}
+
+export interface InstallInfo {
+  version: string;
+  exePath: string;
+  installDir: string;
+  hasUninstaller: boolean;
+  installKind: "nsis" | "msi" | "portable";
+  oldInstalls: OldInstallInfo[];
+}
+
 export interface AppConfig {
   scheduler: SchedulerConfig;
+  /** 自动更新设置；缺省按默认值处理 */
+  update?: UpdateConfig;
   /** 每个 agent 当前激活的账号 id */
   activeAccounts: Record<string, string>;
   alertThresholds: Record<string, number>;

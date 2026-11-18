@@ -1740,6 +1740,166 @@ pub async fn set_catch_up_missed_window(
     })
 }
 
+/// 更新自动更新设置（只改传入字段）。
+#[tauri::command]
+pub async fn patch_update_config(
+    state: State<'_, AppState>,
+    patch: crate::core::config::UpdateConfigPatch,
+) -> Result<AppConfig, String> {
+    state.update_config(|config| {
+        config.update.apply_patch(&patch);
+        Ok(())
+    })
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OldInstallInfo {
+    pub display_name: String,
+    pub version: String,
+    pub install_location: String,
+    pub uninstall_string: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallInfo {
+    pub version: String,
+    pub exe_path: String,
+    pub install_dir: String,
+    pub has_uninstaller: bool,
+    /// `nsis` / `msi` / `portable`
+    pub install_kind: String,
+    /// 当前 exe 之外的旧安装（用于迁移提示）
+    pub old_installs: Vec<OldInstallInfo>,
+}
+
+fn normalize_install_path(path: &str) -> String {
+    let trimmed = path.trim().trim_matches('"').trim();
+    let trimmed = trimmed.strip_prefix(r"\\?\").unwrap_or(trimmed);
+    trimmed
+        .trim_end_matches(['\\', '/'])
+        .replace('/', "\\")
+        .to_lowercase()
+}
+
+#[cfg(windows)]
+fn read_checkinbox_uninstall_entries() -> Vec<OldInstallInfo> {
+    use winreg::enums::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+    };
+    use winreg::RegKey;
+
+    let mut out = Vec::new();
+    for hive in [HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE] {
+        let root = RegKey::predef(hive);
+        for view in [KEY_WOW64_64KEY, KEY_WOW64_32KEY] {
+            let Ok(uninstall) = root.open_subkey_with_flags(
+                "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+                KEY_READ | view,
+            ) else {
+                continue;
+            };
+            for subkey in uninstall.enum_keys().flatten() {
+                let Ok(key) = uninstall.open_subkey_with_flags(&subkey, KEY_READ | view) else {
+                    continue;
+                };
+                let display_name: String = key.get_value("DisplayName").unwrap_or_default();
+                if !display_name.to_lowercase().contains("checkinbox") {
+                    continue;
+                }
+                let version: String = key.get_value("DisplayVersion").unwrap_or_default();
+                let install_location: String = key.get_value("InstallLocation").unwrap_or_default();
+                let uninstall_string: String = key.get_value("UninstallString").unwrap_or_default();
+                if display_name.trim().is_empty() {
+                    continue;
+                }
+                out.push(OldInstallInfo {
+                    display_name,
+                    version,
+                    install_location,
+                    uninstall_string,
+                });
+            }
+        }
+    }
+    out.sort_by(|left, right| {
+        left.display_name
+            .cmp(&right.display_name)
+            .then(left.install_location.cmp(&right.install_location))
+    });
+    out.dedup_by(|left, right| {
+        left.display_name == right.display_name
+            && left.install_location == right.install_location
+            && left.uninstall_string == right.uninstall_string
+    });
+    out
+}
+
+#[cfg(not(windows))]
+fn read_checkinbox_uninstall_entries() -> Vec<OldInstallInfo> {
+    Vec::new()
+}
+
+/// 当前 exe 的安装形态与旧安装信息，供更新 UI 判断能否自动安装。
+#[tauri::command]
+pub async fn get_install_info() -> Result<InstallInfo, String> {
+    let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+    let dir = exe
+        .parent()
+        .ok_or_else(|| "无法确定 exe 目录".to_string())?
+        .to_path_buf();
+    let current = std::fs::canonicalize(&dir).unwrap_or(dir.clone());
+    let current_key = normalize_install_path(&current.to_string_lossy());
+    let has_uninstaller = std::fs::read_dir(&dir)
+        .map(|entries| {
+            entries.flatten().any(|entry| {
+                entry
+                    .file_name()
+                    .to_string_lossy()
+                    .eq_ignore_ascii_case("uninstall.exe")
+            })
+        })
+        .unwrap_or(false);
+
+    let entries = read_checkinbox_uninstall_entries();
+    let current_entry = entries
+        .iter()
+        .find(|entry| {
+            !entry.install_location.trim().is_empty()
+                && normalize_install_path(&entry.install_location) == current_key
+        });
+    let install_kind = match current_entry {
+        Some(entry)
+            if entry
+                .uninstall_string
+                .to_lowercase()
+                .contains("msiexec") =>
+        {
+            "msi"
+        }
+        Some(_) => "nsis",
+        None if has_uninstaller => "nsis",
+        None => "portable",
+    };
+    let old_installs = entries
+        .into_iter()
+        .filter(|entry| {
+            !entry.install_location.trim().is_empty()
+                && normalize_install_path(&entry.install_location) != current_key
+        })
+        .collect();
+
+    Ok(InstallInfo {
+        version: env!("CARGO_PKG_VERSION").to_string(),
+        exe_path: exe.to_string_lossy().to_string(),
+        install_dir: dir.to_string_lossy().to_string(),
+        has_uninstaller,
+        install_kind: install_kind.to_string(),
+        old_installs,
+    })
+}
+
 /// 设置某个 agent 的数据自动同步间隔（分钟）。
 #[tauri::command]
 pub async fn set_refresh_interval(

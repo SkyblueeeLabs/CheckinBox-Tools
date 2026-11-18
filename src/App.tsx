@@ -21,6 +21,10 @@ import LogPanel from "./components/LogPanel";
 import CloseConfirmDialog from "./components/CloseConfirmDialog";
 import NotificationsDialog from "./components/NotificationsDialog";
 import SwitchProgressDialog from "./components/SwitchProgressDialog";
+import UpdateDialog from "./components/UpdateDialog";
+import UpdateMigrationNotice from "./components/UpdateMigrationNotice";
+import VersionJumpNotice from "./components/VersionJumpNotice";
+import { useUpdater } from "./hooks/useUpdater";
 import { HOME_ID } from "./lib/types";
 
 interface Toast {
@@ -82,6 +86,12 @@ export default function App() {
     setToasts((prev) => [...prev.slice(-3), { id, kind, text }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5200);
   }, []);
+
+  const updater = useUpdater(
+    config,
+    (next) => setConfig(next),
+    pushToast
+  );
 
   const refresh = useCallback(async () => {
     const request = ++refreshSeq.current;
@@ -803,6 +813,32 @@ export default function App() {
           onClose={() => setSwitchProgress(null)}
         />
       )}
+      <UpdateDialog
+        open={updater.dialogOpen}
+        update={updater.update}
+        installKind={updater.installInfo?.installKind ?? null}
+        action={updater.action}
+        progress={updater.progress}
+        error={updater.error}
+        onClose={updater.closeDialog}
+        onUpdate={() => void updater.startUpdate()}
+        onSkip={() => void updater.skipVersion()}
+        onRestart={() => void updater.restart()}
+        onManualDownload={updater.manualDownload}
+      />
+      {updater.migrationNotice && (
+        <UpdateMigrationNotice
+          info={updater.migrationNotice}
+          onClose={updater.dismissMigration}
+        />
+      )}
+      {updater.versionJump && (
+        <VersionJumpNotice
+          version={updater.versionJump.version}
+          notes={updater.versionJump.notes}
+          onClose={updater.dismissVersionJump}
+        />
+      )}
     </>
   );
 
@@ -1028,6 +1064,18 @@ export default function App() {
 
           <div className="topbar-right">
             {noticesButton}
+            {updater.action === "ready" ? (
+              <button
+                className="btn primary update-chip"
+                onClick={() => void updater.restart()}
+              >
+                重启更新
+              </button>
+            ) : updater.update && !updater.dialogOpen ? (
+              <button className="btn update-chip" onClick={updater.openDialog}>
+                更新 v{updater.update.version}
+              </button>
+            ) : null}
             <button
               className="cover-button"
               onClick={() => setCoverOpen(true)}
@@ -1076,6 +1124,15 @@ export default function App() {
             onSchedulerEnabled={toggleMaster}
             onSyncEnabled={toggleSync}
             onCatchUpMissedWindow={toggleCatchUp}
+            currentVersion={updater.currentVersion}
+            updateChecking={updater.checking}
+            updateAutoCheck={updater.autoCheck}
+            updateSkippedVersion={updater.skippedVersion}
+            updateLastCheckAt={updater.lastCheckAt}
+            installKind={updater.installInfo?.installKind ?? null}
+            onUpdateAutoCheck={(enabled) => void updater.setAutoCheck(enabled)}
+            onCheckUpdate={() => void updater.checkNow(true)}
+            onClearSkippedVersion={() => void updater.clearSkippedVersion()}
             onRefreshInterval={patchRefreshInterval}
             onUiRefreshInterval={patchUiRefreshInterval}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}

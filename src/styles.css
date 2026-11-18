@@ -3126,3 +3126,191 @@ button:disabled {
   .launch, .launch * { animation: none !important; transition: none !important; }
   .egg-crack { stroke-dashoffset: 0; }
 }
+
+/* ==========================================================================
+   自动更新弹窗
+   ========================================================================== */
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(11 11 13 / 32%);
+  backdrop-filter: blur(2px);
+}
+.modal {
+  width: min(620px, 100%);
+  max-height: calc(100vh - 48px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--surface);
+  border-radius: var(--r-xl);
+  box-shadow: var(--shadow-lg);
+}
+.modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 22px 10px;
+}
+.modal-header h2 {
+  margin: 0;
+  font-size: 18px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+.modal-close {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 8px;
+}
+.modal-close:hover {
+  background: var(--surface-2);
+}
+.modal-body {
+  padding: 0 22px 8px;
+  overflow-y: auto;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  flex-wrap: wrap;
+  padding: 14px 22px 18px;
+  border-top: 1px solid var(--line);
+}
+.update-modal {
+  width: min(620px, 100%);
+}
+.update-body {
+  display: grid;
+  gap: 10px;
+}
+.update-version-line {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.update-version {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.03em;
+}
+.update-current,
+.update-date {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.update-hint {
+  margin: 0;
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.6;
+}
+.update-path {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  word-break: break-all;
+}
+.update-progress {
+  display: grid;
+  gap: 6px;
+}
+.update-progress-track {
+  height: 8px;
+  border-radius: 999px;
+  background: var(--surface-3);
+  overflow: hidden;
+}
+.update-progress-fill {
+  height: 100%;
+  border-radius: 999px;
+  background: var(--accent);
+  transition: width 0.2s var(--ease-out);
+}
+.update-progress span {
+  color: var(--text-2);
+  font-size: 12px;
+}
+.update-ready {
+  color: var(--green);
+}
+.update-error {
+  display: grid;
+  justify-items: start;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--red) 8%, var(--surface));
+  color: var(--red);
+  font-size: 12px;
+}
+.update-error p {
+  margin: 0;
+}
+.update-notes-block {
+  border-top: 1px solid var(--line);
+  padding-top: 12px;
+}
+.update-notes-block > h3 {
+  margin: 0 0 8px;
+  font-size: 13px;
+  font-weight: 650;
+}
+.update-notes {
+  color: var(--text-2);
+  font-size: 13px;
+  line-height: 1.65;
+}
+.update-notes h3 {
+  margin: 10px 0 4px;
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 650;
+}
+.update-notes h4 {
+  margin: 8px 0 4px;
+  color: var(--text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+.update-notes ul {
+  margin: 4px 0 8px;
+  padding-left: 18px;
+}
+.update-notes li {
+  margin: 3px 0;
+}
+.update-notes p {
+  margin: 4px 0 8px;
+}
+.update-notes-empty {
+  margin: 0;
+  color: var(--text-3);
+  font-size: 12px;
+}
+.update-actions {
+  align-items: center;
+}
+.update-chip {
+  border: 1px solid color-mix(in srgb, var(--blue) 35%, var(--line));
+  color: var(--blue);
+  background: var(--surface);
+}
+.update-chip:hover {
+  background: color-mix(in srgb, var(--blue) 7%, var(--surface));
+}

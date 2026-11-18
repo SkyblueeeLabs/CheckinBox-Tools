@@ -170,12 +170,98 @@ impl Default for AgentVisibility {
     }
 }
 
+/// 自动更新设置。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdateConfig {
+    /// 启动后自动检查更新（默认开）
+    #[serde(default = "default_true")]
+    pub auto_check: bool,
+    /// 自动检查间隔（小时，默认 6）
+    #[serde(default = "default_update_interval_hours")]
+    pub check_interval_hours: u64,
+    /// 用户选择跳过的版本
+    #[serde(default)]
+    pub skipped_version: String,
+    /// 上次检查时间（Unix 秒）
+    #[serde(default)]
+    pub last_check_at: i64,
+    /// 上次运行的版本，用于重启后的版本跳跃提示
+    #[serde(default)]
+    pub last_run_version: String,
+    /// 下载/安装前保存的更新说明，重启后展示
+    #[serde(default)]
+    pub pending_notes_version: String,
+    #[serde(default)]
+    pub pending_notes: String,
+}
+
+fn default_update_interval_hours() -> u64 {
+    6
+}
+
+impl Default for UpdateConfig {
+    fn default() -> Self {
+        Self {
+            auto_check: true,
+            check_interval_hours: default_update_interval_hours(),
+            skipped_version: String::new(),
+            last_check_at: 0,
+            last_run_version: String::new(),
+            pending_notes_version: String::new(),
+            pending_notes: String::new(),
+        }
+    }
+}
+
+/// 前端只更新传入的字段，其余保持不变。
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct UpdateConfigPatch {
+    pub auto_check: Option<bool>,
+    pub check_interval_hours: Option<u64>,
+    pub skipped_version: Option<String>,
+    pub last_check_at: Option<i64>,
+    pub last_run_version: Option<String>,
+    pub pending_notes_version: Option<String>,
+    pub pending_notes: Option<String>,
+}
+
+impl UpdateConfig {
+    pub fn apply_patch(&mut self, patch: &UpdateConfigPatch) {
+        if let Some(value) = patch.auto_check {
+            self.auto_check = value;
+        }
+        if let Some(value) = patch.check_interval_hours {
+            self.check_interval_hours = value.max(1);
+        }
+        if let Some(value) = &patch.skipped_version {
+            self.skipped_version = value.clone();
+        }
+        if let Some(value) = patch.last_check_at {
+            self.last_check_at = value;
+        }
+        if let Some(value) = &patch.last_run_version {
+            self.last_run_version = value.clone();
+        }
+        if let Some(value) = &patch.pending_notes_version {
+            self.pending_notes_version = value.clone();
+        }
+        if let Some(value) = &patch.pending_notes {
+            self.pending_notes = value.clone();
+        }
+    }
+}
+
 /// 应用配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AppConfig {
     #[serde(default)]
     pub scheduler: SchedulerConfig,
+    /// 自动更新设置。
+    #[serde(default)]
+    pub update: UpdateConfig,
     /// 每个 agent 当前激活（默认使用）的账号 id。
     /// 「多账号切换」就是改这个值。
     #[serde(default)]
@@ -212,6 +298,7 @@ impl Default for AppConfig {
     fn default() -> Self {
         Self {
             scheduler: SchedulerConfig::default(),
+            update: UpdateConfig::default(),
             active_accounts: BTreeMap::new(),
             alert_thresholds: BTreeMap::new(),
             agent_order: Vec::new(),

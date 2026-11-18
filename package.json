@@ -1,7 +1,7 @@
 {
   "name": "checkinbox",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "type": "module",
   "description": "聚合 AI 编程工具每日签到",
   "scripts": {
@@ -11,10 +11,14 @@
     "test": "vitest run",
     "tauri": "tauri",
     "tauri:dev": "tauri dev",
-    "tauri:build": "tauri build --no-bundle --features custom-protocol"
+    "tauri:build": "tauri build --no-bundle --features custom-protocol",
+    "tauri:build:installer": "tauri build --features custom-protocol",
+    "sync-version": "node scripts/sync-version.mjs"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.1.1",
+    "@tauri-apps/plugin-process": "^2.3.1",
+    "@tauri-apps/plugin-updater": "^2.10.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },

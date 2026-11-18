@@ -41,6 +41,8 @@ pub fn run() {
             tauri_plugin_autostart::MacosLauncher::LaunchAgent,
             Some(vec!["--silent"]),
         ))
+        .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::overview,
             commands::refresh_quota,
@@ -73,6 +75,8 @@ pub fn run() {
             commands::set_scheduler_enabled,
             commands::set_sync_enabled,
             commands::set_catch_up_missed_window,
+            commands::patch_update_config,
+            commands::get_install_info,
             commands::set_refresh_interval,
             commands::set_ui_refresh_interval,
             commands::set_active_account,

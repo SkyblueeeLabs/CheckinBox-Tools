@@ -96,6 +96,9 @@ export const api = {
     invoke<AppConfig>("set_sync_enabled", { enabled }),
   setCatchUpMissedWindow: (enabled: boolean) =>
     invoke<AppConfig>("set_catch_up_missed_window", { enabled }),
+  patchUpdateConfig: (patch: import("./types").UpdateConfigPatch) =>
+    invoke<AppConfig>("patch_update_config", { patch }),
+  getInstallInfo: () => invoke<import("./types").InstallInfo>("get_install_info"),
   setRefreshInterval: (providerId: string, minutes: number) =>
     invoke<AppConfig>("set_refresh_interval", { providerId, minutes }),
   setUiRefreshInterval: (seconds: number) =>

@@ -28,14 +28,15 @@
 ## 2. 定位与边界
 
 **做**：本机客户端的登录态复用、每日领取、积分/趋势展示、自动调度、签到流水、
-客户端换号、系统托盘常驻。Trae CN 每日签到与积分（2026-11-17 接入）。
+客户端换号、系统托盘常驻。Trae CN 每日签到与积分（2026-11-17 接入）；
+自动更新（NSIS 安装版，2026-11-18 接入）。
 
 **不做**（刻意的）：
 
 - ~~不做 Trae~~ → 2026-11-17 起已接入 Trae CN；多账号与换号在后续阶段补。
 - 不做「每个账号一份隔离的客户端 userData」—— 那是更大的架构改动（见 `core/launcher.rs` 顶部注释）。
 - 不做云端同步 / 多机共享 —— 凭据 DPAPI 加密天然绑定本机本用户。
-- 不做自动更新。
+- 自动更新不覆盖便携版/MSI 版：只提示下载新版；只有 NSIS 安装版走自动安装。
 
 ---
 
@@ -63,6 +64,7 @@
 | 换号会话保留（WorkBuddy 迁移开关；Qoder 本机会话与工作区目录默认共享、切号不搬库） | ✅ 有 WorkBuddy 合并与备份测试 | `core/chat_sync.rs` |
 | 历史备份管理（设置页 tab：按平台列出每次换号备份，逐条/按天批量删除） | ✅ 有前端测试（只列 `_backups`，账号归档不可删） | `components/BackupPanel.tsx` |
 | 换号前检测客户端是否在运行（运行则拦截） | ✅ 已实测（Toolhelp32 快照） | `core/launcher.rs::client_process_state`（三态）、`is_running`（布尔兼容层） |
+| 自动更新（NSIS 安装版） | ✅ v0.1.0→v0.2.0 覆盖安装、安装形态识别、`latest.json` 签名清单已验证；完整下载/安装待发布 v0.2.1 后复验 | `tauri-plugin-updater`、`scripts/build-update-manifest.mjs`、`components/UpdateDialog.tsx`、`docs/auto-update.md` |
 | MiniMax 客户端运行态守卫（三态 `Running`/`Absent`/`Unknown`，未知按「可能在跑」处理，不顶掉客户端 RT） | ✅ 有单测 | `core/launcher.rs`、`providers/minimax.rs::allow_self_refresh` |
 | MiniMax 换号备份改成**多代成组**（`auth.json` + `auth-state.json` 同代，可列出/回滚/删除/裁剪） | ✅ 有单测 | `core/client_backup.rs`、`commands.rs` |
 | MiniMax 设备授权导入记录客户端登录态路径（`auth_file`，只记路径不取凭据） | ✅ | `providers/minimax.rs::local_auth_path` |
@@ -87,7 +89,7 @@
 | 签到记录 id 副名字 + 每 agent 打码开关 + 按 id 解析当前名字 | ✅ 有前端测试 | `LogPanel.tsx`、`lib/mask.ts` |
 | 命令行入口（`--selftest` / `--import-local` / `--device-auth` / `--switch-client`） | ✅ | `main.rs` |
 | 独立 exe / NSIS / MSI 打包 | ✅ | 见 README「快速开始」 |
-| 单元测试 | ✅ Rust **86 passed / 0 failed / 9 ignored**（诊断测试默认跳过）。分项：调度 3 + 配置 7 + provider 2 + 定位/进程 **5**（含进程三态 1）+ 换号 6 + 聊天同步 10 + **多代备份 4** + OSCrypt 4 + 数据目录迁移/降级 4 + WorkBuddy 12 + Qoder 6 + MiniMax **1**（刷新许可 9 格真值表）+ Zcode 14 + 命令层 6 + 通知去重 1 | `cargo test` |
+| 单元测试 | ✅ Rust **112 passed / 0 failed / 15 ignored**（诊断测试默认跳过）；前端 **144 passed** | `cargo test --lib`、`npx vitest run` |
 | 前端自动化测试 | ✅ 103 个（分组聚合 + 账号卡/签到记录渲染/折叠 + 聊天同步开关 + 设置页 tab/折叠/关闭行为/通知开关 + 关闭确认框 + 备份管理 + 到期计算/到期文案/总览到期列表 + Qoder 本地批次 + Zcode 不代领分支） | `npm test` |
 | CI | ❌ 无 | — |
 
@@ -158,6 +160,7 @@ scheduler_loop（30s）
 | **确定性随机分钟偏移**（FNV-1a of `date:key`） | 多账号同时打同一上游容易被风控 | 同账号同一天重启后计划不变，可复现 |
 | **时间窗内补跑 + 窗变更重排** | 晚启动不该整天漏签；改窗口后旧计划会失效 | `scheduler.rs::roll_over` 会清掉「已处理」标记 |
 | **错过时间窗补签**（2026-11-18） | 软件没开时窗口会整段错过 | 全局开关默认开；窗口结束后每账号每天补跑一次；失败也记补过，避免 30 秒重试；窗口未开始的平台不提前签 |
+| **自动更新走 Tauri updater + latest.json**（2026-11-18） | 旧版没有更新模块，不能远程推策略 | NSIS 安装版自动检查/下载/安装；便携/MSI 提示下载；`v0.1.0` 需手动安装一次桥接版；更新说明来自 `CHANGELOG.md` |
 | **流水只记「成功（当天每账号一条）」和「失败（10 分钟节流）」** | 「今日已签」反复落没有信息量，只会刷屏（2026-10-26 用户反馈）；失败不节流会被调度器 30 秒重试刷成灾难（2026-10-27 实测 16 分钟 32 条） | `record_result` 按状态判定（`should_record_status`），成功用 `logging::has_success_today` 去重、失败用 `has_recent_failure` 节流；`recent()` 读取时过滤历史 already 存量（磁盘原始数据保留） |
 | **跨天强制同步，不看间隔** | 否则界面会停在昨天的「今日已签」 | 每天第一次同步一定发生 |
 | **活动周期用「今天 10:00 起的窗口」判定** | 活动行是跨天窗口（10:00 → 次日 09:59） | 修掉了「10:00 前显示今日已签」的假阳性，有 6 个单测 |

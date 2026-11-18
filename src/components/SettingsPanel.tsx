@@ -1,5 +1,6 @@
 import { useMemo, useState, type ReactNode } from "react";
 import type { AppConfig, CloseAction, Overview } from "../lib/types";
+import { updateInstallKindLabel } from "../lib/update";
 import TimeInput from "./TimeInput";
 import BackupPanel from "./BackupPanel";
 
@@ -78,6 +79,15 @@ interface Props {
   onSchedulerEnabled: (enabled: boolean) => void;
   onSyncEnabled: (enabled: boolean) => void;
   onCatchUpMissedWindow?: (enabled: boolean) => void;
+  currentVersion?: string;
+  updateChecking?: boolean;
+  updateAutoCheck?: boolean;
+  updateSkippedVersion?: string;
+  updateLastCheckAt?: number;
+  installKind?: "nsis" | "msi" | "portable" | null;
+  onUpdateAutoCheck?: (enabled: boolean) => void;
+  onCheckUpdate?: () => void;
+  onClearSkippedVersion?: () => void;
   onRefreshInterval: (providerId: string, minutes: number) => void;
   onUiRefreshInterval: (seconds: number) => void;
   onScheduleChange: (
@@ -110,6 +120,15 @@ export default function SettingsPanel({
   onSchedulerEnabled,
   onSyncEnabled,
   onCatchUpMissedWindow,
+  currentVersion,
+  updateChecking,
+  updateAutoCheck,
+  updateSkippedVersion,
+  updateLastCheckAt,
+  installKind,
+  onUpdateAutoCheck,
+  onCheckUpdate,
+  onClearSkippedVersion,
   onRefreshInterval,
   onUiRefreshInterval,
   onScheduleChange,
@@ -137,6 +156,15 @@ export default function SettingsPanel({
     });
   const closeLabel =
     CLOSE_OPTIONS.find((o) => o.value === config.closeAction)?.label ?? "";
+  const autoCheck = updateAutoCheck !== false;
+  const lastCheckLabel = updateLastCheckAt
+    ? new Date(updateLastCheckAt * 1000).toLocaleString("zh-CN", {
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : "";
 
   // 界面自动刷新：预设下拉 + 自定义秒数（10–3600），照上游 onBlur/Enter 提交
   const uiSeconds = config.uiRefreshSeconds ?? 45;
@@ -426,6 +454,77 @@ export default function SettingsPanel({
               })}
             </tbody>
           </table>
+        </SetBlock>
+
+        {/* ---------- 软件更新 ---------- */}
+        <SetBlock
+          title="软件更新"
+          meta={currentVersion ? `v${currentVersion}` : undefined}
+          open={openBlocks.has("update")}
+          onToggle={() => toggleBlock("update")}
+        >
+          <p className="set-hint">
+            安装版支持自动更新；便携版和 MSI 版会提示下载新版。
+            {installKind && installKind !== "nsis"
+              ? ` 当前是${updateInstallKindLabel(installKind)}。`
+              : ""}
+          </p>
+          <div className="set-row">
+            <div className="set-row-label">
+              <span className="set-row-title">自动检查更新</span>
+              <span className="set-row-desc">
+                启动后自动检查，之后按间隔检查；默认开启。
+              </span>
+            </div>
+            <div className="set-row-control">
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={autoCheck}
+                  onChange={(e) => onUpdateAutoCheck?.(e.target.checked)}
+                  aria-label="自动检查更新"
+                />
+                <span>{autoCheck ? "已开启" : "已关闭"}</span>
+              </label>
+            </div>
+          </div>
+          <div className="set-row">
+            <div className="set-row-label">
+              <span className="set-row-title">当前版本</span>
+              <span className="set-row-desc">
+                {currentVersion ? `v${currentVersion}` : "版本未知"}
+                {lastCheckLabel
+                  ? ` · 上次检查 ${lastCheckLabel}`
+                  : " · 还没有检查过更新"}
+              </span>
+            </div>
+            <div className="set-row-control">
+              <button
+                className="btn small"
+                onClick={onCheckUpdate}
+                disabled={updateChecking}
+              >
+                {updateChecking ? "检查中…" : "检查更新"}
+              </button>
+            </div>
+          </div>
+          {updateSkippedVersion && (
+            <div className="set-row">
+              <div className="set-row-label">
+                <span className="set-row-title">
+                  已跳过 v{updateSkippedVersion}
+                </span>
+                <span className="set-row-desc">
+                  该版本不会再自动弹窗；新版本仍会提示。
+                </span>
+              </div>
+              <div className="set-row-control">
+                <button className="btn small" onClick={onClearSkippedVersion}>
+                  取消跳过
+                </button>
+              </div>
+            </div>
+          )}
         </SetBlock>
 
         {/* ---------- 关闭窗口 ---------- */}
