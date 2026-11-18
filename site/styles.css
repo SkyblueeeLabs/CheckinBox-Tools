@@ -266,6 +266,40 @@ code {
 
 /* ---------- hero ---------- */
 
+.release-banner {
+  background: var(--accent-soft);
+  border-block: 1px solid rgba(185, 99, 19, 0.16);
+  color: var(--ink-2);
+  font-size: 0.88rem;
+}
+
+.release-banner-inner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px 18px;
+  padding-block: 10px;
+}
+
+.release-banner strong {
+  color: var(--ink);
+  white-space: nowrap;
+}
+
+.release-banner a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: #8d460d;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.release-banner a:hover {
+  text-decoration: underline;
+  text-underline-offset: 0.22em;
+}
+
 .hero {
   padding: 64px 0 88px;
 }
@@ -512,38 +546,6 @@ code {
   font-size: 0.82rem;
 }
 
-.platform-welfare {
-  margin-top: 18px;
-  padding: 18px 20px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: var(--surface);
-}
-
-.platform-welfare summary {
-  cursor: pointer;
-  font-weight: 600;
-  color: var(--ink);
-}
-
-.platform-welfare ul {
-  margin: 12px 0;
-  padding-left: 1.2em;
-  color: var(--ink-2);
-  font-size: 0.9rem;
-  line-height: 1.7;
-}
-
-.platform-welfare li + li {
-  margin-top: 4px;
-}
-
-.platform-welfare p {
-  margin: 6px 0 0;
-  color: var(--muted);
-  font-size: 0.82rem;
-}
-
 /* ---------- screenshots ---------- */
 
 .shots {
@@ -562,6 +564,15 @@ code {
 
 .shot.wide {
   grid-column: 1 / -1;
+}
+
+.shot-link {
+  display: block;
+  cursor: zoom-in;
+}
+
+.shot-link:focus-visible {
+  outline-offset: -4px;
 }
 
 .shot img {
@@ -927,6 +938,17 @@ code {
 @media (max-width: 520px) {
   .wrap {
     width: min(var(--wrap), 100% - 32px);
+  }
+
+  .release-banner-inner {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    row-gap: 3px;
+  }
+
+  .release-banner p {
+    grid-column: 1 / -1;
+    grid-row: 2;
   }
 
   .hero h1 {

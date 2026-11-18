@@ -92,6 +92,16 @@
     </header>
 
     <main id="main">
+      <aside class="release-banner" aria-label="版本公告">
+        <div class="wrap release-banner-inner">
+          <strong>v0.2.0 已发布</strong>
+          <p>安装版支持自动更新，错过签到时段也能补签。</p>
+          <a href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/tag/v0.2.0">
+            查看更新说明 <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
+          </a>
+        </div>
+      </aside>
+
       <section class="hero">
         <div class="wrap hero-grid">
           <div class="hero-copy">
@@ -121,7 +131,7 @@
 
           <figure class="hero-shot">
             <div class="shot-frame">
-              <img src="assets/launch.png" alt="CheckinBox 启动页：每个平台一枚赛博鸡蛋，显示待领与已领状态" width="1280" height="800" />
+              <img src="assets/launch.png" alt="CheckinBox 启动页：六个平台的赛博鸡蛋，显示待领与已领状态" width="2560" height="1600" fetchpriority="high" />
             </div>
             <span class="float-chip chip-claim"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg>一键领蛋</span>
             <span class="float-chip chip-auto"><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>自动签到</span>
@@ -213,17 +223,6 @@
               <p>每日 100 签到，会员 200</p>
             </article>
           </div>
-
-          <details class="platform-welfare">
-            <summary>Trae CN 平台福利说明</summary>
-            <ul>
-              <li><b>注册即送 1,500 积分</b>：注册成功即刻到账，新用户一次性。</li>
-              <li><b>每日签到</b>：免费用户 100 积分/天，会员 200 积分/天；签到积分 31 天有效，本工具可自动领取。</li>
-              <li><b>邀好友赚积分</b>：邀请好友，双方都有积分拿；额度与资格以官方活动规则为准。</li>
-              <li><b>每月首次登录</b>：自动到账 500 积分，自然月内有效，过期清零。</li>
-            </ul>
-            <p>除每日签到外，其余为 Trae 平台福利，本工具只展示、不代领。积分规则、有效期与活动资格以 Trae 官方页面为准。</p>
-          </details>
         </div>
       </section>
 
@@ -232,20 +231,26 @@
           <header class="section-head">
             <p class="eyebrow">界面一览</p>
             <h2>界面积分信息清晰</h2>
-            <p class="section-sub">首页、账号卡、签到记录，数字对得上。</p>
+            <p class="section-sub">截图使用演示数据，点击可查看高清原图。</p>
           </header>
 
           <div class="shots">
             <figure class="shot wide">
-              <img src="assets/dashboard.png" alt="CheckinBox 首页总览：剩余积分、今日已签、平台卡片" width="1080" height="680" />
+              <a class="shot-link" href="assets/dashboard.png" aria-label="查看首页总览原图">
+                <img src="assets/dashboard.png" alt="CheckinBox 首页总览：剩余积分、今日已签、平台卡片" width="2400" height="1600" loading="lazy" />
+              </a>
               <figcaption>首页总览</figcaption>
             </figure>
             <figure class="shot">
-              <img src="assets/agent-panel.png" alt="平台面板：账号卡片、积分和签到状态" width="1080" height="680" />
+              <a class="shot-link" href="assets/agent-panel.png" aria-label="查看平台面板原图">
+                <img src="assets/agent-panel.png" alt="平台面板：账号卡片、积分和签到状态" width="2400" height="1600" loading="lazy" />
+              </a>
               <figcaption>平台面板</figcaption>
             </figure>
             <figure class="shot">
-              <img src="assets/checkin-logs.png" alt="签到记录：按平台过滤，账号可打码" width="1080" height="680" />
+              <a class="shot-link" href="assets/checkin-logs.png" aria-label="查看签到记录原图">
+                <img src="assets/checkin-logs.png" alt="签到记录：按平台分组，账号已打码" width="2400" height="1600" loading="lazy" />
+              </a>
               <figcaption>签到记录</figcaption>
             </figure>
           </div>
