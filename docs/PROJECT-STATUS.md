@@ -28,12 +28,11 @@
 ## 2. 定位与边界
 
 **做**：本机客户端的登录态复用、每日领取、积分/趋势展示、自动调度、签到流水、
-客户端换号、系统托盘常驻。
+客户端换号、系统托盘常驻。Trae CN 每日签到与积分（2026-11-17 接入）。
 
 **不做**（刻意的）：
 
-- 不做 Trae —— 已有 Cockpit Tools 等工具覆盖，不重复造。
-  （WorkBuddy 原也在此列，2026-10-28 已接入，见 §3。）
+- ~~不做 Trae~~ → 2026-11-17 起已接入 Trae CN；多账号与换号在后续阶段补。
 - 不做「每个账号一份隔离的客户端 userData」—— 那是更大的架构改动（见 `core/launcher.rs` 顶部注释）。
 - 不做云端同步 / 多机共享 —— 凭据 DPAPI 加密天然绑定本机本用户。
 - 不做自动更新。
@@ -158,6 +157,7 @@ scheduler_loop（30s）
 | **调度配置按 agent 独立，无全局时间窗** | Qoder 每天 10:00 才刷新活动，其他平台是自然日 | 每个平台可以配不同窗口；UI 里配置嵌在各 agent 面板顶部 |
 | **确定性随机分钟偏移**（FNV-1a of `date:key`） | 多账号同时打同一上游容易被风控 | 同账号同一天重启后计划不变，可复现 |
 | **时间窗内补跑 + 窗变更重排** | 晚启动不该整天漏签；改窗口后旧计划会失效 | `scheduler.rs::roll_over` 会清掉「已处理」标记 |
+| **错过时间窗补签**（2026-11-18） | 软件没开时窗口会整段错过 | 全局开关默认开；窗口结束后每账号每天补跑一次；失败也记补过，避免 30 秒重试；窗口未开始的平台不提前签 |
 | **流水只记「成功（当天每账号一条）」和「失败（10 分钟节流）」** | 「今日已签」反复落没有信息量，只会刷屏（2026-10-26 用户反馈）；失败不节流会被调度器 30 秒重试刷成灾难（2026-10-27 实测 16 分钟 32 条） | `record_result` 按状态判定（`should_record_status`），成功用 `logging::has_success_today` 去重、失败用 `has_recent_failure` 节流；`recent()` 读取时过滤历史 already 存量（磁盘原始数据保留） |
 | **跨天强制同步，不看间隔** | 否则界面会停在昨天的「今日已签」 | 每天第一次同步一定发生 |
 | **活动周期用「今天 10:00 起的窗口」判定** | 活动行是跨天窗口（10:00 → 次日 09:59） | 修掉了「10:00 前显示今日已签」的假阳性，有 6 个单测 |
@@ -173,6 +173,10 @@ scheduler_loop（30s）
 | **提醒由 Rust 侧写入本地收件箱**（2026-11-09） | 主窗口隐藏时照常接收，恢复后可回看 | 失败、低额度、可领取按天去重，到期按最早到期时刻去重。自动提醒开关沿用 `config.notificationsEnabled` |
 | **到期口径统一 7 天**（2026-10-29） | 前后端各算一次容易不一致 | Rust `Quota::expiring_within(7, now)` 与前端 `lib/expiry.ts` 使用同一窗口与「只算 remaining>0 且未过期」规则；首页列表按 daysLeft 升序、同天按剩余降序；9999 年视为长期有效 |
 | **到期字段按平台各自解析**（2026-10-29 真机核对） | 各平台字段语义不同，猜错会误报 | MiniMax 用每批 `expire_at_ms`；WorkBuddy 优先 `PackageEndTime`、兼容秒/毫秒/字符串；Qoder `expiresAt` 9999 → 长期；妙手只用订阅 `expireTime`，**`nextRefreshTime` 不能当到期** |
+| **Trae 刷新与客户端共存** | 当前登录账号在客户端运行时自行刷新会轮换 RT，可能把桌面端顶掉 | `ensure_fresh_trae`：Same + Running/Unknown 只捕获；Same + Absent 才刷新并回写 storage；非当前账号才自刷；OAuth 账号独立 |
+| **Trae 多账号设备号** | 同一设备一天只能签一个账号（9095） | 导入时给每个账号分配 `checkin_device_id`；第一个账号用真机号，其余同源衍生；已有合法号沿用 |
+| **Trae 换号先校验 CheckLogin**（2026-11-17） | 手动登录另一账号会作废旧账号会话；写死凭据会让客户端启动后清空登录态 | `switch_cred_guard`：临期刷新 → `CheckLogin` → 强制刷新再校验；失败拒绝写入并重新拉起当前客户端 |
+| **Trae 多账号用 OAuth 独立授权**（2026-11-17） | 客户端单一登录态，手动换号会作废旧会话 | 每个账号独立 refresh token；OAuth token 绑定客户端同一把设备密钥，切进客户端后可继续续期 |
 | **客户端运行中刷新护栏**（2026-11-02 实测掉线） | 旧逻辑：`capture_current_cred` 探测失败 → 当作非当前账号，自行刷新 RT；而 RT 每次轮换，客户端手里的旧 RT 随即 `invalid_grant`（16:00:46 实测） | 三态 `ClientLoginState`：`Same` 只捕获不刷、`Other` 可刷、**`Unknown` 且客户端运行时不刷**；401 抢救同样先判断。宁可本次签到失败，也不能把客户端顶下线 |
 | **客户端运行态用三态而不是布尔**（2026-11-12） | 布尔 `is_running` 分不出「探测失败」和「确实没跑」；上游正是这样在客户端运行时抄 RT 去刷新，RT 一轮换客户端就掉线（2026-11-11 在上游实测复现） | `core/launcher.rs::client_process_state` 返回 `Running`/`Absent`/`Unknown`（非 Windows 一律 `Unknown`）；`allow_self_refresh` 只在 `Absent` 时允许自刷新，`Unknown` 保守当作「可能在跑」；401 路径新增 `blocked` 原因写进错误文案 |
 | **换号备份按「代」成组多代留存**（2026-11-12） | 单一 `.bak` 覆盖写，切错就回不去；`auth.json` 与 `auth-state.json` 缺一半会让客户端弹登录框 | `core/client_backup.rs`：每次换号把 `auth.json` + `auth-state.json` + `meta.json` 存成一代；新增 `list/restore/delete/prune_client_login_backups` 四个 Tauri 命令与 `--list-client-backups` / `--restore-client-backup` 两个 CLI 入口 |
@@ -305,6 +309,27 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
      （HTML 页的 401 Authorization Required 是 nginx 层拦的）。
 - 字段兼容 snake_case（`today_checked_in`）和 camelCase（`todayCheckedIn`）两种响应。
 - 国际版/部分账号「签到活动未开启」（`active:false`）时如实显示「暂无可签」，不报错。
+
+### Trae CN（`providers/trae.rs`）
+
+- 本机登录态在 `%APPDATA%\Trae CN\User\globalStorage\storage.json`；`iCubeAuthInfo://*`
+  是 `tc` 格式（AES-128-CBC + SHA-512 完整性校验），支持标准/private 两种 magic。
+- 设备键 `iCubeAuthInfo://icube-dc:<号>` 里是 EC P-256 密钥对；刷新 token 要用私钥对
+  `POST\n/path\nClientID\nRefreshToken\nTimestamp\nNonce` 签名，签名格式 DER + base64。
+- 签到状态/领取：`checked_in` / `enable` / `credits`；积分余额取
+  `usage_summary.total_amount - consumed_amount`，`total_balance` 只做交叉校验。
+- 错误码：`9074` 设备号不被认可，`9095` 本设备今日已签；两者都不能记成功或原号重试。
+- 2026-11-17 本机实测：未签时 `credits=100`，claim 返回 code 0，余额 500→600，状态变为
+  `checked_in=true`。详见 `docs/trae-hardening.md`。
+- 换号：写入前必须 `CheckLogin`。实测在客户端手动登录新号后，老号的 access/refresh 均已失效，
+  直接写会让客户端启动后清空登录态；已加预检，失败时重新拉起当前客户端。
+- 浏览器授权：PKCE + 127.0.0.1 回调 + v3 AuthCode 交换；OAuth token 绑定客户端同一把设备密钥，
+  独立于客户端当前登录。2026-11-17 真机完成 A↔B↔A：storage 按代备份，会话目录共享未清空，
+  两个账号都可继续签到/续期。
+- 多账号签到：两个账号同机实测通过（A 用真机号、B 用同源衍生号），均 +100，未触发
+  9074/9095；B 的累计发放 2,100（注册 1,500 + 每月 500 + 签到 100）。
+- v3 刷新（DeviceProof）真机通过：OAuth 独立凭据刷新成功，新 token 回写账号池；旧 RT
+  是否立即失效未单独验证，实现始终持久化新值。
 
 ### 妙手（`providers/miaoshou.rs`）
 

@@ -22,7 +22,14 @@ tauri-build = { version = "2", features = [] }
 tauri = { version = "2", features = ["tray-icon"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "sync"] }
+tokio = { version = "1", features = [
+    "rt-multi-thread",
+    "macros",
+    "time",
+    "sync",
+    "net",
+    "io-util",
+] }
 reqwest = { version = "0.12", default-features = false, features = [
     "json",
     "gzip",
@@ -33,6 +40,10 @@ base64 = "0.22"
 sha2 = "0.10"
 # Electron safeStorage（OSCrypt v10）加解密：Qoder 客户端登录态 auth.v1.dat
 aes-gcm = "0.10"
+# Trae CN 客户端 storage.json 的 tc 加密（AES-128-CBC）与刷新 token 的 EC P-256 签名
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc", "block-padding"] }
+p256 = { version = "0.13", features = ["ecdsa", "pkcs8", "pem", "std"] }
 # 读 App Paths 注册表定位客户端 exe（W 版 API，中文路径无编码问题）
 winreg = "0.55"
 # 读 WorkBuddy（CodeBuddy）的 state.vscdb（SQLite）里的 safeStorage 凭据

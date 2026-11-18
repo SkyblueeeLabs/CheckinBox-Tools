@@ -72,6 +72,7 @@ pub fn run() {
             commands::set_agent_schedule,
             commands::set_scheduler_enabled,
             commands::set_sync_enabled,
+            commands::set_catch_up_missed_window,
             commands::set_refresh_interval,
             commands::set_ui_refresh_interval,
             commands::set_active_account,

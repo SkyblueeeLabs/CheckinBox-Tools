@@ -3,6 +3,7 @@ import qoder from "../assets/agents/qoder.png";
 import miaoshou from "../assets/agents/miaoshou.png";
 import workbuddy from "../assets/agents/workbuddy.png";
 import zcode from "../assets/agents/zcode.png";
+import trae from "../assets/agents/trae.png";
 
 /**
  * 各平台的官方图标（从本机客户端安装目录里取的原版，统一 96×96）：
@@ -13,6 +14,7 @@ import zcode from "../assets/agents/zcode.png";
  *                  旧版 CodeBuddy（D:\Programs\CodeBuddy），它的紫色吉祥物和
  *                  WorkBuddy 的绿色不是同一个图标，别拿错 exe
  *   Zcode        → 客户端 resources/icon_windows.png（1024×1024 → 96×96）
+ *   Trae CN      → 客户端 Trae CN.exe 的图标资源（32×32 放大到 96×96）
  */
 export const AGENT_ICONS: Record<string, string> = {
   minimax,
@@ -20,6 +22,7 @@ export const AGENT_ICONS: Record<string, string> = {
   miaoshou,
   workbuddy,
   zcode,
+  trae,
 };
 
 /** 取图标；没有的平台回退到 undefined，由调用方决定兜底显示。 */

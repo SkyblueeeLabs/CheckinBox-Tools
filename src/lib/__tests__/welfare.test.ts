@@ -83,6 +83,19 @@ function group(
 }
 
 describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是手动 / 节奏）", () => {
+  it("Trae CN：每日 → 注册 → 每月固定顺序，邀好友放说明", () => {
+    const w = welfareOf(group("trae", true, [account(100)]));
+    expect(w.benefits.map((b) => b.kind)).toEqual(["daily", "signup", "monthly"]);
+    expect(w.benefits[0].label).toBe("单账号 +100 积分/日");
+    expect(w.benefits[0].modeText).toBe("自动领取");
+    expect(w.benefits[1].label).toBe("注册送 1,500 积分");
+    expect(w.benefits[1].modeText).toBe("自动到账");
+    expect(w.benefits[2].label).toBe("每月 +500 积分");
+    expect(w.benefits[2].modeText).toBe("自动到账");
+    expect(w.extraNote).toBe("邀好友：双方都有积分（以官方为准）");
+    expect(w.title).toContain("邀好友");
+  });
+
   it("单账号金额：各账号不同时给区间，多账号合计放悬浮说明", () => {
     const w = welfareOf(group("minimax", true, [account(1000), account(400)]));
     expect(w.benefits[0].label).toBe("单账号 +400~1,000 积分/日");

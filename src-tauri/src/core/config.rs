@@ -95,6 +95,9 @@ pub struct SchedulerConfig {
     /// 只保留「到点签到」。跨天时的强制同步也一并被关掉。
     #[serde(default = "default_true")]
     pub sync_enabled: bool,
+    /// 错过时间窗后，软件启动时是否补跑一次（每天每账号最多一次）。
+    #[serde(default = "default_true")]
+    pub catch_up_missed_window: bool,
     /// 每个 agent 自己的配置；没有条目的 agent 用默认值
     #[serde(default)]
     pub agents: BTreeMap<String, AgentScheduleConfig>,
@@ -109,6 +112,7 @@ impl Default for SchedulerConfig {
         Self {
             enabled: true,
             sync_enabled: true,
+            catch_up_missed_window: true,
             agents: BTreeMap::new(),
         }
     }

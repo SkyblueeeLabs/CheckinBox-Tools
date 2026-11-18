@@ -167,6 +167,8 @@ export interface ProviderView {
   supportsDiscovery: boolean;
   /** 支持浏览器授权导入账号（设备码 / OAuth 页） */
   supportsOAuth: boolean;
+  /** 浏览器授权后端是否已就绪；缺省视为已就绪，未接入时后端可显式置 false */
+  oauthReady?: boolean;
   configured: boolean;
   hasClient: boolean;
   clientExe?: string | null;
@@ -319,6 +321,8 @@ export interface SchedulerConfig {
   enabled: boolean;
   /** 自动同步（积分 / 签到状态 / 账号资料）总开关 */
   syncEnabled: boolean;
+  /** 错过时间窗后，软件打开时是否补跑一次；缺省视为开启 */
+  catchUpMissedWindow?: boolean;
   agents: Record<string, AgentScheduleConfig>;
 }
 

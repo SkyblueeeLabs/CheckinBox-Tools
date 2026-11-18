@@ -24,6 +24,9 @@ pub struct AccountSchedule {
     /// 计划生成时的日期
     #[serde(default)]
     pub scheduled_date: String,
+    /// 错过时间窗后补跑过的日期；每天每账号最多补一次
+    #[serde(default)]
+    pub last_catch_up_date: Option<String>,
 }
 
 /// 调度状态。
@@ -99,6 +102,7 @@ impl SchedulerState {
                 // 计划被重排，说明之前那次执行是按**旧窗口**来的（跨天也算），
                 // 它的「已处理」标记不再可信，清掉让新计划重新跑一次。
                 entry.last_checked_date = None;
+                entry.last_catch_up_date = None;
             }
         }
     }
@@ -144,6 +148,22 @@ impl SchedulerState {
         }
     }
 
+    /// 今天是否已经尝试过「错过时间窗补跑」。
+    pub fn is_catch_up_attempted(&self, key: &str, date: &str) -> bool {
+        self.accounts
+            .get(key)
+            .and_then(|s| s.last_catch_up_date.as_deref())
+            .map(|d| d == date)
+            .unwrap_or(false)
+    }
+
+    /// 记录今天已经补跑过（无论成功失败，避免调度器每 30 秒重试）。
+    pub fn mark_catch_up_attempted(&mut self, key: &str, date: &str) {
+        if let Some(entry) = self.accounts.get_mut(key) {
+            entry.last_catch_up_date = Some(date.to_string());
+        }
+    }
+
     /// 某 agent 最近一次自动同步的 Unix 秒；从没同步过返回 None。
     pub fn last_sync_of(&self, provider: &str) -> Option<i64> {
         self.last_sync.get(provider).copied()
@@ -152,6 +172,43 @@ impl SchedulerState {
     /// 记录某 agent 的同步时刻。
     pub fn mark_synced(&mut self, provider: &str, ts: i64) {
         self.last_sync.insert(provider.to_string(), ts);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RunDecision {
+    Skip,
+    Run,
+    CatchUp,
+}
+
+/// 判断某个账号当前是否该执行签到。
+///
+/// - 窗口内且到点：`Run`（原有逻辑）
+/// - 窗口已结束、今天未签、补签开关开着且今天还没补过：`CatchUp`
+/// - 窗口还没开始 / 已经补过 / 关闭补签 / 今天已处理：`Skip`
+pub fn decide_run(
+    now_minute: u32,
+    scheduled_minute: u32,
+    end_minute: u32,
+    done: bool,
+    catch_up_enabled: bool,
+    catch_up_attempted: bool,
+) -> RunDecision {
+    if done {
+        return RunDecision::Skip;
+    }
+    if now_minute <= end_minute {
+        return if now_minute >= scheduled_minute {
+            RunDecision::Run
+        } else {
+            RunDecision::Skip
+        };
+    }
+    if catch_up_enabled && !catch_up_attempted {
+        RunDecision::CatchUp
+    } else {
+        RunDecision::Skip
     }
 }
 
@@ -200,6 +257,48 @@ mod tests {
         );
         assert_ne!(old, new);
         assert!(!s.is_done("qoder", "2026-10-23"), "重排后应重新执行");
+    }
+
+    #[test]
+    fn 补签决策_窗口前中后与开关() {
+        assert_eq!(
+            decide_run(399, 400, 480, false, true, false),
+            RunDecision::Skip /* 窗口未到点 */
+        );
+        assert_eq!(
+            decide_run(400, 400, 480, false, true, false),
+            RunDecision::Run
+        );
+        assert_eq!(
+            decide_run(480, 400, 480, false, true, false),
+            RunDecision::Run
+        );
+        assert_eq!(
+            decide_run(481, 400, 480, false, true, false),
+            RunDecision::CatchUp
+        );
+        assert_eq!(
+            decide_run(481, 400, 480, false, true, true),
+            RunDecision::Skip /* 今天已补过 */
+        );
+        assert_eq!(
+            decide_run(481, 400, 480, false, false, false),
+            RunDecision::Skip /* 补签开关关闭 */
+        );
+        assert_eq!(
+            decide_run(481, 400, 480, true, true, false),
+            RunDecision::Skip /* 今天已签 */
+        );
+    }
+
+    #[test]
+    fn 补签标记按日重置() {
+        let mut s = SchedulerState::default();
+        s.roll_over("2026-10-23", &["a".to_string()], 360, 480);
+        s.mark_catch_up_attempted("a", "2026-10-23");
+        assert!(s.is_catch_up_attempted("a", "2026-10-23"));
+        s.roll_over("2026-10-24", &["a".to_string()], 360, 480);
+        assert!(!s.is_catch_up_attempted("a", "2026-10-24"));
     }
 
     #[test]

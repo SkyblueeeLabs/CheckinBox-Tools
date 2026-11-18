@@ -34,6 +34,7 @@ pub struct AppState {
     pub qoder: Arc<crate::providers::qoder::QoderProvider>,
     pub minimax: Arc<crate::providers::minimax::MiniMaxProvider>,
     pub workbuddy: Arc<crate::providers::workbuddy::WorkBuddyProvider>,
+    pub trae: Arc<crate::providers::trae::TraeProvider>,
 }
 
 /// 账号池的全局句柄。providers 层的 401 抢救路径要读写池子，又不能反向依赖
@@ -45,10 +46,12 @@ impl AppState {
         let minimax = Arc::new(crate::providers::minimax::MiniMaxProvider::new());
         let qoder = Arc::new(crate::providers::qoder::QoderProvider::new());
         let workbuddy = Arc::new(crate::providers::workbuddy::WorkBuddyProvider::new());
+        let trae = Arc::new(crate::providers::trae::TraeProvider::new());
         let list: Vec<Arc<dyn Provider>> = vec![
             minimax.clone(),
             qoder.clone(),
             Arc::new(crate::providers::miaoshou::MiaoshouProvider::new()),
+            trae.clone(),
             workbuddy.clone(),
             Arc::new(crate::providers::zcode::ZcodeProvider::new()),
         ];
@@ -76,6 +79,7 @@ impl AppState {
             qoder,
             minimax,
             workbuddy,
+            trae,
         }
     }
 
@@ -181,6 +185,9 @@ pub struct ProviderView {
     /// （显式 rename：serde 的 camelCase 会把它转成 supportsOauth，不是 OAuth）
     #[serde(rename = "supportsOAuth")]
     pub supports_oauth: bool,
+    /// 浏览器授权后端是否已就绪。false = 按钮先展示「即将开放」。
+    #[serde(rename = "oauthReady")]
+    pub oauth_ready: bool,
     /// 是否已配置账号
     pub configured: bool,
     /// 本机是否装了该 agent 的客户端
@@ -635,9 +642,10 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 docs_url: p.docs_url().to_string(),
                 supports_discovery: matches!(
                     p.id(),
-                    "minimax" | "miaoshou" | "workbuddy" | "zcode" | "qoder"
+                    "minimax" | "miaoshou" | "workbuddy" | "zcode" | "qoder" | "trae"
                 ),
-                supports_oauth: matches!(p.id(), "qoder" | "minimax" | "workbuddy"),
+                supports_oauth: matches!(p.id(), "qoder" | "minimax" | "workbuddy" | "trae"),
+                oauth_ready: true,
                 configured: !store.list_of(p.id()).is_empty(),
                 has_client: exe.is_some(),
                 client_exe: exe.map(|p| p.to_string_lossy().to_string()),
@@ -983,6 +991,46 @@ async fn refresh_imported_account_label(
     }
 }
 
+/// Trae 的签到设备号分配：已有合法号沿用，否则用真机号/同源衍生号，
+/// 保证同一设备上的多个 Trae 账号不会撞 9095。
+fn assign_trae_checkin_device_id(
+    existing: &[(Account, serde_json::Value)],
+    account: &Account,
+    cred: &mut serde_json::Value,
+) {
+    if let Some((_, old)) = existing.iter().find(|(item, _)| item.id == account.id) {
+        if let Some(id) = old["checkin_device_id"]
+            .as_str()
+            .filter(|id| crate::providers::trae::is_valid_device_id(id))
+        {
+            cred["checkin_device_id"] = serde_json::json!(id);
+            cred["device_source"] = old
+                .get("device_source")
+                .cloned()
+                .unwrap_or(serde_json::Value::Null);
+            return;
+        }
+    }
+    let used: Vec<String> = existing
+        .iter()
+        .filter_map(|(_, old)| {
+            old["checkin_device_id"]
+                .as_str()
+                .filter(|id| crate::providers::trae::is_valid_device_id(id))
+                .map(str::to_string)
+        })
+        .collect();
+    let real = cred["login_device_id"].as_str().unwrap_or("");
+    let prefer_real = !used.iter().any(|id| id == real);
+    let id = crate::providers::trae::assign_checkin_device_id(
+        &account.id,
+        real,
+        &used,
+        prefer_real,
+    );
+    cred["checkin_device_id"] = serde_json::json!(id);
+}
+
 /// 把发现的账号加入账号池。
 #[tauri::command]
 pub async fn add_discovered_account(
@@ -1001,9 +1049,61 @@ pub async fn add_discovered_account(
         .into_iter()
         .map(|account| (account.id, account.label))
         .collect();
+
+    // Trae：一台设备一天只能签一个账号，导入时给每个账号分配唯一的签到设备号。
+    // 已在池里的账号沿用原设备号，避免把已经绑定好的号换掉。
+    let existing_trae: Vec<(Account, serde_json::Value)> = if provider_id == "trae" {
+        let store = state.store.lock().unwrap();
+        store
+            .list_of("trae")
+            .into_iter()
+            .filter_map(|account| {
+                store
+                    .credential("trae", &account.id)
+                    .ok()
+                    .map(|cred| (account, cred))
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+    let mut used_devices: Vec<String> = existing_trae
+        .iter()
+        .filter_map(|(_, cred)| {
+            cred["checkin_device_id"]
+                .as_str()
+                .filter(|id| crate::providers::trae::is_valid_device_id(id))
+                .map(str::to_string)
+        })
+        .collect();
+
     let mut refreshed = Vec::with_capacity(found.len());
-    for (mut account, cred) in found {
+    for (mut account, mut cred) in found {
         let account_id = account.id.clone();
+        if provider_id == "trae" {
+            let keep = existing_trae
+                .iter()
+                .find(|(existing, _)| existing.id == account.id)
+                .and_then(|(_, old)| old["checkin_device_id"].as_str())
+                .filter(|id| crate::providers::trae::is_valid_device_id(id));
+            let device_id = match keep {
+                Some(id) => id.to_string(),
+                None => {
+                    let real = cred["login_device_id"].as_str().unwrap_or("");
+                    let prefer_real = !used_devices.iter().any(|used| used == real);
+                    crate::providers::trae::assign_checkin_device_id(
+                        &account.id,
+                        real,
+                        &used_devices,
+                        prefer_real,
+                    )
+                }
+            };
+            cred["checkin_device_id"] = serde_json::json!(device_id);
+            if !used_devices.iter().any(|used| used == &device_id) {
+                used_devices.push(device_id);
+            }
+        }
         refresh_imported_account_label(
             provider.as_ref(),
             &mut account,
@@ -1070,6 +1170,11 @@ pub async fn begin_device_auth(
                 extra: serde_json::Value::Null,
             }
         }
+        "trae" => state
+            .trae
+            .begin_authorization()
+            .await
+            .map_err(|e| e.to_string())?,
         other => return Err(format!("{other} 不支持浏览器授权导入")),
     };
     let challenge = AuthChallenge {
@@ -1128,11 +1233,12 @@ pub async fn poll_device_auth(
                 .await
         }
         "workbuddy" => state.workbuddy.poll_authorization(&session.nonce).await,
+        "trae" => state.trae.poll_authorization(&session).await,
         other => return Err(format!("{other} 不支持浏览器授权导入")),
     };
 
     match polled {
-        Ok(Some((mut account, cred))) => {
+        Ok(Some((mut account, mut cred))) => {
             // 账号归属以发起时的 provider 为准
             account.provider = provider_id.clone();
             let previous_label = state
@@ -1151,6 +1257,22 @@ pub async fn poll_device_auth(
                     previous_label.as_deref(),
                 )
                 .await;
+            }
+            if provider_id == "trae" {
+                let existing: Vec<(Account, serde_json::Value)> = {
+                    let store = state.store.lock().unwrap();
+                    store
+                        .list_of("trae")
+                        .into_iter()
+                        .filter_map(|item| {
+                            store
+                                .credential("trae", &item.id)
+                                .ok()
+                                .map(|old| (item, old))
+                        })
+                        .collect()
+                };
+                assign_trae_checkin_device_id(&existing, &account, &mut cred);
             }
             let mut store = state.store.lock().unwrap();
             store
@@ -1606,6 +1728,18 @@ pub async fn set_sync_enabled(
     })
 }
 
+/// 切换「错过时间窗自动补签」开关（默认开）。
+#[tauri::command]
+pub async fn set_catch_up_missed_window(
+    state: State<'_, AppState>,
+    enabled: bool,
+) -> Result<AppConfig, String> {
+    state.update_config(|config| {
+        config.scheduler.catch_up_missed_window = enabled;
+        Ok(())
+    })
+}
+
 /// 设置某个 agent 的数据自动同步间隔（分钟）。
 #[tauri::command]
 pub async fn set_refresh_interval(
@@ -1801,6 +1935,48 @@ async fn capture_client_login(state: &AppState, provider_id: &str) {
         }
         return;
     }
+    if provider_id == "trae" {
+        if let Some((account, mut cred)) = crate::providers::trae::read_local_account() {
+            let mut store = state.store.lock().unwrap();
+            let existing = store.credential("trae", &account.id).ok();
+            let keep = existing
+                .as_ref()
+                .and_then(|old| old["checkin_device_id"].as_str())
+                .filter(|id| crate::providers::trae::is_valid_device_id(id));
+            if let Some(id) = keep {
+                cred["checkin_device_id"] = serde_json::json!(id);
+                cred["device_source"] = existing
+                    .as_ref()
+                    .and_then(|old| old.get("device_source"))
+                    .cloned()
+                    .unwrap_or(serde_json::Value::Null);
+            } else {
+                let used: Vec<String> = store
+                    .list_of("trae")
+                    .into_iter()
+                    .filter_map(|item| {
+                        store
+                            .credential("trae", &item.id)
+                            .ok()
+                            .and_then(|old| {
+                                old["checkin_device_id"].as_str().map(str::to_string)
+                            })
+                    })
+                    .collect();
+                let real = cred["login_device_id"].as_str().unwrap_or("");
+                let prefer_real = !used.iter().any(|id| id == real);
+                let id = crate::providers::trae::assign_checkin_device_id(
+                    &account.id,
+                    real,
+                    &used,
+                    prefer_real,
+                );
+                cred["checkin_device_id"] = serde_json::json!(id);
+            }
+            let _ = store.upsert(account, &cred);
+        }
+        return;
+    }
     let Some(provider) = state.provider(provider_id) else {
         return;
     };
@@ -1868,7 +2044,17 @@ pub async fn switch_client_account(
     // 死 RT 会**删掉凭据**退回登录页（用户只能重新录入），所以过期必须刷新
     // 成功才写，刷不动就如实报错
     report_progress("validating");
-    let cred = switch_cred_guard(&state, &account, cred).await?;
+    let cred = match switch_cred_guard(&state, &account, cred).await {
+        Ok(cred) => cred,
+        Err(e) => {
+            // 校验失败时客户端已经在 begin_switch 里被关闭；把当前登录重新拉起来，
+            // 别把用户留在「客户端被关了」的状态。Trae 的会话失效最常见。
+            if provider_id == "trae" {
+                let _ = crate::core::launcher::launch("trae");
+            }
+            return Err(e);
+        }
+    };
 
     // 「同步聊天记录」开关：开着且平台支持时，换号会把本地会话记录带给目标账号
     let chat_sync_enabled = {
@@ -1951,6 +2137,9 @@ async fn ensure_fresh_cred(
 ) -> serde_json::Value {
     if account.provider == "qoder" {
         return ensure_fresh_qoder(state, account, cred).await;
+    }
+    if account.provider == "trae" {
+        return ensure_fresh_trae(state, account, cred).await;
     }
     if account.provider != "minimax" {
         // 其他平台的 token 有效期是「天」级，池里的快照直接够用
@@ -2077,6 +2266,102 @@ async fn ensure_fresh_qoder(
     }
 }
 
+/// Trae 凭据保鲜。
+///
+/// 和 MiniMax 同一套护栏：当前登录账号在客户端运行时**绝不自行刷新**
+/// （RT 轮换可能把客户端顶掉），只采纳客户端文件里的新 token；客户端确认
+/// 没在跑时才刷新并回写 storage.json。非当前账号可以自刷。
+async fn ensure_fresh_trae(
+    state: &AppState,
+    account: &Account,
+    cred: &serde_json::Value,
+) -> serde_json::Value {
+    let lock = refresh_lock_for(account).await;
+    let _guard = lock.lock().await;
+
+    let latest = state
+        .store
+        .lock()
+        .unwrap()
+        .credential(&account.provider, &account.id)
+        .unwrap_or_else(|_| cred.clone());
+    if latest != *cred {
+        return latest;
+    }
+    if !trae_needs_refresh(&latest, chrono::Utc::now().timestamp_millis()) {
+        return latest;
+    }
+
+    let login = crate::providers::trae::client_login_state(account, &latest);
+    let process = crate::core::launcher::client_process_state("trae");
+
+    match login {
+        crate::providers::trae::ClientLoginState::Same(fresh) => {
+            // 客户端在跑 / 状态不明：只采纳文件里的新凭据，不自行刷新。
+            if process != crate::core::launcher::ClientProcessState::Absent {
+                if cred_expiry_ms(&fresh) > cred_expiry_ms(&latest) {
+                    persist_cred(state, account, &fresh);
+                    return fresh;
+                }
+                return latest;
+            }
+            // 客户端确认不在：可以安全刷新并回写。
+            let Some(provider) = state.provider("trae") else {
+                return latest;
+            };
+            match provider.refresh(account, &latest).await {
+                Ok(Some(fresh)) => {
+                    persist_cred(state, account, &fresh);
+                    if let Err(e) =
+                        crate::providers::trae::TraeProvider::write_back_local_auth(&fresh)
+                    {
+                        eprintln!("Trae 刷新后回写 storage.json 失败（凭据已保存在账号池）：{e}");
+                    }
+                    fresh
+                }
+                Ok(None) => latest,
+                Err(e) => {
+                    eprintln!("Trae 刷新失败：{e}");
+                    latest
+                }
+            }
+        }
+        crate::providers::trae::ClientLoginState::Other => {
+            let Some(provider) = state.provider("trae") else {
+                return latest;
+            };
+            match provider.refresh(account, &latest).await {
+                Ok(Some(fresh)) => {
+                    persist_cred(state, account, &fresh);
+                    fresh
+                }
+                _ => latest,
+            }
+        }
+        crate::providers::trae::ClientLoginState::Unknown => {
+            // 身份不明时宁可不动。OAuth 账号不在客户端里，确认客户端没跑才允许自刷。
+            if process == crate::core::launcher::ClientProcessState::Absent
+                && latest["cred_source"].as_str() == Some("oauth")
+            {
+                let Some(provider) = state.provider("trae") else {
+                    return latest;
+                };
+                if let Ok(Some(fresh)) = provider.refresh(account, &latest).await {
+                    persist_cred(state, account, &fresh);
+                    return fresh;
+                }
+            }
+            latest
+        }
+    }
+}
+
+fn trae_needs_refresh(cred: &serde_json::Value, now_ms: i64) -> bool {
+    let expires = cred["expires_at_ms"].as_i64().unwrap_or(0);
+    // 到期时间未知（0）时不主动刷，避免每轮都换 RT。
+    expires > 0 && expires <= now_ms + 2 * 60 * 60 * 1000
+}
+
 fn persist_cred(state: &AppState, account: &Account, cred: &serde_json::Value) {
     let mut store = state.store.lock().unwrap();
     let _ = store.upsert(account.clone(), cred);
@@ -2099,6 +2384,40 @@ async fn switch_cred_guard(
     account: &Account,
     cred: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    if account.provider == "trae" {
+        // 换号时客户端已经关闭。先校验目标账号的登录态：客户端手动换号会
+        // 作废旧账号的会话，写死凭据会让客户端启动后直接清登录态。
+        let provider = crate::providers::trae::TraeProvider::new();
+        let mut cred = cred;
+        if trae_needs_refresh(&cred, chrono::Utc::now().timestamp_millis()) {
+            cred = match provider.refresh(account, &cred).await {
+                Ok(Some(fresh)) => {
+                    persist_cred(state, account, &fresh);
+                    fresh
+                }
+                _ => {
+                    return Err(format!(
+                        "账号「{}」的 Trae 凭据已失效（refresh token 被轮换或已过期）：请重新导入该账号后再切换",
+                        account.label
+                    ))
+                }
+            };
+        }
+        if matches!(provider.check_login(&cred).await, Ok(true)) {
+            return Ok(cred);
+        }
+        // 会话可能被客户端换号作废：强制刷新一次再校验。
+        if let Ok(Some(fresh)) = provider.refresh(account, &cred).await {
+            if matches!(provider.check_login(&fresh).await, Ok(true)) {
+                persist_cred(state, account, &fresh);
+                return Ok(fresh);
+            }
+        }
+        return Err(format!(
+            "账号「{}」的 Trae 登录态已失效（可能已被客户端换号作废）：请先在 Trae 客户端登录该账号并重新导入，或完成浏览器授权后再切换",
+            account.label
+        ));
+    }
     if account.provider != "minimax" {
         // 其他平台 token 是「天」级有效期，池里的快照直接够用
         return Ok(cred);
@@ -2406,21 +2725,29 @@ pub async fn scheduler_loop(app: AppHandle) {
                 }
 
                 let key = AccountStore::key(&account.provider, &account.id);
-                let (done, minute) = {
+                let (done, minute, catch_up_attempted) = {
                     let sched = state.scheduler.lock().unwrap();
                     (
                         sched.is_done(&key, &today),
                         sched.minute_of(&key).unwrap_or(u32::MAX),
+                        sched.is_catch_up_attempted(&key, &today),
                     )
                 };
-                if done || minute == u32::MAX || now_minute < minute {
+                if minute == u32::MAX {
                     continue;
                 }
-                // 时间窗内「补跑」：计划分钟已经过了但今天还没处理过，就现在做。
-                // 这样晚启动（比如 10:20 才打开软件）也不会整天漏签。
-                if now_minute > agent_cfg.end_minute {
+                let decision = scheduler::decide_run(
+                    now_minute,
+                    minute,
+                    agent_cfg.end_minute,
+                    done,
+                    config.scheduler.catch_up_missed_window,
+                    catch_up_attempted,
+                );
+                if decision == scheduler::RunDecision::Skip {
                     continue;
                 }
+                let is_catch_up = decision == scheduler::RunDecision::CatchUp;
 
                 let Some(provider) = state.provider(&account.provider) else {
                     continue;
@@ -2470,6 +2797,11 @@ pub async fn scheduler_loop(app: AppHandle) {
                 notify_checkin_failure(&app, provider.display_name(), &account, &result, &today);
 
                 let mut sched = state.scheduler.lock().unwrap();
+                // 时间窗外的补跑每天只尝试一次：失败也记「已补过」，
+                // 避免调度器 30 秒一轮持续打上游；用户仍可手动补签。
+                if is_catch_up {
+                    sched.mark_catch_up_attempted(&key, &today);
+                }
                 if opened {
                     sched.mark_done(&key, &today);
                 }
@@ -2554,7 +2886,7 @@ pub fn cli_import_local() -> Result<(), String> {
         let providers: Vec<Arc<dyn Provider>> = state
             .providers
             .iter()
-            .filter(|p| matches!(p.id(), "minimax" | "qoder" | "miaoshou" | "workbuddy" | "zcode"))
+            .filter(|p| matches!(p.id(), "minimax" | "qoder" | "miaoshou" | "workbuddy" | "zcode" | "trae"))
             .cloned()
             .collect();
 
@@ -2701,7 +3033,15 @@ pub async fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<()
     // 与界面路径同序：先关客户端，再捕获（拿它最后提交的凭据），再保活
     crate::core::client_switch::begin_switch(provider_id).map_err(|e| e.to_string())?;
     capture_client_login(&state, provider_id).await;
-    let cred = switch_cred_guard(&state, &account, cred).await?;
+    let cred = match switch_cred_guard(&state, &account, cred).await {
+        Ok(cred) => cred,
+        Err(e) => {
+            if provider_id == "trae" {
+                let _ = crate::core::launcher::launch("trae");
+            }
+            return Err(e);
+        }
+    };
 
     // CLI 同样尊重配置里的「同步聊天记录」开关
     let chat_sync_enabled = state

@@ -96,6 +96,8 @@ export default function AgentGroupPanel({
   const openState = welfareOpenState(provider.id);
   const welfare = welfareOf(group);
   const meta = WELFARE_META[provider.id];
+  // 缺省视为已就绪；Trae 首版先展示「即将开放」。
+  const oauthReady = provider.oauthReady !== false;
 
   return (
     <section className="panel agent-panel" style={{ ["--agent-accent" as string]: accent }}>
@@ -147,16 +149,25 @@ export default function AgentGroupPanel({
             <button
               className="btn small"
               onClick={() => onAddAccount(provider.id)}
-              disabled={busy || authPending}
+              disabled={busy || authPending || !oauthReady}
+              title={
+                !oauthReady
+                  ? "Trae CN 浏览器授权即将开放，先使用「从本机导入」"
+                  : undefined
+              }
             >
-              {authPending ? "等待授权…" : "添加账号"}
+              {!oauthReady
+                ? "添加账号（即将开放）"
+                : authPending
+                  ? "等待授权…"
+                  : "添加账号"}
             </button>
           )}
         </div>
       </header>
 
       {/* 福利统一口径：第一行积分/额度，第二行免费模型；时效敏感标注核对月份 */}
-      {free && meta && (
+      {meta && (
         <div className="welfare-brief" role="note" aria-label={`${provider.name} 福利`}>
           <div className="wb-row">
             <span className="wb-label">积分/额度</span>
@@ -171,7 +182,11 @@ export default function AgentGroupPanel({
               <span className={`wb-open ${openState.open ? "on" : ""}`}>{openState.label}</span>
             )}
             {welfare.note && <span className="wb-note">{welfare.note}</span>}
+            {welfare.extraNote && (
+              <span className="wb-note">{welfare.extraNote}</span>
+            )}
           </div>
+          {free && (
           <div className="wb-row">
             <span className="wb-label">免费模型</span>
             {provider.id === "workbuddy" ? (
@@ -228,6 +243,7 @@ export default function AgentGroupPanel({
             )}
             {free.asOf && <span className="wb-asof">核对 {free.asOf}</span>}
           </div>
+          )}
         </div>
       )}
 

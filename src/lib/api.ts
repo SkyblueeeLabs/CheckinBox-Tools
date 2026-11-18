@@ -94,6 +94,8 @@ export const api = {
     invoke<AppConfig>("set_scheduler_enabled", { enabled }),
   setSyncEnabled: (enabled: boolean) =>
     invoke<AppConfig>("set_sync_enabled", { enabled }),
+  setCatchUpMissedWindow: (enabled: boolean) =>
+    invoke<AppConfig>("set_catch_up_missed_window", { enabled }),
   setRefreshInterval: (providerId: string, minutes: number) =>
     invoke<AppConfig>("set_refresh_interval", { providerId, minutes }),
   setUiRefreshInterval: (seconds: number) =>

@@ -195,6 +195,9 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, visibili
                   </span>
                 ))}
                 {welfare.note && <span className="welfare-note">{welfare.note}</span>}
+                {welfare.extraNote && (
+                  <span className="welfare-note">{welfare.extraNote}</span>
+                )}
                 {welfare.freeText && (
                   <span className="welfare-note">{welfare.freeText}</span>
                 )}

@@ -45,7 +45,12 @@ function overview(): Overview {
 
 function config(): AppConfig {
   return {
-    scheduler: { enabled: true, syncEnabled: true, agents: {} },
+    scheduler: {
+      enabled: true,
+      syncEnabled: true,
+      catchUpMissedWindow: true,
+      agents: {},
+    },
     activeAccounts: {},
     alertThresholds: {},
     closeAction: "ask",
@@ -60,7 +65,8 @@ const noop = vi.fn();
 function renderSettings(
   onCloseAction: (action: "ask" | "tray" | "exit") => void = noop,
   onNotificationsEnabled: (enabled: boolean) => void = noop,
-  onUiRefreshInterval: (seconds: number) => void = noop
+  onUiRefreshInterval: (seconds: number) => void = noop,
+  onCatchUpMissedWindow: (enabled: boolean) => void = noop
 ) {
   return render(
     <SettingsPanel
@@ -70,6 +76,7 @@ function renderSettings(
       syncing={false}
       onSchedulerEnabled={noop}
       onSyncEnabled={noop}
+      onCatchUpMissedWindow={onCatchUpMissedWindow}
       onRefreshInterval={noop}
       onUiRefreshInterval={onUiRefreshInterval}
       onScheduleChange={noop}
@@ -118,6 +125,18 @@ describe("SettingsPanel（设置页 tab）", () => {
     expect(
       screen.getByText(/总闸关掉后所有平台都不再自动签到/)
     ).toBeInTheDocument();
+  });
+
+  it("错过时间窗自动补签默认开启，切换回调新值", () => {
+    const onCatchUp = vi.fn();
+    renderSettings(noop, noop, noop, onCatchUp);
+
+    fireEvent.click(screen.getByRole("button", { name: /自动签到调度/ }));
+    const input = screen.getByLabelText("错过时间窗自动补签") as HTMLInputElement;
+    expect(input.checked).toBe(true);
+
+    fireEvent.click(input);
+    expect(onCatchUp).toHaveBeenCalledWith(false);
   });
 
   it("「关闭窗口」三选一：选中最小化到托盘时回调 tray", () => {

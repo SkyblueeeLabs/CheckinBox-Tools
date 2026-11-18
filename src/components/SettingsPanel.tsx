@@ -77,6 +77,7 @@ interface Props {
   syncing: boolean;
   onSchedulerEnabled: (enabled: boolean) => void;
   onSyncEnabled: (enabled: boolean) => void;
+  onCatchUpMissedWindow?: (enabled: boolean) => void;
   onRefreshInterval: (providerId: string, minutes: number) => void;
   onUiRefreshInterval: (seconds: number) => void;
   onScheduleChange: (
@@ -108,6 +109,7 @@ export default function SettingsPanel({
   syncing,
   onSchedulerEnabled,
   onSyncEnabled,
+  onCatchUpMissedWindow,
   onRefreshInterval,
   onUiRefreshInterval,
   onScheduleChange,
@@ -349,8 +351,33 @@ export default function SettingsPanel({
         >
           <p className="set-hint">
             总闸关掉后所有平台都不再自动签到。每个平台有自己独立的时间窗，
-            窗内给每个账号随机分配一个错峰分钟。
+            窗内给每个账号随机分配一个错峰分钟。错过时间窗后自动补签每天
+            每账号最多尝试一次。
           </p>
+
+          <div className="set-row">
+            <div className="set-row-label">
+              <span className="set-row-title">错过时间窗自动补签</span>
+              <span className="set-row-desc">
+                软件没在时间窗内运行，之后打开时仍补跑一次；窗口还没开始的平台不会被提前签。
+              </span>
+            </div>
+            <div className="set-row-control">
+              <label className="switch">
+                <input
+                  type="checkbox"
+                  checked={config.scheduler.catchUpMissedWindow !== false}
+                  onChange={(e) => onCatchUpMissedWindow?.(e.target.checked)}
+                  aria-label="错过时间窗自动补签"
+                />
+                <span>
+                  {config.scheduler.catchUpMissedWindow !== false
+                    ? "已开启"
+                    : "已关闭"}
+                </span>
+              </label>
+            </div>
+          </div>
 
           <table className="set-table">
             <thead>

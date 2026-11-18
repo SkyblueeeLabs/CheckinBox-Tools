@@ -69,7 +69,10 @@ pub struct SwitchOutcome {
 
 /// 这个平台能不能靠「写凭据文件」来切账号。
 pub fn is_switchable(provider: &str) -> bool {
-    matches!(provider, "minimax" | "miaoshou" | "qoder" | "workbuddy")
+    matches!(
+        provider,
+        "minimax" | "miaoshou" | "qoder" | "workbuddy" | "trae"
+    )
 }
 
 /// 读客户端当前登录的是哪个账号（只读，不改任何东西）。
@@ -79,6 +82,7 @@ pub fn detect(provider: &str) -> Result<Option<DetectedAccount>> {
         "miaoshou" => detect_miaoshou(),
         "qoder" => Ok(detect_qoder()),
         "workbuddy" => Ok(detect_workbuddy()),
+        "trae" => Ok(detect_trae()),
         _ => Ok(None),
     }
 }
@@ -177,6 +181,7 @@ pub fn finish_switch(
         "miaoshou" => switch_miaoshou(cred, account_id, label, on_progress)?,
         "qoder" => switch_qoder(cred, account_id, label, on_progress)?,
         "workbuddy" => switch_workbuddy(cred, account_id, label, on_progress)?,
+        "trae" => switch_trae(cred, account_id, label, on_progress)?,
         other => return Err(anyhow!("{other} 不支持切换客户端账号")),
     };
     Ok(SwitchOutcome {
@@ -836,6 +841,35 @@ fn switch_qoder(
 }
 
 // ---------------------------------------------------------------------------
+// Trae CN（%APPDATA%\Trae CN\User\globalStorage\storage.json）
+// ---------------------------------------------------------------------------
+
+/// 把目标账号的凭据写进 Trae 的 storage.json，然后启动客户端。
+///
+/// 只改 `iCubeAuthInfo://icube.cloudide` 和 `iCubeAuthInfo://usertag`，设备密钥、
+/// 本地会话目录和工作区都不动；换号后聊天记录仍是共享的。
+fn switch_trae(
+    cred: &Value,
+    _account_id: &str,
+    _label: &str,
+    on_progress: &mut impl FnMut(&str),
+) -> Result<SwitchOutcome> {
+    on_progress("writing");
+    let written = crate::providers::trae::write_local_credential(cred, true, "switch")
+        .map_err(|e| anyhow!("写入 Trae 登录态失败：{e}"))?;
+
+    on_progress("launching");
+    let client_exe = crate::core::launcher::launch("trae")
+        .map_err(|e| anyhow!("凭据已写入 Trae 登录态，但客户端启动失败：{e}"))?;
+    Ok(SwitchOutcome {
+        backup: written.backup,
+        target_file: written.storage_path.to_string_lossy().to_string(),
+        client_exe: client_exe.to_string_lossy().to_string(),
+        chat_sync: None,
+    })
+}
+
+// ---------------------------------------------------------------------------
 // WorkBuddy（腾讯 CodeBuddy：state.vscdb 的 safeStorage secret 键）
 // ---------------------------------------------------------------------------
 
@@ -846,6 +880,14 @@ fn switch_qoder(
 /// 时拿 uid 兜底。登出标记 / 解不开都如实返回 None —— **不回退**老 state.vscdb
 /// （那是旧账号的陈旧数据，登出场景会误报「还登着」）。
 /// 没有共享 auth 文件 = 老客户端，才解密 state.vscdb 的 secret 键。
+fn detect_trae() -> Option<DetectedAccount> {
+    let (account, _) = crate::providers::trae::read_local_account()?;
+    Some(DetectedAccount {
+        account_id: account.id,
+        label: account.label,
+    })
+}
+
 fn detect_workbuddy() -> Option<DetectedAccount> {
     if let Some(auth_path) = crate::core::wb_session::auth_file() {
         if auth_path.is_file() {

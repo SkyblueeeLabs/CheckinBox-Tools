@@ -93,6 +93,35 @@ pub fn run() {
             }
         }
 
+        // ---- 3d. Trae CN ----
+        println!("\n[3d] Trae CN");
+        {
+            let provider = crate::providers::trae::TraeProvider::new();
+            match provider.discover().await {
+                Ok(found) => {
+                    println!("    发现本机账号 {} 个", found.len());
+                    for (account, cred) in &found {
+                        println!("      - {}（{}）", account.label, account.id);
+                        match provider.status(account, cred).await {
+                            Ok(st) => println!(
+                                "        状态={:?} 今日={} {}",
+                                st.state, st.points, st.message
+                            ),
+                            Err(e) => println!("        状态读取失败：{e}"),
+                        }
+                        match provider.quota(account, cred).await {
+                            Ok(q) => println!(
+                                "        积分: 发放={:.0} 已用={:.0} 剩余={:.0} | {}",
+                                q.total_granted, q.total_consumed, q.total_remaining, q.message
+                            ),
+                            Err(e) => println!("        积分读取失败：{e}"),
+                        }
+                    }
+                }
+                Err(e) => println!("    发现失败：{e}"),
+            }
+        }
+
         // ---- 4. Qoder 本机环境 ----
         println!("\n[4] Qoder CN 本机环境");
         let umid = crate::providers::qoder::umid_identity();

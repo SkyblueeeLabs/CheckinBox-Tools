@@ -31,6 +31,8 @@ export interface WelfareMeta {
   signup?: number;
   /** 每月固定发放积分（平台规则） */
   monthly?: number;
+  /** 不属于「每日/注册/每月/加成」四类的平台福利说明（如邀请好友） */
+  extraNote?: string;
 }
 
 /** 各平台福利元数据（不含实时数量；改文案只改这里） */
@@ -46,6 +48,13 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
     openHour: 19,
   },
   miaoshou: { unit: "积分", signup: 1000, monthly: 200 },
+  trae: {
+    unit: "积分",
+    dailyMode: "auto",
+    signup: 1500,
+    monthly: 500,
+    extraNote: "邀好友：双方都有积分（以官方为准）",
+  },
 };
 
 /** 条目类型的固定文案（面板标签 / 首页不重复出现） */
@@ -121,6 +130,8 @@ export interface WelfareView {
   benefits: WelfareBenefit[];
   /** 每日签到的时段 / 开放说明 */
   note: string;
+  /** 四类之外、但仍需展示的平台福利说明（如邀请好友） */
+  extraNote: string;
   /** 免费模型的紧凑提示（首页用；没有免费模型的平台为空） */
   freeText: string;
   /** 悬浮完整说明 */
@@ -224,6 +235,10 @@ export function welfareOf(group: AgentGroup): WelfareView {
 
   if (!meta.dailyMode) parts.push("无每日签到");
 
+  // 四类之外的平台福利（例如 Trae 的邀请好友）：不新增条目类型，避免打乱固定顺序。
+  const extraNote = meta.extraNote ?? "";
+  if (extraNote) parts.push(extraNote);
+
   // 4) 免费模型（单独一行；首页只给紧凑提示，完整清单在悬浮说明里）
   const free = FREE_MODELS[group.provider.id];
   const freeText = free
@@ -248,6 +263,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
   return {
     benefits,
     note,
+    extraNote,
     freeText,
     title: `${parts.length > 0 ? parts.join(" · ") : "暂无福利"}${freeSuffix}`,
   };

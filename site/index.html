@@ -12,7 +12,7 @@
     <meta property="og:title" content="CheckinBox — 今日的赛博鸡蛋，领了嘛？" />
     <meta
       property="og:description"
-      content="启动页每个平台一枚蛋，点一下就能领；自动签到、账号续期、换号保留聊天记录。支持 MiniMax Code / Qoder CN / WorkBuddy / 妙手 / Zcode。"
+      content="启动页每个平台一枚蛋，点一下就能领；自动签到、账号续期、换号保留聊天记录。支持 MiniMax Code / Qoder CN / WorkBuddy / 妙手 / Zcode / Trae CN。"
     />
     <meta property="og:image" content="https://skyblueeelabs.github.io/CheckinBox-Tools/assets/launch.png" />
     <meta name="theme-color" content="#f7f4ee" />
@@ -178,7 +178,7 @@
           <header class="section-head">
             <p class="eyebrow">支持的平台</p>
             <h2>一个窗口支持多个平台</h2>
-            <p class="section-sub">只读取你本机已登录的客户端状态，不额外要密码。</p>
+            <p class="section-sub">优先读取本机已登录状态；需要时也支持浏览器授权，不保存密码。</p>
           </header>
 
           <div class="platform-grid">
@@ -207,7 +207,23 @@
               <h3>Zcode</h3>
               <p>看余额，提醒领取</p>
             </article>
+            <article class="platform">
+              <img src="assets/trae.png" alt="" width="48" height="48" />
+              <h3>Trae CN</h3>
+              <p>每日 100 签到，会员 200</p>
+            </article>
           </div>
+
+          <details class="platform-welfare">
+            <summary>Trae CN 平台福利说明</summary>
+            <ul>
+              <li><b>注册即送 1,500 积分</b>：注册成功即刻到账，新用户一次性。</li>
+              <li><b>每日签到</b>：免费用户 100 积分/天，会员 200 积分/天；签到积分 31 天有效，本工具可自动领取。</li>
+              <li><b>邀好友赚积分</b>：邀请好友，双方都有积分拿；额度与资格以官方活动规则为准。</li>
+              <li><b>每月首次登录</b>：自动到账 500 积分，自然月内有效，过期清零。</li>
+            </ul>
+            <p>除每日签到外，其余为 Trae 平台福利，本工具只展示、不代领。积分规则、有效期与活动资格以 Trae 官方页面为准。</p>
+          </details>
         </div>
       </section>
 
@@ -322,12 +338,16 @@
             <p>默认不碰聊天数据。开了「换号同步聊天记录」后，会先把数据库和 WAL/SHM 备份到单独目录，再合并；同步失败也不影响换号。</p>
           </details>
           <details>
+            <summary>软件没在签到时间窗内打开，会漏签吗？</summary>
+            <p>默认不会。开启「错过时间窗自动补签」后，窗口结束后再打开软件会补跑一次；窗口还没开始的平台（比如 10 点开放的 Qoder）会正常等到自己的窗口，不会被提前签。</p>
+          </details>
+          <details>
             <summary>会不会把客户端顶下线？</summary>
-            <p>MiniMax 有运行中护栏，状态不明就不刷。Qoder 续期会换 refresh token，但旧的不会马上失效，桌面端照常用。</p>
+            <p>MiniMax 有运行中护栏，状态不明就不刷。Qoder 续期会换 refresh token，但旧的不会马上失效，桌面端照常用。Trae 换号前会校验目标账号，失效会话会被拒绝并重新拉起当前客户端。</p>
           </details>
           <details>
             <summary>支持哪些平台和系统？</summary>
-            <p>Windows 10/11，支持 MiniMax Code、Qoder CN、WorkBuddy、妙手、Zcode。这些接口不是公开的，客户端一改版就可能变。</p>
+            <p>Windows 10/11，支持 MiniMax Code、Qoder CN、WorkBuddy、妙手、Zcode、Trae CN。这些接口不是公开的，客户端一改版就可能变。</p>
           </details>
         </div>
       </section>

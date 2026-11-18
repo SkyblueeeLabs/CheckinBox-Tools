@@ -644,6 +644,19 @@ export default function App() {
     }
   };
 
+  const toggleCatchUp = async (enabled: boolean) => {
+    try {
+      const cfg = await api.setCatchUpMissedWindow(enabled);
+      setConfig(cfg);
+      pushToast(
+        "ok",
+        enabled ? "错过时间窗自动补签已开启" : "错过时间窗自动补签已关闭"
+      );
+    } catch (e) {
+      pushToast("err", `${e}`);
+    }
+  };
+
   const syncNow = async () => {
     setSyncing(true);
     try {
@@ -1062,6 +1075,7 @@ export default function App() {
             syncing={syncing}
             onSchedulerEnabled={toggleMaster}
             onSyncEnabled={toggleSync}
+            onCatchUpMissedWindow={toggleCatchUp}
             onRefreshInterval={patchRefreshInterval}
             onUiRefreshInterval={patchUiRefreshInterval}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}

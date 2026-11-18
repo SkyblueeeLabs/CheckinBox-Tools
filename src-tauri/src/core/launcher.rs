@@ -53,6 +53,11 @@ fn spec_of(provider: &str) -> Option<ClientSpec> {
                 r"C:\Program Files\妙手\妙手.exe",
             ],
         }),
+        "trae" => Some(ClientSpec {
+            exe_names: &["Trae CN.exe"],
+            dir_keywords: &["trae cn", "trae"],
+            legacy_paths: &[r"D:\Programs\Trae CN\Trae CN.exe"],
+        }),
         "workbuddy" => Some(ClientSpec {
             // 腾讯 WorkBuddy（原 CodeBuddy CN 桌面端）。只认 WorkBuddy：
             // 本工具的登录态写在 `%APPDATA%\WorkBuddy`，旧 CodeBuddy 用的是
@@ -271,6 +276,8 @@ pub fn data_dir(provider: &str) -> Option<PathBuf> {
         "miaoshou" => home.join(".meituan-catpaw"),
         "workbuddy" => home.join(".workbuddy"),
         "zcode" => home.join(".zcode"),
+        // Trae CN 的 Electron userData 在 %APPDATA%\Trae CN，不在用户主目录下。
+        "trae" => PathBuf::from(std::env::var_os("APPDATA")?).join("Trae CN"),
         _ => return None,
     };
     if dir.is_dir() {
