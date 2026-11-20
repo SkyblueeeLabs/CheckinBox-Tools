@@ -82,7 +82,10 @@ describe("LaunchScreen（赛博鸡蛋孵化舱）", () => {
   });
 
   it("蛋状态：可领=领按钮、需手动=去领取、已领=裂壳计数，统计条实时", () => {
-    const p = props();
+    // Zcode 默认不上启动页，这里显式打开以覆盖三种蛋状态
+    const p = props({
+      visibility: { zcode: { sidebar: false, home: true, launch: true } },
+    });
     render(
       <LaunchScreen
         overview={ov([

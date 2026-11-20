@@ -10,8 +10,8 @@ import type {
   CloseAction,
   CreditPackagePage,
   CreditUsagePage,
-  DiscoveredAccount,
   FreeModel,
+  ImportedClientAccount,
   LogEntry,
   Notice,
   Overview,
@@ -45,9 +45,8 @@ export const api = {
     }),
   workbuddyCreditUsage: (accountId: string) =>
     invoke<CreditUsagePage>("workbuddy_credit_usage", { accountId }),
-  discoverAccounts: () => invoke<DiscoveredAccount[]>("discover_accounts"),
-  addDiscoveredAccount: (providerId: string) =>
-    invoke<Account[]>("add_discovered_account", { providerId }),
+  importClientAccounts: (providerId: string) =>
+    invoke<ImportedClientAccount[]>("import_client_accounts", { providerId }),
   beginDeviceAuth: (providerId: string) =>
     invoke<AuthChallenge>("begin_device_auth", { providerId }),
   pendingAuth: () => invoke<AuthChallenge[]>("pending_auth"),

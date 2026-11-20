@@ -1,5 +1,11 @@
 node_modules/
 dist/
+# Qoder 国内站点的静态页面纳入版本管理，下载包仍是发布产物。
+!/site-qoder/dist/
+/site-qoder/dist/*
+!/site-qoder/dist/index.html
+!/site-qoder/dist/styles.css
+!/site-qoder/dist/assets/
 src-tauri/target/
 src-tauri/gen/
 *.log

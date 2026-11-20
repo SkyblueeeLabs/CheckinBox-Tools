@@ -29,7 +29,7 @@ const providers: ProviderView[] = [
 ];
 
 describe("VisibilityMenu（平台显示管理）", () => {
-  it("每个平台两个开关，回调只带被改的字段", () => {
+  it("Qoder / Zcode 默认只上首页；显式配置可覆盖，回调只带被改的字段", () => {
     const onChange = vi.fn();
     render(
       <VisibilityMenu
@@ -39,24 +39,28 @@ describe("VisibilityMenu（平台显示管理）", () => {
         onClose={vi.fn()}
       />
     );
-    const sidebarSwitch = screen.getByRole("checkbox", {
+    // Qoder 没配置过 → 按平台默认：侧栏 / 启动页关闭，首页打开
+    expect(
+      (screen.getByRole("checkbox", { name: "Qoder CN 在侧栏显示" }) as HTMLInputElement).checked
+    ).toBe(false);
+    expect(
+      (screen.getByRole("checkbox", { name: "Qoder CN 在启动页显示" }) as HTMLInputElement).checked
+    ).toBe(false);
+    // Zcode 显式配置了 launch=true，覆盖平台默认
+    const zcodeSidebar = screen.getByRole("checkbox", {
       name: "Zcode 在侧栏显示",
     }) as HTMLInputElement;
-    expect(sidebarSwitch.checked).toBe(false);
+    expect(zcodeSidebar.checked).toBe(false);
     expect(
-      (screen.getByRole("checkbox", { name: "Zcode 在首页显示" }) as HTMLInputElement).checked
+      (screen.getByRole("checkbox", { name: "Zcode 在启动页显示" }) as HTMLInputElement).checked
     ).toBe(true);
 
-    fireEvent.click(sidebarSwitch);
+    fireEvent.click(zcodeSidebar);
     expect(onChange).toHaveBeenCalledWith("zcode", { sidebar: true });
     fireEvent.click(screen.getByRole("checkbox", { name: "Qoder CN 在首页显示" }));
     expect(onChange).toHaveBeenCalledWith("qoder", { home: false });
-    const launchSwitch = screen.getByRole("checkbox", {
-      name: "Qoder CN 在启动页显示",
-    }) as HTMLInputElement;
-    expect(launchSwitch.checked).toBe(true);
-    fireEvent.click(launchSwitch);
-    expect(onChange).toHaveBeenCalledWith("qoder", { launch: false });
+    fireEvent.click(screen.getByRole("checkbox", { name: "Qoder CN 在启动页显示" }));
+    expect(onChange).toHaveBeenCalledWith("qoder", { launch: true });
   });
 
   it("Esc 与点菜单外关闭；锚点按钮和菜单内部不触发关闭", () => {

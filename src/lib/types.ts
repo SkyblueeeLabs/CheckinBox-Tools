@@ -334,6 +334,30 @@ export interface AgentVisibility {
   launch: boolean;
 }
 
+/** 默认只上首页的平台：侧栏和启动页不占位置，仍可在显示管理里手动打开 */
+export const HOME_ONLY_AGENTS: ReadonlySet<string> = new Set([
+  "qoder",
+  "miaoshou",
+  "zcode",
+]);
+
+/** 用户没配置过时的默认显示（与后端 AgentVisibility::default_for 保持一致） */
+export function defaultAgentVisibility(providerId: string): AgentVisibility {
+  const homeOnly = HOME_ONLY_AGENTS.has(providerId);
+  return {
+    sidebar: !homeOnly,
+    home: true,
+    launch: !homeOnly,
+  };
+}
+
+export function agentVisibilityOf(
+  visibility: Record<string, AgentVisibility> | undefined,
+  providerId: string
+): AgentVisibility {
+  return visibility?.[providerId] ?? defaultAgentVisibility(providerId);
+}
+
 /** WorkBuddy 实时模型目录里的一条模型 */
 export interface FreeModel {
   id: string;
@@ -400,13 +424,12 @@ export interface AppConfig {
   notificationsEnabled: boolean;
   /** 界面自动刷新间隔（秒）；0 = 关闭前台轮询，仅手动刷新 / 后台同步事件更新 */
   uiRefreshSeconds: number;
-  /** 每个平台的显示开关（侧栏 / 首页）；没列出的平台全部显示 */
+  /** 每个平台的显示开关（侧栏 / 首页 / 启动页）；没列出的平台按平台默认值 */
   agentVisibility: Record<string, AgentVisibility>;
 }
 
-export interface DiscoveredAccount {
+export interface ImportedClientAccount {
   account: Account;
-  provider: string;
   alreadyAdded: boolean;
 }
 

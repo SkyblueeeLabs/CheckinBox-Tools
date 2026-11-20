@@ -25,7 +25,7 @@ import UpdateDialog from "./components/UpdateDialog";
 import UpdateMigrationNotice from "./components/UpdateMigrationNotice";
 import VersionJumpNotice from "./components/VersionJumpNotice";
 import { useUpdater } from "./hooks/useUpdater";
-import { HOME_ID } from "./lib/types";
+import { agentVisibilityOf, HOME_ID } from "./lib/types";
 
 interface Toast {
   id: number;
@@ -305,30 +305,18 @@ export default function App() {
   const discover = async (providerId: string) => {
     setBusy(true);
     try {
-      const found = (await api.discoverAccounts()).filter((f) => f.provider === providerId);
-      if (found.length === 0) {
+      const imported = await api.importClientAccounts(providerId);
+      if (imported.length === 0) {
         pushToast("warn", "没有找到本机客户端登录态");
         return;
       }
-      const saved = await api.addDiscoveredAccount(providerId);
-      // 已在池里的账号这次不会重复入库；一个新账号都没有时，
-      // 大概率是「客户端登录的还是老号」—— 直接告诉用户该怎么做
-      const fresh = found.filter((f) => !f.alreadyAdded);
-      const savedIds = new Set(
-        saved.filter((a) => a.provider === providerId).map((a) => a.id)
-      );
-      const missing = fresh.filter((f) => !savedIds.has(f.account.id));
-      if (missing.length > 0) {
-        pushToast(
-          "err",
-          `导入没有写入：${missing.map((f) => f.account.label).join("、")}，请重试`
-        );
-      } else if (fresh.length > 0) {
-        pushToast("ok", `已导入 ${fresh.length} 个账号：${fresh.map((f) => f.account.label).join("、")}`);
+      const fresh = imported.filter((entry) => !entry.alreadyAdded);
+      if (fresh.length > 0) {
+        pushToast("ok", `已导入 ${fresh.length} 个账号：${fresh.map((entry) => entry.account.label).join("、")}`);
       } else {
         pushToast(
-          "warn",
-          `客户端当前登录的是「${found[0].account.label}」，已在账号池里。要导入新账号，请先在客户端登录它，再点「从本机导入」`
+          "ok",
+          `已更新账号登录态：${imported.map((entry) => entry.account.label).join("、")}`
         );
       }
     } catch (e) {
@@ -355,26 +343,36 @@ export default function App() {
     }
   };
 
-  // 轮询 Qoder 设备授权结果
+  // 上一次授权查询完成后再轮询，避免网络慢时重复提交同一个授权结果。
   useEffect(() => {
     if (!authSession) return;
+    let polling = false;
+    let cancelled = false;
     const timer = setInterval(async () => {
+      if (polling) return;
+      polling = true;
       try {
         const account = await api.pollDeviceAuth(authProvider ?? "qoder", authSession);
-        if (account) {
+        if (account && !cancelled) {
           setAuthSession(null);
           setAuthDeadline(null);
           pushToast("ok", `已添加账号：${account.label}`);
           await refresh();
         }
       } catch (e) {
+        if (cancelled) return;
         setAuthSession(null);
         setAuthDeadline(null);
         pushToast("err", `授权失败：${e}`);
+      } finally {
+        polling = false;
       }
     }, 2500);
-    return () => clearInterval(timer);
-  }, [authSession, pushToast, refresh]);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, [authSession, authProvider, pushToast, refresh]);
 
   // 授权倒计时：上游的 device code 只有 5 分钟左右，过期后网页会报
   // 「授权链接无效 / 缺少有效的 user_code」，横幅上把剩余时间显示出来
@@ -615,7 +613,7 @@ export default function App() {
     (providerId: string, patch: Partial<AgentVisibility>) => {
       setConfig((prev) => {
         if (!prev) return prev;
-        const cur = prev.agentVisibility[providerId] ?? { sidebar: true, home: true };
+        const cur = agentVisibilityOf(prev.agentVisibility, providerId);
         return {
           ...prev,
           agentVisibility: {
@@ -949,7 +947,7 @@ export default function App() {
   // 侧栏只列「侧栏显示」的平台；首页卡片在 DashboardPanel 内按 home 开关过滤。
   // current 仍用全量 groups：首页卡片点进被侧栏隐藏的平台页也允许。
   const sidebarGroups = groups.filter(
-    (g) => config.agentVisibility[g.provider.id]?.sidebar !== false
+    (g) => agentVisibilityOf(config.agentVisibility, g.provider.id).sidebar
   );
   const inSettings = selected === SETTINGS_ID;
   const inHome = selected === HOME_ID;

@@ -1,4 +1,4 @@
-import type { AgentGroup, AgentVisibility, Overview } from "../lib/types";
+import { agentVisibilityOf, type AgentGroup, type AgentVisibility, type Overview } from "../lib/types";
 import { fmtCompact, fmtPoints, fmtQuotaAmount, quotaUnit } from "../lib/api";
 import { EXPIRY_WINDOW_DAYS, expiringAccounts } from "../lib/expiry";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
@@ -23,7 +23,7 @@ interface Props {
 export default function DashboardPanel({ overview, groups, onOpenAgent, visibility }: Props) {
   // 全局指标保持全量口径（与顶栏「今日已签 N/M」一致）；
   // 首页隐藏只影响下面的到期列表和 agent 卡片，不改汇总数字。
-  const homeVisible = (id: string) => visibility[id]?.home !== false;
+  const homeVisible = (id: string) => agentVisibilityOf(visibility, id).home;
   const visibleGroups = groups.filter((g) => homeVisible(g.provider.id));
   const totalRemaining = groups.reduce((s, g) => s + g.totalRemaining, 0);
   const totalGranted = groups.reduce((s, g) => s + g.totalGranted, 0);

@@ -1,5 +1,5 @@
 import { useEffect } from "react";
-import type { AgentGroup, AgentVisibility, Overview } from "../lib/types";
+import { agentVisibilityOf, type AgentGroup, type AgentVisibility, type Overview } from "../lib/types";
 import { buildGroups } from "../lib/groups";
 import { fmtPoints } from "../lib/api";
 import { agentIcon } from "../lib/agentIcons";
@@ -81,7 +81,9 @@ export default function LaunchScreen({
 }: Props) {
   const loading = !overview;
   const groups = overview ? buildGroups(overview) : [];
-  const visibleGroups = groups.filter((g) => visibility[g.provider.id]?.launch !== false);
+  const visibleGroups = groups.filter(
+    (g) => agentVisibilityOf(visibility, g.provider.id).launch
+  );
   const autoReady = groups
     .filter((g) => g.provider.supportsClaim)
     .reduce((s, g) => s + g.claimableCount, 0);

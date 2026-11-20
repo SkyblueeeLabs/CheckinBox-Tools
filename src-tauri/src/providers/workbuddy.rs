@@ -21,7 +21,7 @@
 //! 包明细    POST /billing/meter/get-user-resource-{paid,free}-packages
 //! 消耗明细  POST /billing/meter/get-user-request-usage（需 X-Client-Platform: workbuddy）
 //! 刷新      POST www.codebuddy.cn/v2/plugin/auth/token/refresh（X-Refresh-Token 头）
-//! 浏览器授权 POST /v2/plugin/auth/state?platform=ide → authUrl → GET /v2/plugin/auth/token?state=
+//! 浏览器授权 POST /v2/plugin/auth/state?platform=workbuddy → authUrl → 轮询 token → 查询账号
 //! ```
 
 use anyhow::{anyhow, Result};
@@ -36,6 +36,7 @@ use crate::core::provider::{
 
 /// 默认基址（CN 版）。实际调用时跟随账号的 domain 字段（国际版是 codebuddy.ai）
 const BASE_DEFAULT: &str = "https://www.codebuddy.cn";
+const AUTH_BASE: &str = "https://copilot.tencent.com";
 /// 浏览器 UA（网关会校验，非浏览器 UA 直接 401）
 const USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36";
 
@@ -187,7 +188,7 @@ impl WorkBuddyProvider {
         }
         headers.insert("accept", "application/json".parse().unwrap());
         // 网关要求带用户身份；少了 X-User-Id / X-Domain 会 401（实测）
-        if let Some(uid) = cred["uid"].as_str().filter(|u| !u.is_empty()) {
+        if let Some(uid) = non_empty(&cred["uid"]) {
             if let Ok(v) = uid.parse() {
                 headers.insert("X-User-Id", v);
             }
@@ -368,18 +369,123 @@ mod cockpit_cipher {
 }
 
 // ---------------------------------------------------------------------------
-// OAuth 浏览器授权导入（借鉴 Cockpit 的 codebuddy_cn_oauth 流程）
+// OAuth 浏览器授权导入
 // ---------------------------------------------------------------------------
+
+fn non_empty(value: &Value) -> Option<&str> {
+    value.as_str().map(str::trim).filter(|s| !s.is_empty())
+}
+
+fn uid_value(value: &Value) -> Option<String> {
+    non_empty(value)
+        .map(str::to_string)
+        .or_else(|| value.as_u64().map(|uid| uid.to_string()))
+}
+
+fn token_claims(access: &str) -> Option<Value> {
+    let mut parts = access.trim().split('.');
+    let (header, payload, signature) = (parts.next()?, parts.next()?, parts.next()?);
+    if header.is_empty() || signature.is_empty() || parts.next().is_some() {
+        return None;
+    }
+    let decoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(payload.trim_end_matches('='))
+        .ok()?;
+    serde_json::from_slice(&decoded).ok()
+}
+
+/// 旧版可能只留了 access token。JWT 的 sub 仅用于恢复本地账号标识，
+/// 调用服务时仍由 WorkBuddy 校验原始 token。
+pub(crate) fn credential_uid(cred: &Value) -> Option<String> {
+    uid_value(&cred["uid"])
+        .or_else(|| uid_value(&cred["account_profile"]["uid"]))
+        .or_else(|| uid_value(&token_claims(cred["access_token"].as_str()?)?["sub"]))
+}
+
+fn payloads(body: &Value) -> [&Value; 3] {
+    [&body["data"]["data"], &body["data"], body]
+}
+
+fn response_ok(body: &Value) -> bool {
+    body.get("code").map_or(true, |code| {
+        matches!(code.as_i64(), Some(0 | 200)) || matches!(code.as_str(), Some("0" | "200"))
+    })
+}
+
+fn browser_token_credential(body: &Value, now_ms: i64) -> Option<Value> {
+    if !response_ok(body) {
+        return None;
+    }
+    let pick = |keys: &[&str]| {
+        payloads(body)
+            .into_iter()
+            .find_map(|data| keys.iter().find_map(|key| non_empty(&data[*key])))
+    };
+    let access = pick(&["accessToken", "access_token", "token"])?;
+    let expires_at = payloads(body)
+        .into_iter()
+        .flat_map(|data| [&data["expiresAt"], &data["expires_at"]])
+        .map(parse_epoch_ms)
+        .find(|expiry| *expiry > 0)
+        .or_else(|| {
+            payloads(body)
+                .into_iter()
+                .flat_map(|data| [&data["expiresIn"], &data["expires_in"]])
+                .filter_map(integer_value)
+                .find(|seconds| *seconds > 0)
+                .map(|seconds| now_ms.saturating_add(seconds.saturating_mul(1000)))
+        })
+        .unwrap_or(0);
+    Some(json!({
+        "access_token": access,
+        "refresh_token": pick(&["refreshToken", "refresh_token"]).unwrap_or_default(),
+        "expires_at": expires_at,
+        "uid": payloads(body)
+            .into_iter()
+            .find_map(|data| uid_value(&data["uid"]))
+            .unwrap_or_default(),
+        "domain": pick(&["domain"]).unwrap_or_default(),
+    }))
+}
+
+fn account_profile(body: &Value) -> Option<&Value> {
+    if !response_ok(body) {
+        return None;
+    }
+    payloads(body)
+        .into_iter()
+        .flat_map(|data| [&data["account"], data])
+        .find(|profile| uid_value(&profile["uid"]).is_some())
+}
+
+fn with_identity(mut cred: Value, profile: Option<&Value>) -> Option<(String, Value)> {
+    let uid = if let Some(profile) = profile {
+        cred["account_profile"] = profile.clone();
+        uid_value(&profile["uid"])?
+    } else {
+        credential_uid(&cred)?
+    };
+    cred["uid"] = json!(uid);
+    if cred["expires_at"].as_i64().unwrap_or(0) <= 0 {
+        if let Some(claims) = cred["access_token"].as_str().and_then(token_claims) {
+            cred["expires_at"] = json!(parse_epoch_ms(&claims["exp"]))
+        }
+    }
+    Some((uid, cred))
+}
 
 impl WorkBuddyProvider {
     /// 发起授权：拿到 state 和浏览器授权地址。
     pub async fn begin_authorization(&self) -> Result<(String, String)> {
         let resp: Value = self
             .http
-            .post(format!("{BASE_DEFAULT}/v2/plugin/auth/state?platform=ide"))
+            .post(format!("{AUTH_BASE}/v2/plugin/auth/state?platform=workbuddy"))
             .header("accept", "application/json")
+            .header("X-Domain", AUTH_BASE.trim_start_matches("https://"))
+            .json(&json!({}))
             .send()
             .await?
+            .error_for_status()?
             .json()
             .await?;
         let state = resp["data"]["state"]
@@ -395,103 +501,106 @@ impl WorkBuddyProvider {
         Ok((state.to_string(), url.to_string()))
     }
 
-    /// 轮询授权结果；`Ok(None)` = 用户还没在浏览器里确认。
-    pub async fn poll_authorization(&self, state: &str) -> Result<Option<(Account, Value)>> {
+    /// 轮询授权结果；旧版发起的待办会话仍在签发它的网关轮询。
+    pub async fn poll_authorization(&self, state: &str, legacy: bool) -> Result<Option<(Account, Value)>> {
+        let base = if legacy { BASE_DEFAULT } else { AUTH_BASE };
         let resp = self
             .http
-            .get(format!("{BASE_DEFAULT}/v2/plugin/auth/token?state={state}"))
+            .get(format!("{base}/v2/plugin/auth/token"))
+            .query(&[("state", state)])
             .header("accept", "application/json")
+            .header("X-No-Authorization", "true")
+            .header("X-No-User-Id", "true")
+            .header("X-No-Enterprise-Id", "true")
+            .header("X-No-Department-Info", "true")
             .send()
-            .await?;
+            .await
+            .map_err(reqwest::Error::without_url)?;
         if resp.status() == 202 || resp.status() == 404 {
             return Ok(None);
         }
-        let body: Value = resp.json().await.unwrap_or(Value::Null);
-
-        let pick = |keys: &[&str]| -> Option<String> {
-            for k in keys {
-                for root in [&body, body.get("data").unwrap_or(&Value::Null)] {
-                    if let Some(v) = root[*k].as_str().filter(|s| !s.is_empty()) {
-                        return Some(v.to_string());
-                    }
-                }
-            }
-            None
-        };
-
-        let access = pick(&["accessToken", "access_token", "token"]).unwrap_or_default();
-        if access.is_empty() {
-            // 还没确认，或响应结构异常 —— 202/404 之外的「无 token」按未确认处理
-            return Ok(None);
-        }
-        let refresh = pick(&["refreshToken", "refresh_token"]).unwrap_or_default();
-
-        // 账号资料（uid / 昵称）；失败不影响入库（id 用 uid，拿不到用 token 指纹）
-        let info: Value = self
-            .http
-            .get(format!(
-                "{BASE_DEFAULT}/v2/plugin/login/account?state={state}"
-            ))
-            .header("accept", "application/json")
-            .send()
-            .await?
+        let body: Value = resp
+            .error_for_status()
+            .map_err(reqwest::Error::without_url)?
             .json()
             .await
-            .unwrap_or(Value::Null);
-        let uid = info["data"]["uid"]
-            .as_str()
-            .or_else(|| info["uid"].as_str())
-            .unwrap_or("")
-            .to_string();
-        let nickname = info["data"]["nickname"]
-            .as_str()
-            .or_else(|| info["nickname"].as_str())
-            .unwrap_or("")
-            .to_string();
-
-        let uid_for_cred = uid.clone();
-        let id = if uid.is_empty() {
-            // 没拿到 uid：用 access token 的 sha256 前 16 位当稳定 id
-            use sha2::{Digest, Sha256};
-            let hex: String = Sha256::digest(access.as_bytes())
-                .iter()
-                .map(|b| format!("{b:02x}"))
-                .collect();
-            hex[..16].to_string()
-        } else {
-            uid
+            .map_err(reqwest::Error::without_url)?;
+        let now = chrono::Utc::now();
+        let Some(cred) = browser_token_credential(&body, now.timestamp_millis()) else {
+            return Ok(None);
         };
-        let label = if nickname.is_empty() {
-            format!("WorkBuddy {}", &id[..id.len().min(8)])
-        } else {
-            nickname
+        let profile = self.fetch_account_profile(&cred, AUTH_BASE, None).await;
+        let profile = match profile {
+            Some(profile) => Some(profile),
+            None => self.fetch_account_profile(&cred, base, Some(state)).await,
         };
-
+        let (uid, cred) = with_identity(cred, profile.as_ref()).ok_or_else(|| {
+            anyhow!("WorkBuddy 授权后未返回账号身份，请重新添加账号")
+        })?;
+        let label = non_empty(&cred["account_profile"]["nickname"])
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("WorkBuddy {}", uid.chars().take(8).collect::<String>()));
         let account = Account {
-            id,
+            id: uid,
             provider: "workbuddy".to_string(),
             label,
-            created_at: chrono::Utc::now().timestamp(),
+            created_at: now.timestamp(),
             last_used: None,
             origin: "浏览器授权登录".to_string(),
         };
-        let expires_at = pick(&["expiresAt", "expires_at"])
-            .and_then(|s| s.parse::<i64>().ok())
-            .unwrap_or(0);
-        // expiresAt 可能是秒或毫秒
-        let expires_at = if expires_at > 0 && expires_at < 1_000_000_000_000 {
-            expires_at * 1000
-        } else {
-            expires_at
-        };
-        let cred = json!({
-            "access_token": access,
-            "refresh_token": refresh,
-            "expires_at": expires_at,
-            "uid": uid_for_cred,
-            "domain": pick(&["domain"]).unwrap_or_default(),
-        });
         Ok(Some((account, cred)))
+    }
+
+    async fn fetch_account_profile(
+        &self,
+        cred: &Value,
+        base: &str,
+        state: Option<&str>,
+    ) -> Option<Value> {
+        let body = self
+            .account_profile_request(cred, base, state)?
+            .send()
+            .await
+            .ok()?
+            .error_for_status()
+            .ok()?
+            .json::<Value>()
+            .await
+            .ok()?;
+        account_profile(&body).cloned()
+    }
+
+    fn account_profile_request(
+        &self,
+        cred: &Value,
+        base: &str,
+        state: Option<&str>,
+    ) -> Option<reqwest::RequestBuilder> {
+        let access = non_empty(&cred["access_token"])?;
+        let mut request = self
+            .http
+            .get(match state {
+                Some(_) => format!("{base}/v2/plugin/login/account"),
+                None => format!("{base}/v2/plugin/account"),
+            })
+            .bearer_auth(access)
+            .header("accept", "application/json")
+            .header("X-Requested-With", "XMLHttpRequest");
+        if let Some(state) = state {
+            request = request
+                .query(&[("state", state)])
+                .header("X-No-User-Id", "true")
+                .header("X-No-Enterprise-Id", "true")
+                .header("X-No-Department-Info", "true");
+        }
+        let domain = non_empty(&cred["domain"])
+            .unwrap_or_else(|| base.trim_start_matches("https://"));
+        Some(request.header("X-Domain", domain))
+    }
+
+    pub(crate) async fn recover_switch_identity(&self, cred: &Value) -> Option<Value> {
+        let profile = self.fetch_account_profile(cred, AUTH_BASE, None).await;
+        with_identity(cred.clone(), profile.as_ref()).map(|(_, cred)| cred)
     }
 }
 
@@ -1278,10 +1387,7 @@ fn detail_expire_ms(acc: &Value) -> i64 {
 
 /// 秒/毫秒/日期字符串统一转毫秒；无法解析为 0。
 fn parse_epoch_ms(value: &Value) -> i64 {
-    if let Some(n) = value
-        .as_i64()
-        .or_else(|| value.as_str().and_then(|s| s.trim().parse::<i64>().ok()))
-    {
+    if let Some(n) = integer_value(value) {
         if n > 0 {
             return if n < 1_000_000_000_000 { n * 1000 } else { n };
         }
@@ -1301,9 +1407,76 @@ fn parse_epoch_ms(value: &Value) -> i64 {
     0
 }
 
+fn integer_value(value: &Value) -> Option<i64> {
+    value.as_i64().or_else(|| value.as_str()?.trim().parse().ok())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 浏览器授权用已签发的凭据查询当前账号() {
+        let token = json!({
+            "code": 0,
+            "data": {"accessToken": "test-access", "refreshToken": "test-refresh",
+                "expiresIn": 3600, "domain": "www.workbuddy.cn"}
+        });
+        let cred = browser_token_credential(&token, 1_800_000_000_000).unwrap();
+        let provider = WorkBuddyProvider::new();
+        let request = provider
+            .account_profile_request(&cred, AUTH_BASE, None)
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(request.url().host_str(), Some("copilot.tencent.com"));
+        assert_eq!(request.url().path(), "/v2/plugin/account");
+        assert_eq!(request.headers()["authorization"], "Bearer test-access");
+        assert_eq!(request.headers()["x-domain"], "www.workbuddy.cn");
+        let legacy = provider
+            .account_profile_request(&cred, BASE_DEFAULT, Some("session+state"))
+            .unwrap()
+            .build()
+            .unwrap();
+        assert_eq!(legacy.url().path(), "/v2/plugin/login/account");
+        assert_eq!(legacy.url().query_pairs().next().unwrap().1, "session+state");
+
+        let body = json!({
+            "code": 0,
+            "data": {"uid": 12345, "nickname": "测试账号", "uin": "target-uin"}
+        });
+        let (uid, cred) = with_identity(cred, account_profile(&body)).unwrap();
+        assert_eq!(uid, "12345");
+        assert_eq!(cred["expires_at"], 1_800_003_600_000i64);
+        let session = crate::core::wb_session::build_session(&cred, "测试账号", None).unwrap();
+        assert_eq!(session["account"]["uid"], "12345");
+        assert_eq!(session["account"]["uin"], "target-uin");
+        assert_eq!(session["auth"]["refreshToken"], "test-refresh");
+    }
+
+    #[test]
+    fn 浏览器授权旧凭据可从同一访问令牌恢复身份() {
+        let payload = base64::engine::general_purpose::URL_SAFE_NO_PAD
+            .encode(br#"{"sub":"test-uid","exp":1800000000}"#);
+        let cred = json!({
+            "access_token": format!("header.{payload}.signature"), "uid": "", "expires_at": 0
+        });
+        let (uid, repaired) = with_identity(cred.clone(), None).unwrap();
+        assert_eq!(uid, "test-uid");
+        assert_eq!(repaired["uid"], "test-uid");
+        assert_eq!(repaired["expires_at"], 1_800_000_000_000i64);
+        assert_eq!(repaired["access_token"], cred["access_token"]);
+    }
+
+    #[test]
+    fn 浏览器授权拒绝没有真实身份的凭据() {
+        let body = json!({"code": 12151, "data": {"uid": "other-uid"}});
+        assert!(account_profile(&body).is_none());
+        assert!(account_profile(&json!({"code": 0, "data": {"uid": " "}})).is_none());
+        for access_token in ["opaque-token", "header.invalid.signature"] {
+            assert!(with_identity(json!({"access_token": access_token, "uid": ""}), None).is_none());
+        }
+    }
 
     #[test]
     fn 资源到期优先取PackageEndTime并兼容秒与字符串() {

@@ -14,7 +14,9 @@ use crate::core::quota_history;
 use crate::core::scheduler::{self, SchedulerState};
 use crate::core::store::AccountStore;
 use crate::notifications::{self, Inbox, NoticeKind};
-use crate::providers::qoder::AuthSession;
+use crate::providers::{minimax, qoder, trae};
+use qoder::AuthSession;
+use crate::providers::workbuddy;
 
 /// 全局应用状态。
 pub struct AppState {
@@ -48,11 +50,11 @@ impl AppState {
         let workbuddy = Arc::new(crate::providers::workbuddy::WorkBuddyProvider::new());
         let trae = Arc::new(crate::providers::trae::TraeProvider::new());
         let list: Vec<Arc<dyn Provider>> = vec![
+            workbuddy.clone(),
             minimax.clone(),
+            trae.clone(),
             qoder.clone(),
             Arc::new(crate::providers::miaoshou::MiaoshouProvider::new()),
-            trae.clone(),
-            workbuddy.clone(),
             Arc::new(crate::providers::zcode::ZcodeProvider::new()),
         ];
         let (mut store, store_warning) = match AccountStore::load() {
@@ -310,9 +312,8 @@ pub struct AccountResult {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DiscoveredAccount {
+pub struct ImportedClientAccount {
     pub account: Account,
-    pub provider: String,
     pub already_added: bool,
 }
 
@@ -437,10 +438,21 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         };
         client_login.insert(
             provider.id().to_string(),
-            detected.map(|(account_id, label)| ClientAccountView {
-                in_pool: store.contains(provider.id(), &account_id),
-                account_id,
-                label,
+            detected.map(|(mut account_id, label)| {
+                if provider.id() == "workbuddy" {
+                    if let Some(account) = workbuddy_pool_account(&store, &account_id) {
+                        account_id = account.id;
+                    }
+                } else if provider.id() == "qoder" {
+                    if let Some(legacy) = qoder_legacy_pool_id(&store, &account_id) {
+                        account_id = legacy;
+                    }
+                }
+                ClientAccountView {
+                    in_pool: store.contains(provider.id(), &account_id),
+                    account_id,
+                    label,
+                }
             }),
         );
     }
@@ -935,26 +947,16 @@ pub async fn workbuddy_credit_usage(
         .map_err(|e| e.to_string())
 }
 
-/// 从本机客户端自动发现已登录账号（不写盘）。
-#[tauri::command]
-pub async fn discover_accounts(
-    state: State<'_, AppState>,
-) -> Result<Vec<DiscoveredAccount>, String> {
-    let store = state.store.lock().unwrap().clone();
-    let mut out = Vec::new();
-    for provider in state.providers.iter() {
-        if let Ok(found) = provider.discover().await {
-            for (account, _) in found {
-                let already = store.contains(&account.provider, &account.id);
-                out.push(DiscoveredAccount {
-                    provider: account.provider.clone(),
-                    already_added: already,
-                    account,
-                });
-            }
-        }
+/// 界面上的本机导入读取客户端。WorkBuddy 的 Cockpit 账号库只用于批量导入。
+async fn discover_client_accounts(
+    provider: &dyn Provider,
+) -> anyhow::Result<Vec<(Account, serde_json::Value)>> {
+    if provider.id() == "workbuddy" {
+        return Ok(crate::core::client_switch::workbuddy_client_login()
+            .into_iter()
+            .collect());
     }
-    Ok(out)
+    provider.discover().await
 }
 
 /// Re-importing Qoder must refresh its display name from the profile API:
@@ -1031,16 +1033,21 @@ fn assign_trae_checkin_device_id(
     cred["checkin_device_id"] = serde_json::json!(id);
 }
 
-/// 把发现的账号加入账号池。
+/// 从客户端读取一次登录态，返回本次已写入或更新的账号。
 #[tauri::command]
-pub async fn add_discovered_account(
+pub async fn import_client_accounts(
     state: State<'_, AppState>,
     provider_id: String,
-) -> Result<Vec<Account>, String> {
+) -> Result<Vec<ImportedClientAccount>, String> {
     let Some(provider) = state.provider(&provider_id) else {
         return Err(format!("未知平台：{provider_id}"));
     };
-    let found = provider.discover().await.map_err(|e| e.to_string())?;
+    let found = discover_client_accounts(provider.as_ref())
+        .await
+        .map_err(|e| e.to_string())?;
+    if found.is_empty() {
+        return Ok(Vec::new());
+    }
     let previous_labels: HashMap<String, String> = state
         .store
         .lock()
@@ -1114,10 +1121,21 @@ pub async fn add_discovered_account(
         refreshed.push((account, cred));
     }
     let mut store = state.store.lock().unwrap();
-    for (account, cred) in refreshed {
-        store.upsert(account, &cred).map_err(|e| e.to_string())?;
+    let mut imported = Vec::with_capacity(refreshed.len());
+    for (mut account, cred) in refreshed {
+        if provider_id == "workbuddy" {
+            reuse_workbuddy_pool_id(&store, &mut account);
+        } else if provider_id == "qoder" {
+            reuse_qoder_pool_id(&store, &mut account);
+        }
+        let already_added = store.contains(&account.provider, &account.id);
+        store.upsert(account.clone(), &cred).map_err(|e| e.to_string())?;
+        imported.push(ImportedClientAccount {
+            account,
+            already_added,
+        });
     }
-    Ok(store.list())
+    Ok(imported)
 }
 
 /// 发起浏览器授权导入（Qoder / MiniMax / WorkBuddy）：返回一个需要在浏览器里确认的地址。
@@ -1167,7 +1185,7 @@ pub async fn begin_device_auth(
                 nonce: st,
                 machine_id: String::new(),
                 created_at: now,
-                extra: serde_json::Value::Null,
+                extra: serde_json::json!({ "workbuddy_auth": true }),
             }
         }
         "trae" => state
@@ -1220,6 +1238,9 @@ pub async fn poll_device_auth(
     let Some(session) = session else {
         return Err("授权会话已过期，请重新发起".into());
     };
+    if session.provider != provider_id {
+        return Err("授权会话的平台不一致，请重新发起".into());
+    }
 
     let polled = match session.provider.as_str() {
         "qoder" => state.qoder.poll_authorization(&session).await,
@@ -1232,7 +1253,13 @@ pub async fn poll_device_auth(
                 .poll_device_authorization(&session.verifier, &session.nonce, poll_param)
                 .await
         }
-        "workbuddy" => state.workbuddy.poll_authorization(&session.nonce).await,
+        "workbuddy" => {
+            let legacy = session.extra["workbuddy_auth"].as_bool() != Some(true);
+            state
+                .workbuddy
+                .poll_authorization(&session.nonce, legacy)
+                .await
+        }
         "trae" => state.trae.poll_authorization(&session).await,
         other => return Err(format!("{other} 不支持浏览器授权导入")),
     };
@@ -1275,6 +1302,11 @@ pub async fn poll_device_auth(
                 assign_trae_checkin_device_id(&existing, &account, &mut cred);
             }
             let mut store = state.store.lock().unwrap();
+            if provider_id == "workbuddy" {
+                reuse_workbuddy_pool_id(&store, &mut account);
+            } else if provider_id == "qoder" {
+                reuse_qoder_pool_id(&store, &mut account);
+            }
             store
                 .upsert(account.clone(), &cred)
                 .map_err(|e| e.to_string())?;
@@ -2072,6 +2104,53 @@ pub async fn detect_client_account(
     crate::core::client_switch::detect(&provider_id).map_err(|e| e.to_string())
 }
 
+/// 旧版浏览器导入可能以 token 指纹作池内 ID。用真实 UID 找回原记录，保留签到和趋势历史。
+fn workbuddy_pool_account(store: &AccountStore, uid: &str) -> Option<Account> {
+    let accounts = store.list_of("workbuddy");
+    accounts
+        .iter()
+        .find(|account| account.id == uid)
+        .cloned()
+        .or_else(|| {
+            accounts.into_iter().find(|account| {
+                store
+                    .credential("workbuddy", &account.id)
+                    .ok()
+                    .and_then(|cred| workbuddy::credential_uid(&cred))
+                    .as_deref() == Some(uid)
+            })
+        })
+}
+
+fn reuse_workbuddy_pool_id(store: &AccountStore, account: &mut Account) {
+    if let Some(existing) = workbuddy_pool_account(store, &account.id) {
+        account.id = existing.id;
+        account.created_at = existing.created_at;
+        account.last_used = existing.last_used;
+    }
+}
+
+/// 旧版 Qoder 对空 UID 生成了一个固定的池内 ID。身份恢复后继续使用旧记录的历史。
+fn qoder_legacy_pool_id(store: &AccountStore, canonical: &str) -> Option<String> {
+    if store.contains("qoder", canonical) {
+        return None;
+    }
+    let legacy = qoder::account_id("");
+    let cred = store.credential("qoder", &legacy).ok()?;
+    let uid = qoder::user_id_of(&cred)?;
+    (qoder::account_id(uid) == canonical).then_some(legacy)
+}
+
+fn reuse_qoder_pool_id(store: &AccountStore, account: &mut Account) {
+    if let Some(legacy) = qoder_legacy_pool_id(store, &account.id) {
+        if let Some(existing) = store.accounts.get(&AccountStore::key("qoder", &legacy)) {
+            account.created_at = existing.account.created_at;
+            account.last_used = existing.account.last_used;
+        }
+        account.id = legacy;
+    }
+}
+
 /// 把客户端**当前登录**的账号捕获进账号池（借鉴 Cockpit 的切换保护）。
 ///
 /// 「切换客户端账号」切走前调用：客户端同一时刻只能登一个号，切走后它的
@@ -2082,15 +2161,24 @@ pub async fn detect_client_account(
 /// 账号，所以这里单独捕获）。
 async fn capture_client_login(state: &AppState, provider_id: &str) {
     if provider_id == "qoder" {
-        if let Some((account, cred)) = crate::core::client_switch::qoder_client_login() {
+        if let Some((mut account, cred)) = crate::core::client_switch::qoder_client_login() {
             let mut store = state.store.lock().unwrap();
+            reuse_qoder_pool_id(&store, &mut account);
+            if let Ok(previous) = store.credential("qoder", &account.id) {
+                if qoder::validate_switch_credential(&cred).is_err()
+                    || cred_expiry_ms(&previous) > cred_expiry_ms(&cred)
+                {
+                    return;
+                }
+            }
             let _ = store.upsert(account, &cred);
         }
         return;
     }
     if provider_id == "workbuddy" {
-        if let Some((account, cred)) = crate::core::client_switch::workbuddy_client_login() {
+        if let Some((mut account, cred)) = crate::core::client_switch::workbuddy_client_login() {
             let mut store = state.store.lock().unwrap();
+            reuse_workbuddy_pool_id(&store, &mut account);
             let _ = store.upsert(account, &cred);
         }
         return;
@@ -2145,6 +2233,15 @@ async fn capture_client_login(state: &AppState, provider_id: &str) {
     };
     let mut store = state.store.lock().unwrap();
     for (account, cred) in found {
+        if provider_id == "minimax" {
+            if let Ok(previous) = store.credential("minimax", &account.id) {
+                if minimax::switch_tokens(&cred).is_err()
+                    || cred_expiry_ms(&previous) > cred_expiry_ms(&cred)
+                {
+                    continue;
+                }
+            }
+        }
         let _ = store.upsert(account, &cred);
     }
 }
@@ -2178,6 +2275,7 @@ pub async fn switch_client_account(
     let cred = store
         .credential(&provider_id, &account_id)
         .map_err(|e| e.to_string())?;
+    let cred = prepare_switch_cred(&state, &account, cred).await?;
 
     let mut report_progress = |stage: &str| {
         let _ = app.emit(
@@ -2194,6 +2292,7 @@ pub async fn switch_client_account(
     // 第一步：关客户端。捕获放在关**之后** —— 客户端退出前最后一次提交的凭据
     // 最活（它自己会按点刷新并轮换 RT，先捕获可能拿到下一分钟就作废的 RT）
     report_progress("closing");
+    let was_running = crate::core::launcher::is_running(&provider_id);
     crate::core::client_switch::begin_switch(&provider_id).map_err(|e| e.to_string())?;
 
     // 第二步：捕获客户端当前登录的账号 —— 谁都不丢，且是客户端最后提交的凭据
@@ -2207,10 +2306,8 @@ pub async fn switch_client_account(
     let cred = match switch_cred_guard(&state, &account, cred).await {
         Ok(cred) => cred,
         Err(e) => {
-            // 校验失败时客户端已经在 begin_switch 里被关闭；把当前登录重新拉起来，
-            // 别把用户留在「客户端被关了」的状态。Trae 的会话失效最常见。
-            if provider_id == "trae" {
-                let _ = crate::core::launcher::launch("trae");
+            if was_running {
+                let _ = crate::core::launcher::launch(&provider_id);
             }
             return Err(e);
         }
@@ -2406,8 +2503,11 @@ async fn ensure_fresh_qoder(
     }
 
     // 客户端当前登录的就是这个账号：它文件里的凭据可能刚续期过，优先采纳
-    if let Some((same, fresh)) = crate::core::client_switch::qoder_client_login() {
-        if same.id == account.id && cred_expiry_ms(&fresh) > cred_expiry_ms(&latest) {
+    if let Some((_, fresh)) = crate::core::client_switch::qoder_client_login() {
+        if qoder::user_id_of(&fresh) == qoder::user_id_of(&latest)
+            && qoder::validate_switch_credential(&fresh).is_ok()
+            && cred_expiry_ms(&fresh) > cred_expiry_ms(&latest)
+        {
             persist_cred(state, account, &fresh);
             return fresh;
         }
@@ -2527,6 +2627,81 @@ fn persist_cred(state: &AppState, account: &Account, cred: &serde_json::Value) {
     let _ = store.upsert(account.clone(), cred);
 }
 
+/// 在关闭客户端前校验目标凭据。只从已经验证为同一账号的来源恢复缺失字段。
+async fn prepare_switch_cred(
+    state: &AppState,
+    account: &Account,
+    cred: serde_json::Value,
+) -> Result<serde_json::Value, String> {
+    let repaired = match account.provider.as_str() {
+        "workbuddy" if cred["uid"].as_str().map(str::trim).map_or(true, str::is_empty) => state
+            .workbuddy
+            .recover_switch_identity(&cred)
+            .await
+            .ok_or_else(|| {
+                format!(
+                    "无法从账号「{}」的 WorkBuddy 授权恢复 uid，请重新通过浏览器授权该账号后再切换",
+                    account.label
+                )
+            })?,
+        "qoder" => {
+            let mut repaired = cred.clone();
+            if qoder::user_id_of(&repaired).is_none() {
+                let uid = state.qoder.resolve_user_id(&cred).await.map_err(|e| e.to_string())?;
+                repaired["user_id"] = serde_json::json!(uid);
+            }
+            if qoder::validate_switch_credential(&repaired).is_err() {
+                if let Some((_, local)) = crate::core::client_switch::qoder_client_login() {
+                    if qoder::user_id_of(&local) == qoder::user_id_of(&repaired) {
+                        repaired = local;
+                    }
+                }
+            }
+            qoder::validate_switch_credential(&repaired).map_err(|e| e.to_string())?;
+            crate::core::client_switch::qoder_switch_dir().map_err(|e| e.to_string())?;
+            repaired
+        }
+        "minimax" => {
+            let repaired = if minimax::switch_tokens(&cred).is_ok() {
+                cred.clone()
+            } else {
+                match minimax::client_login_state(account).await {
+                    minimax::ClientLoginState::Same(local) => local,
+                    _ => cred.clone(),
+                }
+            };
+            minimax::switch_tokens(&repaired).map_err(|e| e.to_string())?;
+            crate::core::client_switch::minimax_switch_path(&repaired).map_err(|e| e.to_string())?;
+            repaired
+        }
+        "trae" => {
+            let mut repaired = cred.clone();
+            if trae::validate_switch_credential(&repaired).is_err() {
+                if let trae::ClientLoginState::Same(local) = trae::client_login_state(account, &cred) {
+                    repaired = local;
+                }
+            }
+            trae::preflight_switch(&repaired).map_err(|e| e.to_string())?;
+            repaired
+        }
+        _ => return Ok(cred),
+    };
+    if repaired == cred {
+        return Ok(cred);
+    }
+    let mut store = state.store.lock().unwrap();
+    let latest = store
+        .credential(&account.provider, &account.id)
+        .map_err(|e| e.to_string())?;
+    if latest != cred {
+        return Err("目标账号凭据在校验期间已更新，请重试切换".into());
+    }
+    store
+        .upsert(account.clone(), &repaired)
+        .map_err(|e| e.to_string())?;
+    Ok(repaired)
+}
+
 /// 切换前的凭据保活（目前只对 MiniMax 严格）：写进客户端的必须是「活」凭据。
 ///
 /// MiniMax 客户端在 refresh token 失效时会**删掉凭据**退回登录页
@@ -2544,11 +2719,49 @@ async fn switch_cred_guard(
     account: &Account,
     cred: serde_json::Value,
 ) -> Result<serde_json::Value, String> {
+    if account.provider == "qoder" {
+        let lock = refresh_lock_for(account).await;
+        let _guard = lock.lock().await;
+        let current = state
+            .store
+            .lock()
+            .unwrap()
+            .credential("qoder", &account.id)
+            .map_err(|e| e.to_string())?;
+        qoder::validate_switch_credential(&current).map_err(|e| e.to_string())?;
+        if cred_expiry_ms(&current) > chrono::Utc::now().timestamp_millis() {
+            return Ok(current);
+        }
+        let fresh = state
+            .qoder
+            .refresh(account, &current)
+            .await
+            .map_err(|e| e.to_string())?
+            .filter(|fresh| cred_expiry_ms(fresh) > chrono::Utc::now().timestamp_millis())
+            .ok_or_else(|| "无法确认 Qoder CN 凭据有效期，请重新通过浏览器授权该账号".to_string())?;
+        qoder::validate_switch_credential(&fresh).map_err(|e| e.to_string())?;
+        persist_cred(state, account, &fresh);
+        return Ok(fresh);
+    }
+    if account.provider == "workbuddy" {
+        return state
+            .store
+            .lock()
+            .unwrap()
+            .credential(&account.provider, &account.id)
+            .map_err(|e| e.to_string());
+    }
     if account.provider == "trae" {
         // 换号时客户端已经关闭。先校验目标账号的登录态：客户端手动换号会
         // 作废旧账号的会话，写死凭据会让客户端启动后直接清登录态。
         let provider = crate::providers::trae::TraeProvider::new();
-        let mut cred = cred;
+        let mut cred = state
+            .store
+            .lock()
+            .unwrap()
+            .credential("trae", &account.id)
+            .map_err(|e| e.to_string())?;
+        trae::validate_switch_credential(&cred).map_err(|e| e.to_string())?;
         if trae_needs_refresh(&cred, chrono::Utc::now().timestamp_millis()) {
             cred = match provider.refresh(account, &cred).await {
                 Ok(Some(fresh)) => {
@@ -2583,9 +2796,20 @@ async fn switch_cred_guard(
         return Ok(cred);
     }
 
+    let lock = refresh_lock_for(account).await;
+    let _guard = lock.lock().await;
+    let cred = state
+        .store
+        .lock()
+        .unwrap()
+        .credential("minimax", &account.id)
+        .map_err(|e| e.to_string())?;
     // 客户端当前登录的就是这个账号：用它文件里的最新凭据（顺手落盘）
     let cred = match crate::providers::minimax::client_login_state(account).await {
-        crate::providers::minimax::ClientLoginState::Same(fresh) => {
+        crate::providers::minimax::ClientLoginState::Same(fresh)
+            if minimax::switch_tokens(&fresh).is_ok()
+                && cred_expiry_ms(&fresh) >= cred_expiry_ms(&cred) =>
+        {
             if fresh != cred {
                 persist_cred(state, account, &fresh);
             }
@@ -2593,6 +2817,7 @@ async fn switch_cred_guard(
         }
         _ => cred,
     };
+    minimax::switch_tokens(&cred).map_err(|e| e.to_string())?;
 
     if !needs_refresh(&cred, chrono::Utc::now().timestamp_millis()) {
         return Ok(cred);
@@ -3061,8 +3286,14 @@ pub fn cli_import_local() -> Result<(), String> {
                     ));
                 }
                 Ok(found) => {
-                    for (account, cred) in found {
-                        match state.store.lock().unwrap().upsert(account.clone(), &cred) {
+                    for (mut account, cred) in found {
+                        let mut store = state.store.lock().unwrap();
+                        if account.provider == "workbuddy" {
+                            reuse_workbuddy_pool_id(&store, &mut account);
+                        } else if account.provider == "qoder" {
+                            reuse_qoder_pool_id(&store, &mut account);
+                        }
+                        match store.upsert(account.clone(), &cred) {
                             Ok(()) => {
                                 imported += 1;
                                 body.push_str(&format!(
@@ -3189,15 +3420,17 @@ pub async fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<()
     let cred = store
         .credential(provider_id, account_id)
         .map_err(|e| e.to_string())?;
+    let cred = prepare_switch_cred(&state, &account, cred).await?;
 
     // 与界面路径同序：先关客户端，再捕获（拿它最后提交的凭据），再保活
+    let was_running = crate::core::launcher::is_running(provider_id);
     crate::core::client_switch::begin_switch(provider_id).map_err(|e| e.to_string())?;
     capture_client_login(&state, provider_id).await;
     let cred = match switch_cred_guard(&state, &account, cred).await {
         Ok(cred) => cred,
         Err(e) => {
-            if provider_id == "trae" {
-                let _ = crate::core::launcher::launch("trae");
+            if was_running {
+                let _ = crate::core::launcher::launch(provider_id);
             }
             return Err(e);
         }
@@ -3299,6 +3532,74 @@ mod tests {
             last_used: None,
             origin: "test".to_string(),
         }
+    }
+
+    #[test]
+    fn 浏览器旧账号以真实uid匹配但保留原有记录() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut old = account("legacy-token-fingerprint");
+        old.provider = "workbuddy".into();
+        old.created_at = 100;
+        let plain = serde_json::to_vec(&json!({"uid": "real-uid"})).unwrap();
+        let cipher = crate::core::dpapi::protect(&plain).unwrap();
+        let mut store = AccountStore::default();
+        store.accounts.insert(
+            AccountStore::key("workbuddy", &old.id),
+            crate::core::store::StoredAccount {
+                account: old.clone(),
+                credential: STANDARD.encode(cipher),
+            },
+        );
+
+        let mut reimported = account("real-uid");
+        reimported.provider = "workbuddy".into();
+        reuse_workbuddy_pool_id(&store, &mut reimported);
+        assert_eq!(reimported.id, old.id);
+        assert_eq!(reimported.created_at, old.created_at);
+        assert!(workbuddy_pool_account(&store, "unrelated-uid").is_none());
+    }
+
+    #[test]
+    fn qoder_recovered_identity_reuses_only_its_own_legacy_record() {
+        use base64::{engine::general_purpose::STANDARD, Engine};
+
+        let mut old = account(&qoder::account_id(""));
+        old.provider = "qoder".into();
+        old.created_at = 100;
+        let real_uid = "recovered-qoder-uid";
+        let plain = serde_json::to_vec(&json!({"user_id": real_uid})).unwrap();
+        let cipher = crate::core::dpapi::protect(&plain).unwrap();
+        let mut store = AccountStore::default();
+        store.accounts.insert(
+            AccountStore::key("qoder", &old.id),
+            crate::core::store::StoredAccount {
+                account: old.clone(),
+                credential: STANDARD.encode(cipher),
+            },
+        );
+        let mut reimported = account(&qoder::account_id(real_uid));
+        reimported.provider = "qoder".into();
+        reuse_qoder_pool_id(&store, &mut reimported);
+        assert_eq!(reimported.id, old.id);
+        assert_eq!(reimported.created_at, old.created_at);
+        assert!(qoder_legacy_pool_id(&store, &qoder::account_id("other-uid")).is_none());
+    }
+
+    #[tokio::test]
+    #[ignore = "依赖已登录的 WorkBuddy 客户端和本机 Cockpit 账号库，只读"]
+    async fn workbuddy_client_import_uses_current_session() {
+        let provider = workbuddy::WorkBuddyProvider::new();
+        let records = discover_client_accounts(&provider).await.unwrap();
+        assert_eq!(records.len(), 1);
+        let (account, _) = &records[0];
+        let detected = crate::core::client_switch::detect("workbuddy")
+            .unwrap()
+            .expect("WorkBuddy 客户端当前未登录");
+        // 常规检测用明文 UID，导入会解密昵称，因此按 UID 比对。
+        assert!(account.id == detected.account_id);
+        assert_eq!(account.origin, "WorkBuddy 客户端登录态");
+        eprintln!("WorkBuddy 本机导入账号：{}", account.label);
     }
 
     #[test]

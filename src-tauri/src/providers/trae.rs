@@ -25,7 +25,7 @@ use base64::{
 };
 use cbc::cipher::{block_padding::Pkcs7, BlockDecryptMut, BlockEncryptMut, KeyIvInit};
 use p256::ecdsa::{signature::Signer, Signature, SigningKey};
-use p256::pkcs8::{DecodePrivateKey, EncodePrivateKey, EncodePublicKey, LineEnding};
+use p256::pkcs8::{DecodePrivateKey, DecodePublicKey, EncodePrivateKey, EncodePublicKey, LineEnding};
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256, Sha512};
 use std::collections::HashMap;
@@ -52,6 +52,8 @@ const FALLBACK_CLIENT_VERSION: &str = "3.4.20";
 const FALLBACK_TRON_VERSION: &str = "2.3.103559";
 
 const APP_DIRS: &[&str] = &["Trae CN", "TRAE SOLO CN", "Trae", "Trae Solo"];
+const AUTH_STORAGE_KEY: &str = "iCubeAuthInfo://icube.cloudide";
+const DEVICE_KEY_PREFIX: &str = "iCubeAuthInfo://icube-dc:";
 
 // ---------------------------------------------------------------------------
 // tc 存储格式（Trae 客户端自己的 byteCrypto）
@@ -677,7 +679,7 @@ impl TraeProvider {
             &["AvatarUrl", "avatarUrl", "avatar_url", "avatar"],
         );
         let email = user_field(user_info, &["NonPlainTextEmail", "email", "Email"]);
-        Ok(json!({
+        let cred = json!({
             "access_token": fresh["access_token"].clone(),
             "refresh_token": fresh["refresh_token"].clone(),
             "expires_at_ms": fresh["expires_at_ms"].clone(),
@@ -704,7 +706,9 @@ impl TraeProvider {
             "last_refresh_at": 0,
             "account_json": oauth_account_json(user_info),
             "user_region_json": {"region": "CN", "_aiRegion": "CN"},
-        }))
+        });
+        validate_switch_credential(&cred)?;
+        Ok(cred)
     }
 
     /// 客户端启动时同款登录态校验。`false` = 会话已被作废，不能写进客户端。
@@ -795,47 +799,138 @@ pub struct LocalCredentialWrite {
     pub backup: Option<String>,
 }
 
+fn credential_text<'a>(cred: &'a Value, key: &str) -> Option<&'a str> {
+    cred[key]
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+}
+
+pub(crate) fn validate_switch_credential(cred: &Value) -> Result<()> {
+    validate_login_fields(cred)?;
+    switch_device(cred)?;
+    Ok(())
+}
+
+fn validate_login_fields(cred: &Value) -> Result<()> {
+    for field in ["user_id", "access_token", "refresh_token"] {
+        if credential_text(cred, field).is_none() {
+            bail!("Trae CN 凭据缺少 {field}，请重新通过浏览器授权该账号");
+        }
+    }
+    Ok(())
+}
+
+fn switch_device(cred: &Value) -> Result<(&str, &str, &str)> {
+    let id = credential_text(cred, "login_device_id")
+        .filter(|id| is_valid_device_id(id))
+        .ok_or_else(|| anyhow!("Trae CN 凭据缺少有效设备编号，请重新授权该账号"))?;
+    let private = credential_text(cred, "device_private_key_pem")
+        .ok_or_else(|| anyhow!("Trae CN 凭据缺少设备私钥，请重新授权该账号"))?;
+    let public = credential_text(cred, "device_public_key_pem")
+        .ok_or_else(|| anyhow!("Trae CN 凭据缺少设备公钥，请重新授权该账号"))?;
+    let private_key = SigningKey::from_pkcs8_pem(private)
+        .map_err(|_| anyhow!("Trae CN 设备私钥格式无效，请重新授权该账号"))?;
+    let public_key = p256::ecdsa::VerifyingKey::from_public_key_pem(public)
+        .map_err(|_| anyhow!("Trae CN 设备公钥格式无效，请重新授权该账号"))?;
+    if private_key.verifying_key() != &public_key {
+        bail!("Trae CN 授权设备公钥和私钥不匹配，请重新授权该账号");
+    }
+    Ok((id, private, public))
+}
+
+fn storage_path(app_dir: &Path) -> PathBuf {
+    app_dir.join("User").join("globalStorage").join("storage.json")
+}
+
+fn default_app_dir() -> Result<PathBuf> {
+    let appdata = std::env::var_os("APPDATA")
+        .ok_or_else(|| anyhow!("没有找到 Trae CN 客户端数据目录"))?;
+    Ok(PathBuf::from(appdata).join(APP_DIRS[0]))
+}
+
+fn read_storage(path: &Path, allow_missing: bool) -> Result<Value> {
+    let raw = match std::fs::read_to_string(path) {
+        Ok(raw) => raw,
+        Err(error) if allow_missing && error.kind() == std::io::ErrorKind::NotFound => {
+            return Ok(json!({}));
+        }
+        Err(error) => return Err(error).context("读取 Trae storage.json 失败"),
+    };
+    let storage: Value = serde_json::from_str(&raw).context("解析 Trae storage.json 失败")?;
+    if !storage.is_object() {
+        bail!("Trae storage.json 不是有效的配置对象");
+    }
+    Ok(storage)
+}
+
+pub(crate) fn preflight_switch(cred: &Value) -> Result<()> {
+    validate_switch_credential(cred)?;
+    if crate::core::launcher::client_exe("trae").is_none() {
+        bail!("没有找到 Trae CN 客户端，请先安装客户端");
+    }
+    let app_dir = match read_local_auth() {
+        Some(local) => local.app_dir,
+        None => default_app_dir()?,
+    };
+    read_storage(&storage_path(&app_dir), true)?;
+    Ok(())
+}
+
 /// 把凭据写入本机 Trae 的 `storage.json`。
 ///
 /// - `allow_switch=false`：只允许当前登录账号的 token 回写（刷新用）；
 /// - `allow_switch=true`：允许把 storage 切成另一个账号（换号用）。
 ///
-/// 只改 `iCubeAuthInfo://icube.cloudide` 和 `iCubeAuthInfo://usertag`，保留设备
-/// 密钥、会话和其余字段；写前用 `client_backup` 按代备份，写完再解一次校验。
+/// 仅更新登录态、用户标签及目标设备密钥。已有文件先备份，写完再校验目标账号。
 pub fn write_local_credential(
     cred: &Value,
     allow_switch: bool,
     reason: &str,
 ) -> Result<LocalCredentialWrite> {
-    let local = read_local_auth().ok_or_else(|| anyhow!("没有找到本机 Trae CN 登录态"))?;
-    let local_uid = local.auth["userId"].as_str().unwrap_or("");
-    let uid = cred["user_id"]
-        .as_str()
-        .filter(|s| !s.is_empty())
+    let local = read_local_auth();
+    let app_dir = match local.as_ref() {
+        Some(local) => local.app_dir.clone(),
+        None if allow_switch => default_app_dir()?,
+        None => bail!("没有找到本机 Trae CN 登录态"),
+    };
+    let storage_path = storage_path(&app_dir);
+    let storage = read_storage(&storage_path, allow_switch)?;
+    let template = local.as_ref().map(|local| &local.auth);
+    let storage = build_login_storage(storage, template, cred, allow_switch)?;
+    let backup = if storage_path.is_file() {
+        let backup = crate::core::client_backup::backup_client_login(
+            "trae",
+            &[(storage_path.clone(), "storage.json".to_string())],
+            reason,
+        )
+        .map_err(|e| anyhow!("备份 Trae 登录态失败：{e}"))?;
+        Some(backup.dir)
+    } else {
+        None
+    };
+    write_verified_login_storage(&app_dir, &storage, cred)?;
+    Ok(LocalCredentialWrite { storage_path, backup })
+}
+
+fn build_login_storage(
+    mut storage: Value,
+    template: Option<&Value>,
+    cred: &Value,
+    allow_switch: bool,
+) -> Result<Value> {
+    let uid = credential_text(cred, "user_id")
         .ok_or_else(|| anyhow!("Trae 凭据缺少 user_id"))?;
-    if !local_uid.is_empty() && local_uid != uid && !allow_switch {
+    let local_uid = template.and_then(|auth| auth["userId"].as_str());
+    if !allow_switch && local_uid != Some(uid) {
         bail!("目标账号不是客户端当前登录账号，拒绝回写");
     }
-
-    let storage_path = local
-        .app_dir
-        .join("User")
-        .join("globalStorage")
-        .join("storage.json");
-    let backup = crate::core::client_backup::backup_client_login(
-        "trae",
-        &[(storage_path.clone(), "storage.json".to_string())],
-        reason,
-    )
-    .map_err(|e| anyhow!("备份 Trae 登录态失败：{e}"))?;
-
-    let raw = std::fs::read_to_string(&storage_path).context("读取 Trae storage.json 失败")?;
-    let mut storage: Value =
-        serde_json::from_str(&raw).context("解析 Trae storage.json 失败")?;
-
-    let mut auth = local.auth.clone();
+    let mut auth = template.cloned().unwrap_or_else(|| json!({}));
     if let Some(token) = cred["access_token"].as_str() {
         auth["token"] = json!(token);
+        if auth.get("accessToken").is_some() {
+            auth["accessToken"] = json!(token);
+        }
     }
     if let Some(token) = cred["refresh_token"].as_str() {
         auth["refreshToken"] = json!(token);
@@ -849,68 +944,61 @@ pub fn write_local_credential(
     auth["tokenReleaseAt"] = json!(iso_from_ms(now_ms()));
 
     if allow_switch {
+        validate_login_fields(cred)?;
+        let (id, private, public) = switch_device(cred)?;
+        storage[format!("{DEVICE_KEY_PREFIX}{id}")] = json!(tc_encrypt_json(&json!({
+            "privateKeyPEM": private, "publicKeyPEM": public,
+        }))?);
+        auth["deviceId"] = json!(id);
         auth["userId"] = json!(uid);
         auth["host"] = json!(api_host(cred));
+        if let Some(auth) = auth.as_object_mut().filter(|_| local_uid != Some(uid)) {
+            for (field, key) in [
+                ("expires_at_ms", "expiredAt"),
+                ("refresh_expires_at_ms", "refreshExpiredAt"),
+            ] {
+                if cred[field].as_i64().unwrap_or(0) <= 0 {
+                    auth.remove(key);
+                }
+            }
+        }
         auth["userRegion"] = cred
             .get("user_region_json")
             .filter(|value| value.is_object())
             .cloned()
             .unwrap_or_else(|| json!({"region": "CN", "_aiRegion": "CN"}));
 
-        // 导入/捕获时保留的账号对象原样写回；旧账号没有该字段时再按目标重建，
-        // 并清掉上一个账号的手机号/邮箱/组织，避免串号。
-        if let Some(account) = cred.get("account_json").filter(|value| value.is_object()) {
-            auth["account"] = account.clone();
-        } else {
-            if !auth["account"].is_object() {
-                auth["account"] = json!({});
-            }
-            if let Some(account) = auth["account"].as_object_mut() {
-                account.insert(
-                    "username".to_string(),
-                    json!(cred["nickname"].as_str().unwrap_or("")),
-                );
-                account.insert(
-                    "avatar_url".to_string(),
-                    json!(cred["avatar"].as_str().unwrap_or("")),
-                );
-                account.insert(
-                    "email".to_string(),
-                    json!(cred["email"].as_str().unwrap_or("")),
-                );
-                account.insert("nonPlainTextEmail".to_string(), json!(""));
-                account.insert("nonPlainTextMobile".to_string(), json!(""));
-                account.insert("description".to_string(), json!(""));
-                account.insert("organization".to_string(), json!(""));
-                account.insert("work_country".to_string(), json!(""));
-                account.insert("storeCountryCode".to_string(), json!(""));
-                account.insert("storeCountrySrc".to_string(), json!(""));
-                account.insert("userTag".to_string(), json!("cn"));
-                account.insert("migrateToSG".to_string(), json!(false));
-            }
-        }
+        auth["account"] = cred
+            .get("account_json")
+            .filter(|value| value.is_object())
+            .cloned()
+            .unwrap_or_else(|| {
+                oauth_account_json(&json!({
+                    "ScreenName": cred["nickname"],
+                    "AvatarUrl": cred["avatar"],
+                    "Email": cred["email"],
+                }))
+            });
     }
 
-    storage["iCubeAuthInfo://icube.cloudide"] = json!(tc_encrypt_json(&auth)?);
+    storage[AUTH_STORAGE_KEY] = json!(tc_encrypt_json(&auth)?);
 
     let mut tags = read_usertag_map(&storage);
     tags.insert(uid.to_string(), json!("cn"));
     storage["iCubeAuthInfo://usertag"] = json!(tc_encrypt_json(&Value::Object(tags))?);
 
-    let bytes = serde_json::to_vec_pretty(&storage)?;
-    crate::core::paths::atomic_write(&storage_path, &bytes)?;
+    Ok(storage)
+}
 
-    // 写完再解一次，确认目标 userId 真的生效（避免半截写入被当成成功）。
-    let verify = read_local_auth_in(&local.app_dir)
+fn write_verified_login_storage(app_dir: &Path, storage: &Value, cred: &Value) -> Result<()> {
+    let bytes = serde_json::to_vec_pretty(storage)?;
+    crate::core::paths::atomic_write(&storage_path(app_dir), &bytes)?;
+    let verify = read_local_auth_in(app_dir)
         .ok_or_else(|| anyhow!("写入后无法重新读取 Trae 登录态"))?;
-    if verify.auth["userId"].as_str() != Some(uid) {
+    if verify.auth["userId"].as_str() != credential_text(cred, "user_id") {
         bail!("写入后校验失败：Trae 登录态仍不是目标账号");
     }
-
-    Ok(LocalCredentialWrite {
-        storage_path,
-        backup: Some(backup.dir),
-    })
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -1144,6 +1232,9 @@ fn parse_refresh_result(cred: &Value, body: &Value) -> Result<Option<Value>> {
         fresh["refresh_expires_at_ms"] = json!(refresh_expire);
     }
     if let Some(uid) = result["UserID"].as_str().filter(|s| !s.is_empty()) {
+        if credential_text(cred, "user_id").is_some_and(|stored| stored != uid) {
+            bail!("Trae CN 续期返回了不同的账号身份");
+        }
         fresh["user_id"] = json!(uid);
     }
     fresh["last_refresh_at"] = json!(now);
@@ -1356,16 +1447,11 @@ fn read_local_auth() -> Option<LocalAuth> {
 }
 
 fn read_local_auth_in(app_dir: &Path) -> Option<LocalAuth> {
-    let storage_path = app_dir
-        .join("User")
-        .join("globalStorage")
-        .join("storage.json");
-    let storage_text = std::fs::read_to_string(&storage_path).ok()?;
-    let storage: Value = serde_json::from_str(&storage_text).ok()?;
+    let storage = read_storage(&storage_path(app_dir), false).ok()?;
     let object = storage.as_object()?;
 
-    let auth_key = if object.contains_key("iCubeAuthInfo://icube.cloudide") {
-        "iCubeAuthInfo://icube.cloudide".to_string()
+    let auth_key = if object.contains_key(AUTH_STORAGE_KEY) {
+        AUTH_STORAGE_KEY.to_string()
     } else {
         object
             .keys()
@@ -1386,11 +1472,16 @@ fn read_local_auth_in(app_dir: &Path) -> Option<LocalAuth> {
         return None;
     }
 
-    let device_key = object
-        .keys()
-        .find(|key| key.starts_with("iCubeAuthInfo://icube-dc:"))?;
+    let device_key = auth["deviceId"]
+        .as_str()
+        .and_then(|id| {
+            object
+                .get_key_value(&format!("{DEVICE_KEY_PREFIX}{id}"))
+                .map(|(key, _)| key)
+        })
+        .or_else(|| object.keys().find(|key| key.starts_with(DEVICE_KEY_PREFIX)))?;
     let device_id = device_key
-        .strip_prefix("iCubeAuthInfo://icube-dc:")?
+        .strip_prefix(DEVICE_KEY_PREFIX)?
         .trim()
         .to_string();
     let mut device = object
@@ -1835,6 +1926,55 @@ mod tests {
             "host": "https://api.trae.cn",
             "account": {"username": "测试用户"},
         })
+    }
+
+    fn browser_credential(uid: &str, device_id: &str) -> Value {
+        let (private, public) = generate_keypair().unwrap();
+        json!({
+            "user_id": uid,
+            "access_token": format!("{uid}-access"),
+            "refresh_token": format!("{uid}-refresh"),
+            "expires_at_ms": 1_800_000_000_000i64,
+            "login_device_id": device_id,
+            "device_private_key_pem": private,
+            "device_public_key_pem": public,
+        })
+    }
+
+    #[test]
+    fn browser_credential_requires_refresh_token_and_matching_device_keys() {
+        let mut cred = browser_credential("user-a", "3812345678901234");
+        validate_switch_credential(&cred).unwrap();
+        cred["refresh_token"] = json!("");
+        assert!(validate_switch_credential(&cred).is_err());
+        cred["refresh_token"] = json!("test-refresh");
+        cred["device_public_key_pem"] = json!(generate_keypair().unwrap().1);
+        assert!(validate_switch_credential(&cred).is_err());
+    }
+
+    #[test]
+    fn browser_switch_bootstraps_storage_and_selects_target_device_on_each_switch() {
+        let app = tempfile::tempdir().unwrap();
+        let a = browser_credential("user-a", "3812345678901234");
+        let mut b = browser_credential("user-b", "4812345678901234");
+        b["refresh_expires_at_ms"] = json!(1_850_000_000_000i64);
+        let path = storage_path(app.path());
+        let mut storage = read_storage(&path, true).unwrap();
+        storage["unrelated-setting"] = json!("keep");
+        for cred in [&a, &b, &a] {
+            let previous = read_local_auth_in(app.path());
+            storage = build_login_storage(storage, previous.as_ref().map(|s| &s.auth), cred, true).unwrap();
+            write_verified_login_storage(app.path(), &storage, cred).unwrap();
+            let local = read_local_auth_in(app.path()).unwrap();
+            assert_eq!(local.auth["userId"], cred["user_id"]);
+            assert_eq!(local.auth["refreshToken"], cred["refresh_token"]);
+            assert_eq!(local.device_id, cred["login_device_id"].as_str().unwrap());
+            assert_eq!(local.device["publicKeyPEM"].as_str().unwrap().trim(), cred["device_public_key_pem"].as_str().unwrap().trim());
+            if cred["user_id"] == "user-a" {
+                assert!(local.auth.get("refreshExpiredAt").is_none());
+            }
+            assert_eq!(read_storage(&path, false).unwrap()["unrelated-setting"], "keep");
+        }
     }
 
     #[test]

@@ -163,7 +163,8 @@ impl QoderProvider {
             None
         };
 
-        let token = lookup(&["token", "access_token", "device_token"]).unwrap_or_default();
+        let token = lookup(&["token", "access_token", "accessToken", "device_token"])
+            .unwrap_or_default();
         if token.is_empty() {
             return Ok(None);
         }
@@ -183,21 +184,7 @@ impl QoderProvider {
             .map(|dt| dt.timestamp_millis())
             .unwrap_or(0);
 
-        let label = if user_id.is_empty() {
-            "Qoder 账号".to_string()
-        } else {
-            format!("Qoder {}", &user_id[..user_id.len().min(12)])
-        };
-
-        let account = Account {
-            id: format!("{:x}", Sha256::digest(user_id.as_bytes()))[..16].to_string(),
-            provider: "qoder".to_string(),
-            label,
-            created_at: chrono::Utc::now().timestamp(),
-            last_used: None,
-            origin: "设备授权登录".to_string(),
-        };
-        let cred = json!({
+        let mut cred = json!({
             "access_token": token,
             "refresh_token": refresh,
             "refresh_token_id": refresh_id,
@@ -207,7 +194,38 @@ impl QoderProvider {
             "machine_id": session.machine_id,
             "region": "cn",
         });
+        if user_id_of(&cred).is_none() {
+            let uid = self.resolve_user_id(&cred).await?;
+            cred["user_id"] = json!(uid);
+        }
+        let account = browser_account(&cred)?;
         Ok(Some((account, cred)))
+    }
+
+    pub(crate) async fn resolve_user_id(&self, cred: &Value) -> Result<String> {
+        let profile = self.fetch_user_info(cred).await?;
+        profile
+            .as_ref()
+            .and_then(profile_user_id)
+            .map(str::to_string)
+            .ok_or_else(|| anyhow!("无法确认 Qoder CN 账号身份，请重新通过浏览器授权该账号"))
+    }
+
+    async fn fetch_user_info(&self, cred: &Value) -> Result<Option<Value>> {
+        let Some(token) = credential_text(cred, "access_token") else {
+            return Ok(None);
+        };
+        let resp = self
+            .http
+            .get(format!("{OPENAPI_BASE}{USERINFO_PATH}"))
+            .bearer_auth(token)
+            .header("accept", "application/json")
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            return Ok(None);
+        }
+        Ok(Some(resp.json().await?))
     }
 
     /// 拼装 SASH 接口需要的请求头（含设备风控三件套）。
@@ -336,6 +354,52 @@ fn profile_text<'a>(value: &'a Value, keys: &[&str], depth: u8) -> Option<&'a st
         }
     }
     None
+}
+
+fn credential_text<'a>(cred: &'a Value, key: &str) -> Option<&'a str> {
+    cred[key]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+}
+
+fn profile_user_id(body: &Value) -> Option<&str> {
+    let profile = body
+        .get("data")
+        .or_else(|| body.get("result"))
+        .filter(|value| value.is_object())
+        .unwrap_or(body);
+    profile_text(profile, &["user_id", "userId", "id"], 3)
+}
+
+pub(crate) fn user_id_of(cred: &Value) -> Option<&str> {
+    credential_text(cred, "user_id")
+}
+
+pub(crate) fn account_id(uid: &str) -> String {
+    format!("{:x}", Sha256::digest(uid.as_bytes()))[..16].to_string()
+}
+
+pub(crate) fn validate_switch_credential(cred: &Value) -> Result<()> {
+    for field in ["user_id", "access_token", "refresh_token"] {
+        if credential_text(cred, field).is_none() {
+            return Err(anyhow!("Qoder CN 凭据缺少 {field}，请重新通过浏览器授权该账号"));
+        }
+    }
+    Ok(())
+}
+
+fn browser_account(cred: &Value) -> Result<Account> {
+    validate_switch_credential(cred)?;
+    let uid = user_id_of(cred).ok_or_else(|| anyhow!("Qoder CN 授权未返回账号身份"))?;
+    Ok(Account {
+        id: account_id(uid),
+        provider: "qoder".to_string(),
+        label: format!("Qoder {}", uid.chars().take(12).collect::<String>()),
+        created_at: chrono::Utc::now().timestamp(),
+        last_used: None,
+        origin: "设备授权登录".to_string(),
+    })
 }
 
 /// 是不是「每日积分」活动行。
@@ -467,6 +531,9 @@ fn parse_refresh_response(cred: &Value, body: &Value) -> Result<Value> {
         fresh["refresh_token"] = json!(rt);
     }
     if let Some(uid) = data["user_id"].as_str().filter(|s| !s.is_empty()) {
+        if user_id_of(cred).is_some_and(|stored| stored != uid) {
+            return Err(anyhow!("Qoder CN 续期返回了不同的账号身份"));
+        }
         fresh["user_id"] = json!(uid);
     }
 
@@ -841,25 +908,9 @@ impl Provider for QoderProvider {
     /// 这个接口能拿回用户在 Qoder 里真实设置的昵称：
     ///   `GET /api/v1/userinfo` → `{ id, name, username, avatar, source, ... }`
     async fn profile(&self, _account: &Account, cred: &Value) -> Result<Option<AccountProfile>> {
-        let token = cred["access_token"].as_str().unwrap_or("");
-        if token.is_empty() {
+        let Some(body) = self.fetch_user_info(cred).await? else {
             return Ok(None);
-        }
-        let url = format!("{OPENAPI_BASE}{USERINFO_PATH}");
-        let resp = self
-            .http
-            .get(url)
-            .header(reqwest::header::AUTHORIZATION, format!("Bearer {token}"))
-            .header("accept", "application/json")
-            .header("user-agent", SASH_USER_AGENT)
-            .send()
-            .await?;
-
-        let status = resp.status();
-        let body: Value = resp.json().await.unwrap_or(Value::Null);
-        if !status.is_success() {
-            return Ok(None);
-        }
+        };
 
         let name = profile_text(
             &body,
@@ -1026,6 +1077,18 @@ fn urlenc(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_import_requires_real_account_identity_and_refresh_token() {
+        let mut cred = json!({"access_token": "test-access", "refresh_token": "test-refresh"});
+        assert!(browser_account(&cred).is_err());
+        let profile = json!({"code": 0, "data": {"id": "real-qoder-uid"}});
+        cred["user_id"] = json!(profile_user_id(&profile).unwrap());
+        assert_eq!(browser_account(&cred).unwrap().id, account_id("real-qoder-uid"));
+        assert_ne!(browser_account(&cred).unwrap().id, account_id(""));
+        cred["refresh_token"] = json!(" ");
+        assert!(browser_account(&cred).is_err());
+    }
     use chrono::TimeZone;
 
     /// 构造一个本地时间点。

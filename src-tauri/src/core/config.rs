@@ -147,7 +147,9 @@ pub enum CloseAction {
 }
 
 /// 单个平台的显示开关（侧栏导航 / 首页卡片）。
-/// 隐藏只影响显示：自动签到与后台同步照常运行。缺省条目 = 全部显示。
+/// 隐藏只影响显示：自动签到与后台同步照常运行。
+/// 缺省条目按平台取默认值（见 `AgentVisibility::default_for`）：
+/// Qoder / 妙手 / Zcode 只在首页出现，其余平台三处都显示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentVisibility {
@@ -166,6 +168,23 @@ impl Default for AgentVisibility {
             sidebar: true,
             home: true,
             launch: true,
+        }
+    }
+}
+
+impl AgentVisibility {
+    /// 某平台在用户没配置过时的默认显示。
+    /// Qoder / 妙手 / Zcode 默认只上首页：侧栏和启动页不占位置，但仍可在
+    /// 「管理平台显示」里手动打开。
+    pub fn default_for(provider: &str) -> Self {
+        if matches!(provider, "qoder" | "miaoshou" | "zcode") {
+            Self {
+                sidebar: false,
+                home: true,
+                launch: false,
+            }
+        } else {
+            Self::default()
         }
     }
 }
@@ -285,7 +304,7 @@ pub struct AppConfig {
     /// 借鉴 Cockpit Tools 的自动刷新设置（上游按分钟配，前台轮询用秒级更跟手）。
     #[serde(default = "default_ui_refresh_seconds")]
     pub ui_refresh_seconds: u32,
-    /// 每个平台的显示开关（侧栏 / 首页）；没列出的平台全部显示。
+    /// 每个平台的显示开关（侧栏 / 首页 / 启动页）；没列出的平台按平台默认值。
     #[serde(default)]
     pub agent_visibility: BTreeMap<String, AgentVisibility>,
 }
@@ -359,12 +378,12 @@ impl AppConfig {
             .max(1)
     }
 
-    /// 某平台的显示开关（缺省条目 = 侧栏和首页都显示）。
+    /// 某平台的显示开关（缺省条目按平台取默认显示）。
     pub fn visibility_of(&self, provider: &str) -> AgentVisibility {
         self.agent_visibility
             .get(provider)
             .copied()
-            .unwrap_or_default()
+            .unwrap_or_else(|| AgentVisibility::default_for(provider))
     }
 
     /// 按用户自定义顺序排序平台 id（未配置的按原顺序排在后面）。
@@ -468,24 +487,43 @@ mod tests {
     }
 
     #[test]
-    fn 显示开关缺省全显示且旧配置兼容() {
+    fn 显示开关按平台取默认且旧配置兼容() {
         let cfg = AppConfig::default();
+        // 核心三平台：侧栏 / 首页 / 启动页都显示
         assert_eq!(
-            cfg.visibility_of("qoder"),
+            cfg.visibility_of("workbuddy"),
             AgentVisibility { sidebar: true, home: true, launch: true }
         );
+        // Qoder / 妙手 / Zcode：默认只上首页
+        for id in ["qoder", "miaoshou", "zcode"] {
+            assert_eq!(
+                cfg.visibility_of(id),
+                AgentVisibility { sidebar: false, home: true, launch: false }
+            );
+        }
         let old: AppConfig = serde_json::from_str(
             r#"{"scheduler":{"enabled":true,"syncEnabled":true,"agents":{}}}"#,
         )
         .unwrap();
-        assert!(old.visibility_of("qoder").sidebar);
+        assert!(!old.visibility_of("qoder").sidebar);
         assert!(old.visibility_of("qoder").home);
-        assert!(old.visibility_of("qoder").launch);
-        // 只写一个字段时其余保持默认显示
+        assert!(!old.visibility_of("qoder").launch);
+        // 只写一个字段时其余保持结构默认显示（整条配置由用户显式写入）
         let partial: AgentVisibility = serde_json::from_str(r#"{"sidebar":false}"#).unwrap();
         assert!(!partial.sidebar);
         assert!(partial.home);
         assert!(partial.launch);
+    }
+
+    #[test]
+    fn 显式配置覆盖平台默认() {
+        let mut cfg = AppConfig::default();
+        cfg.agent_visibility.insert(
+            "qoder".into(),
+            AgentVisibility { sidebar: true, home: true, launch: true },
+        );
+        assert!(cfg.visibility_of("qoder").sidebar);
+        assert!(cfg.visibility_of("qoder").launch);
     }
 
     #[test]
@@ -502,6 +540,6 @@ mod tests {
             back.visibility_of("zcode"),
             AgentVisibility { sidebar: false, home: true, launch: false }
         );
-        assert!(back.visibility_of("qoder").sidebar);
+        assert!(back.visibility_of("workbuddy").sidebar);
     }
 }

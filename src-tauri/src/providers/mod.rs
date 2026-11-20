@@ -19,11 +19,11 @@ use crate::core::provider::Provider;
 #[allow(dead_code)] // 调度器/命令层可按 id 动态取适配器
 pub fn all() -> Vec<Arc<dyn Provider>> {
     vec![
+        Arc::new(workbuddy::WorkBuddyProvider::new()),
         Arc::new(minimax::MiniMaxProvider::new()),
+        Arc::new(trae::TraeProvider::new()),
         Arc::new(qoder::QoderProvider::new()),
         Arc::new(miaoshou::MiaoshouProvider::new()),
-        Arc::new(trae::TraeProvider::new()),
-        Arc::new(workbuddy::WorkBuddyProvider::new()),
         Arc::new(zcode::ZcodeProvider::new()),
     ]
 }

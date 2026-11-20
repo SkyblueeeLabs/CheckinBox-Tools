@@ -1,5 +1,5 @@
 import type { AgentGroup, LiveFreeModels } from "../lib/types";
-import { fmtQuotaAmount, quotaLabels } from "../lib/api";
+import { api, fmtQuotaAmount, quotaLabels } from "../lib/api";
 import { WELFARE_KIND_TEXT, WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfareOpenState, welfareOf } from "../lib/welfare";
 import TimeInput from "./TimeInput";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
@@ -184,6 +184,15 @@ export default function AgentGroupPanel({
             {welfare.note && <span className="wb-note">{welfare.note}</span>}
             {welfare.extraNote && (
               <span className="wb-note">{welfare.extraNote}</span>
+            )}
+            {welfare.docs && (
+              <button
+                type="button"
+                className="wb-docs"
+                onClick={() => void api.openExternal(welfare.docs!.url)}
+              >
+                {welfare.docs.label} ↗
+              </button>
             )}
           </div>
           {free && (

@@ -994,11 +994,15 @@ impl MiniMaxProvider {
             return Err(anyhow!("授权失败（HTTP {} {err}）", status.as_u16()));
         }
 
-        let access = body["access_token"].as_str().unwrap_or("");
-        if access.is_empty() {
+        if body["access_token"]
+            .as_str()
+            .map(str::trim)
+            .unwrap_or("")
+            .is_empty()
+        {
             return Ok(None);
         }
-        let refresh = body["refresh_token"].as_str().unwrap_or("");
+        let (access, refresh) = switch_tokens(&body)?;
         let expires_in = body["expires_in"].as_i64().unwrap_or(3600);
 
         // 身份用 token 实测（和导入/捕获同一条路径）
@@ -1032,6 +1036,20 @@ impl MiniMaxProvider {
         }
         Ok(Some((account, cred)))
     }
+}
+
+pub(crate) fn switch_tokens(cred: &Value) -> Result<(&str, &str)> {
+    let access = cred["access_token"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("MiniMax Code 凭据缺少 access token，请重新授权该账号"))?;
+    let refresh = cred["refresh_token"]
+        .as_str()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or_else(|| anyhow!("MiniMax Code 凭据缺少 refresh token，请重新授权该账号"))?;
+    Ok((access, refresh))
 }
 
 // ---------------------------------------------------------------------------
@@ -1111,6 +1129,14 @@ pub fn migrate_device_key_ids(store: &mut crate::core::store::AccountStore) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn browser_token_pair_cannot_be_used_without_refresh_token() {
+        assert!(switch_tokens(&json!({"access_token": "test-access"})).is_err());
+        assert!(switch_tokens(&json!({"access_token": "test-access", "refresh_token": " "})).is_err());
+        let cred = json!({"access_token": "test-access", "refresh_token": "test-refresh"});
+        assert_eq!(switch_tokens(&cred).unwrap(), ("test-access", "test-refresh"));
+    }
 
     /// 只读探针：打印上游签到面板原始数据（核实每日积分口径 / 连签天数）。
     /// 手动跑：`cargo test --lib -- --ignored 状态原始数据探针 --nocapture`

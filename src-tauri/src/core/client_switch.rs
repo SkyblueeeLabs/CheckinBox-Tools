@@ -43,6 +43,7 @@ use std::path::{Path, PathBuf};
 use super::chat_sync::{self, ChatSyncReport};
 use super::os_crypt;
 use crate::core::paths::atomic_write;
+use crate::providers::qoder::account_id as qoder_account_id;
 
 /// 客户端当前实际登录的账号。
 #[derive(Debug, Clone, Serialize)]
@@ -131,6 +132,17 @@ pub fn finish_switch(
         return Err(anyhow!("客户端在切换期间被重新打开，请重试"));
     }
 
+    let chat_target_id = if provider == "workbuddy" {
+        // 旧版导入的池内 ID 可能是 token 指纹，WorkBuddy 的聊天只认客户端 UID。
+        cred["uid"]
+            .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .ok_or_else(|| anyhow!("账号凭据里没有 uid，无法写入 WorkBuddy 登录态"))?
+    } else {
+        account_id
+    };
+
     // 来源账号必须在覆盖凭据**之前**识别（写完凭据文件，detect 读到的就是
     // 目标账号了）。识别失败 = 聊天记录无法归属，跳过同步（不动数据）。
     let chat_from = if chat_sync_enabled && chat_sync::supports(provider) {
@@ -149,7 +161,7 @@ pub fn finish_switch(
     let chat_sync_report = match chat_sync_source {
         Some(from) => {
             on_progress("syncing");
-            match chat_sync::sync_on_switch(provider, from, account_id) {
+            match chat_sync::sync_on_switch(provider, from, chat_target_id) {
                 Ok(report) => Some(report),
                 Err(e) => {
                     let entry = crate::core::logging::LogEntry::new(
@@ -334,14 +346,7 @@ fn switch_minimax(
     _label: &str,
     on_progress: &mut impl FnMut(&str),
 ) -> Result<SwitchOutcome> {
-    // 优先用凭据里记的那个文件（就是我们当初导入时读的），找不到再全盘搜
-    let path = cred
-        .get("auth_file")
-        .and_then(|v| v.as_str())
-        .map(PathBuf::from)
-        .filter(|p| p.is_file())
-        .or_else(minimax_auth_file)
-        .ok_or_else(|| anyhow!("没找到 MiniMax Code 的登录态文件"))?;
+    let path = minimax_switch_path(cred)?;
 
     let raw = std::fs::read_to_string(&path)
         .unwrap_or_else(|_| "{\"schemaVersion\":1,\"records\":{}}".into());
@@ -388,26 +393,7 @@ fn switch_minimax(
 
     // 凭据字段按客户端契约校验（app.asar 的 parseStoredCredential）：任何一项
     // 不合法，客户端会把整个 auth.json 判成损坏、退回重新登录。
-    let access = cred["access_token"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    let refresh = cred["refresh_token"]
-        .as_str()
-        .unwrap_or("")
-        .trim()
-        .to_string();
-    if access.is_empty() {
-        return Err(anyhow!(
-            "目标账号没有 access token，写不进 MiniMax Code 登录态"
-        ));
-    }
-    if refresh.is_empty() {
-        return Err(anyhow!(
-            "目标账号没有 refresh token，写不进 MiniMax Code 登录态"
-        ));
-    }
+    let (access, refresh) = crate::providers::minimax::switch_tokens(cred)?;
     let expires_at_ms = cred
         .get("expires_at_ms")
         .and_then(|v| v.as_i64())
@@ -511,6 +497,15 @@ fn switch_minimax(
         client_exe: client_exe.to_string_lossy().to_string(),
         chat_sync: None,
     })
+}
+
+pub(crate) fn minimax_switch_path(cred: &Value) -> Result<PathBuf> {
+    cred["auth_file"]
+        .as_str()
+        .map(PathBuf::from)
+        .filter(|path| path.is_file())
+        .or_else(minimax_auth_file)
+        .ok_or_else(|| anyhow!("没找到 MiniMax Code 的登录态文件，请先启动客户端"))
 }
 
 // ---------------------------------------------------------------------------
@@ -640,13 +635,6 @@ fn qoder_read_auth() -> Result<Option<Value>> {
 }
 
 /// 账号 id 与设备授权时保持一致：sha256(uid) 前 16 位十六进制。
-fn qoder_account_id(uid: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let hash = Sha256::digest(uid.as_bytes());
-    let hex: String = hash.iter().map(|b| format!("{b:02x}")).collect();
-    hex[..16].to_string()
-}
-
 /// 毫秒时间戳 → RFC3339（auth.v1.dat 里的 `expiresAt` 用这种格式，如 `2026-11-12T09:16:12Z`）。
 fn ms_to_rfc3339(ms: i64) -> String {
     chrono::DateTime::<chrono::Utc>::from_timestamp_millis(ms)
@@ -750,14 +738,22 @@ fn detect_qoder_from_status() -> Option<DetectedAccount> {
 /// 仅当客户端还没有 `auth.v1.dat`（从未登录过）时才用它，否则从现有文件里抄。
 const QODER_DEFAULT_AUTH_CONTEXT: &str = r#"["https://qoder.cn","https://openapi.qoder.com.cn","732aef47-9cf2-46a2-95fe-4cebb5d0d1fa","prod"]"#;
 
+pub(crate) fn qoder_switch_dir() -> Result<PathBuf> {
+    let dir = qoder_user_data()
+        .ok_or_else(|| anyhow!("没有找到 Qoder CN 客户端的数据目录，请先启动客户端"))?;
+    if !dir.join("Local State").is_file() {
+        return Err(anyhow!("Qoder CN 客户端尚未初始化登录态，请先启动客户端"));
+    }
+    Ok(dir)
+}
+
 fn switch_qoder(
     cred: &Value,
     _account_id: &str,
     label: &str,
     on_progress: &mut impl FnMut(&str),
 ) -> Result<SwitchOutcome> {
-    let dir = qoder_user_data()
-        .ok_or_else(|| anyhow!("没有找到 Qoder CN 客户端的数据目录（客户端从未运行过？）"))?;
+    let dir = qoder_switch_dir()?;
     let auth_file = dir.join("auth.v1.dat");
 
     // AES 密钥来自 Local State（DPAPI 保护）；客户端至少完整启动过一次才会有
@@ -777,10 +773,8 @@ fn switch_qoder(
         })
         .unwrap_or_else(|| json!(QODER_DEFAULT_AUTH_CONTEXT));
 
-    let uid = cred
-        .get("user_id")
-        .and_then(|v| v.as_str())
-        .filter(|s| !s.is_empty())
+    crate::providers::qoder::validate_switch_credential(cred)?;
+    let uid = crate::providers::qoder::user_id_of(cred)
         .ok_or_else(|| anyhow!("账号凭据里没有 user_id，无法写入客户端登录态"))?;
 
     let now_ms = chrono::Utc::now().timestamp_millis();
@@ -846,8 +840,7 @@ fn switch_qoder(
 
 /// 把目标账号的凭据写进 Trae 的 storage.json，然后启动客户端。
 ///
-/// 只改 `iCubeAuthInfo://icube.cloudide` 和 `iCubeAuthInfo://usertag`，设备密钥、
-/// 本地会话目录和工作区都不动；换号后聊天记录仍是共享的。
+/// 登录态和授权绑定的设备密钥一并写入，客户端继续共享本地会话和工作区。
 fn switch_trae(
     cred: &Value,
     _account_id: &str,
@@ -943,7 +936,7 @@ pub fn workbuddy_client_login() -> Option<(crate::core::provider::Account, Value
                 },
                 created_at: chrono::Utc::now().timestamp(),
                 last_used: None,
-                origin: "WorkBuddy 客户端登录态（切换时捕获）".to_string(),
+                origin: "WorkBuddy 客户端登录态".to_string(),
             };
             let cred = json!({
                 "access_token": access,
@@ -973,7 +966,7 @@ pub fn workbuddy_client_login() -> Option<(crate::core::provider::Account, Value
         },
         created_at: chrono::Utc::now().timestamp(),
         last_used: None,
-        origin: "WorkBuddy 客户端登录态（切换时捕获）".to_string(),
+        origin: "WorkBuddy 客户端登录态".to_string(),
     };
     let cred = json!({
         "access_token": secret["token"].as_str().unwrap_or(""),
@@ -1045,8 +1038,7 @@ fn switch_workbuddy(
     }
     let key = os_crypt::read_key(&dir.join("Local State"))?;
 
-    // 以客户端当前的 secret 原文为模板（保留 account.uin 等我们没接管的字段），
-    // 只替换身份与 token。客户端从没登录过就没有模板，如实报错。
+    // 以客户端当前的 secret 原文作登录态模板。客户端从没登录过就没有模板，如实报错。
     let current = crate::providers::workbuddy::read_local_secret().ok_or_else(|| {
         anyhow!("读取 WorkBuddy 当前登录态失败：请先在客户端登录任意账号一次，再使用切换")
     })?;
@@ -1058,8 +1050,12 @@ fn switch_workbuddy(
         .ok_or_else(|| anyhow!("账号凭据里没有 uid，无法写入 WorkBuddy 登录态"))?;
 
     let mut secret = current;
-    let account = secret["account"].as_object().cloned().unwrap_or_default();
-    let mut account = account;
+    let mut account = cred
+        .get("account_profile")
+        .filter(|profile| !crate::core::wb_session::contains_encrypted_wrapper(profile))
+        .and_then(Value::as_object)
+        .cloned()
+        .unwrap_or_default();
     account.insert("uid".into(), json!(uid));
     account.insert("nickname".into(), json!(label));
     secret["account"] = Value::Object(account);

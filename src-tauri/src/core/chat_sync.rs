@@ -85,6 +85,8 @@ pub fn sync_on_switch(provider: &str, from: Option<&str>, to: &str) -> Result<Ch
     if from == to {
         return Ok(skipped("目标账号与当前登录账号相同，无需同步"));
     }
+    validate_path_segment(from)?;
+    validate_path_segment(to)?;
 
     let op = operation_id();
     match provider {

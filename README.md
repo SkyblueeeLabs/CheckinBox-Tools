@@ -67,12 +67,15 @@
 | 平台 | 客户端登录态 | 每日签到 | 积分查询 | 客户端换号 | 账号导入方式 |
 |---|---|---|---|---|---|
 | **MiniMax Code** | `~/.minimax/auth/**/auth.json`（明文） | ✅ 每日领取（基础 400，第 4/7 天 1,000） | ✅ | ✅ | 本机导入 / 浏览器设备码授权 |
-| **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新 | ✅ | ✅ | 本机导入 / 浏览器授权 |
+| **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新（体验版免费用户已停发） | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 每日 100（注册送 2,000，每月 500 自动到账） | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **Trae CN**（字节 TRAE 国内版） | `%APPDATA%\Trae CN\User\globalStorage\storage.json`（tc 加密） | ✅ 每日 100（会员 200；注册 1,500、每月 500 自动到账） | ✅ | ✅ A↔B 实测 | 本机导入 / 浏览器授权 |
 | **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（注册送 1,000，每月自动发 200） | ✅ | ✅ | 本机导入 |
 | **Zcode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 只展示 + 提醒，不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
 
+> **Qoder CN 每日 100 Credits 的适用范围变了**：自 2026-11-19 10:00 起，体验版（免费）用户不再开放领取；
+> 仅试用期、个人付费订阅及会员卡用户可领。详见[官方说明](https://docs.qoder.cn/events/100credits)。
+>
 > **Zcode 为什么只提醒不代领**：每日 3 亿 GLM-5.3-Flash Token 只能在官方客户端领取，
 > 阿里云验证码只在 Zcode 的 Electron 渲染进程里生得出来。所以封面和面板会显示「待领取」，
 > 点「去领取」拉起官方客户端，由你自己点。
@@ -123,7 +126,7 @@
 
 - **安装版（NSIS）**：启动后自动检查更新；设置 → 软件更新可关闭自动检查或手动检查。更新弹窗显示版本、更新内容和下载进度，安装后重启生效。
 - **便携版 / MSI 版**：不自动安装，会提示下载新版；账号和配置不会丢。
-- **从 v0.1.0 升级**：旧版没有更新模块，需要手动下载安装一次 v0.2.0；之后才能自动更新。
+- **从 v0.1.0 升级**：旧版没有更新模块，需要手动下载最新的 NSIS 安装版，之后可在应用内自动更新。
 - **维护者发版**：先更新 `CHANGELOG.md` 对应版本段落，再打 `v<version>` tag。Release workflow 会生成 `latest.json`；草稿 Release 发布后 `releases/latest` 才能读到它。
 - 更新签名使用 Tauri updater 密钥（GitHub Secrets：`TAURI_SIGNING_PRIVATE_KEY` / `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`），和 Windows Authenticode 是两套东西。
 - 维护细节见 [docs/auto-update.md](docs/auto-update.md)。

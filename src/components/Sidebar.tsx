@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { HOME_ID, type AgentGroup, type AgentVisibility, type ProviderView } from "../lib/types";
-import { fmtPoints, fmtQuotaAmount } from "../lib/api";
+import { fmtPoints, fmtQuotaAmount, quotaUnit } from "../lib/api";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import VisibilityMenu from "./VisibilityMenu";
 
@@ -37,6 +37,48 @@ interface DragState {
 
 /** 拖拽的视觉参数：移动超过该距离才算拖拽，低于它一律是点击 */
 const DRAG_THRESHOLD = 10;
+
+function AgentItemContent({ group }: { group: AgentGroup }) {
+  const { provider, totalRemaining } = group;
+  const icon = agentIcon(provider.id);
+  const hasRemaining = totalRemaining > 0;
+  const amount = hasRemaining ? fmtQuotaAmount(totalRemaining, provider.id) : "—";
+  const exactAmount = quotaUnit(provider.id) === "Token" ? fmtPoints(totalRemaining) : amount;
+
+  return (
+    <>
+      <span className="side-mark">
+        {icon ? (
+          <img
+            src={icon}
+            alt=""
+            className={`mark-img ${iconNeedsPad(provider.id) ? "pad" : ""}`}
+            draggable={false}
+          />
+        ) : (
+          provider.name.slice(0, 1)
+        )}
+      </span>
+      <span className="side-body">
+        <span className="side-name">{provider.name}</span>
+        <span className="side-sub">
+          {group.accounts.length} 个账号
+          {group.claimableCount > 0 ? (
+            <em className="side-flag warn">{group.claimableCount} 待签</em>
+          ) : group.claimedToday > 0 ? (
+            <em className="side-flag ok">{group.claimedToday} 已签</em>
+          ) : null}
+        </span>
+        <span
+          className={`side-remaining ${hasRemaining ? "" : "zero"}`}
+          title={hasRemaining ? `剩余 ${exactAmount}` : undefined}
+        >
+          {amount}
+        </span>
+      </span>
+    </>
+  );
+}
 
 /**
  * 左侧导航。
@@ -231,14 +273,11 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
         )}
         {displayGroups.map((group) => {
           const isActive = group.provider.id === selected;
-          const remaining = group.totalRemaining;
-          const icon = agentIcon(group.provider.id);
-          const fallback = group.provider.name.slice(0, 1);
           const isDragging = dragId === group.provider.id;
           return (
             <button
               key={group.provider.id}
-              className={`side-item ${isActive ? "active" : ""} ${isDragging ? "dragging" : ""} ${dragId && !isDragging ? "shifting" : ""}`}
+              className={`side-item side-agent ${isActive ? "active" : ""} ${isDragging ? "dragging" : ""} ${dragId && !isDragging ? "shifting" : ""}`}
               style={{ ["--agent-accent" as string]: group.provider.accent }}
               onClick={() => {
                 // 刚完成拖拽的松手会带一个 click，用「距 pointerup 的时间」滤掉
@@ -248,35 +287,7 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
               onPointerDown={startDrag(group.provider.id)}
               title="点击选择 · 拖拽调序"
             >
-              <span className="side-mark">
-                {icon ? (
-                  <img
-                    src={icon}
-                    alt=""
-                    className={`mark-img ${iconNeedsPad(group.provider.id) ? "pad" : ""}`}
-                    draggable={false}
-                  />
-                ) : (
-                  fallback
-                )}
-              </span>
-              <span className="side-body">
-                <span className="side-name">{group.provider.name}</span>
-                <span className="side-sub">
-                  {group.accounts.length} 个账号
-                  {group.claimableCount > 0 ? (
-                    <em className="side-flag warn">{group.claimableCount} 待签</em>
-                  ) : group.claimedToday > 0 ? (
-                    <em className="side-flag ok">{group.claimedToday} 已签</em>
-                  ) : null}
-                </span>
-              </span>
-              <span
-                className={`side-remaining ${remaining > 0 ? "" : "zero"}`}
-                title={remaining > 0 ? `剩余 ${fmtPoints(remaining)}` : undefined}
-              >
-                {remaining > 0 ? fmtQuotaAmount(remaining, group.provider.id) : "—"}
-              </span>
+              <AgentItemContent group={group} />
             </button>
           );
         })}
@@ -286,7 +297,7 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
       {draggedGroup && drag.current && (
         <div
           ref={ghostRef}
-          className="drag-ghost"
+          className="drag-ghost side-agent"
           style={{
             ["--ghost-left" as string]: `${drag.current.itemRect.left}px`,
             ["--ghost-top" as string]: `${drag.current.itemRect.top}px`,
@@ -294,37 +305,7 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
           }}
           aria-hidden
         >
-          <span className="side-mark">
-            {agentIcon(draggedGroup.provider.id) ? (
-              <img
-                src={agentIcon(draggedGroup.provider.id)}
-                alt=""
-                className={`mark-img ${iconNeedsPad(draggedGroup.provider.id) ? "pad" : ""}`}
-                draggable={false}
-              />
-            ) : (
-              draggedGroup.provider.name.slice(0, 1)
-            )}
-          </span>
-          <span className="side-body">
-            <span className="side-name">{draggedGroup.provider.name}</span>
-            <span className="side-sub">
-              {draggedGroup.accounts.length} 个账号
-              {draggedGroup.claimableCount > 0 ? (
-                <em className="side-flag warn">{draggedGroup.claimableCount} 待签</em>
-              ) : draggedGroup.claimedToday > 0 ? (
-                <em className="side-flag ok">{draggedGroup.claimedToday} 已签</em>
-              ) : null}
-            </span>
-          </span>
-          <span
-            className={`side-remaining ${draggedGroup.totalRemaining > 0 ? "" : "zero"}`}
-            title={draggedGroup.totalRemaining > 0 ? `剩余 ${fmtPoints(draggedGroup.totalRemaining)}` : undefined}
-          >
-            {draggedGroup.totalRemaining > 0
-              ? fmtQuotaAmount(draggedGroup.totalRemaining, draggedGroup.provider.id)
-              : "—"}
-          </span>
+          <AgentItemContent group={draggedGroup} />
         </div>
       )}
 

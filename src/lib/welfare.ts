@@ -31,14 +31,23 @@ export interface WelfareMeta {
   signup?: number;
   /** 每月固定发放积分（平台规则） */
   monthly?: number;
-  /** 不属于「每日/注册/每月/加成」四类的平台福利说明（如邀请好友） */
+  /** 不属于「每日/注册/每月/加成」四类的平台福利说明 */
   extraNote?: string;
+  /** 平台规则有变时的官方说明链接（面板里展示） */
+  docs?: { label: string; url: string };
 }
 
 /** 各平台福利元数据（不含实时数量；改文案只改这里） */
 export const WELFARE_META: Record<string, WelfareMeta> = {
   minimax: { unit: "积分", dailyMode: "auto" },
-  qoder: { unit: "Credits", dailyMode: "auto", dailyNote: "10:00 后开放" },
+  qoder: {
+    unit: "Credits",
+    dailyMode: "auto",
+    dailyNote: "10:00 后开放",
+    // 2026-11-19 起体验版（免费）用户不再发放每日签到积分
+    extraNote: "体验版（免费）用户已停发，仅试用期内 / 付费用户可领",
+    docs: { label: "官方说明", url: "https://docs.qoder.cn/events/100credits" },
+  },
   workbuddy: { unit: "积分", dailyMode: "auto", signup: 2000, monthly: 500 },
   zcode: {
     unit: "Token",
@@ -53,7 +62,6 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
     dailyMode: "auto",
     signup: 1500,
     monthly: 500,
-    extraNote: "邀好友：双方都有积分（以官方为准）",
   },
 };
 
@@ -96,6 +104,7 @@ export const FREE_MODELS: Record<string, FreeModelInfo> = {
   zcode: { status: "none", asOf: "2026-11-16" },
   minimax: { status: "none", asOf: "2026-11-16" },
   qoder: { status: "none", asOf: "2026-11-16" },
+  trae: { status: "none", asOf: "2026-11-19" },
 };
 
 /** 每日开放领取的实时状态（现在可领 / 未到点）。
@@ -132,6 +141,8 @@ export interface WelfareView {
   note: string;
   /** 四类之外、但仍需展示的平台福利说明（如邀请好友） */
   extraNote: string;
+  /** 平台规则的官方说明链接（没有就不展示） */
+  docs?: { label: string; url: string };
   /** 免费模型的紧凑提示（首页用；没有免费模型的平台为空） */
   freeText: string;
   /** 悬浮完整说明 */
@@ -235,7 +246,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
 
   if (!meta.dailyMode) parts.push("无每日签到");
 
-  // 四类之外的平台福利（例如 Trae 的邀请好友）：不新增条目类型，避免打乱固定顺序。
+  // 补充说明独立于固定顺序的福利条目。
   const extraNote = meta.extraNote ?? "";
   if (extraNote) parts.push(extraNote);
 
@@ -264,6 +275,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
     benefits,
     note,
     extraNote,
+    docs: meta.docs,
     freeText,
     title: `${parts.length > 0 ? parts.join(" · ") : "暂无福利"}${freeSuffix}`,
   };

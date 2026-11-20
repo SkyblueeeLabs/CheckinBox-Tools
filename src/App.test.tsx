@@ -2,7 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
-import type { AppConfig, Notice, Overview } from "./lib/types";
+import { defaultAgentVisibility, type AppConfig, type Notice, type Overview } from "./lib/types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async () => () => {}) }));
@@ -69,7 +69,7 @@ describe("桌面窗口", () => {
     expect(invoke).toHaveBeenCalledWith("mark_notices_read", { ids: [notice.id] });
   });
 
-  it("平台显示开关：隐藏侧栏去掉导航项、隐藏首页去掉首页卡，并落盘", async () => {
+  it("Qoder / Zcode 默认只在首页；从菜单打开侧栏、隐藏首页都会落盘", async () => {
     const ov: Overview = {
       ...overview,
       providers: [
@@ -92,7 +92,7 @@ describe("桌面窗口", () => {
         case "get_config": return cfg;
         case "set_agent_visibility": {
           const a = args as { providerId: string; sidebar: boolean | null; home: boolean | null; launch: boolean | null };
-          const cur = cfg.agentVisibility[a.providerId] ?? { sidebar: true, home: true, launch: true };
+          const cur = cfg.agentVisibility[a.providerId] ?? defaultAgentVisibility(a.providerId);
           cfg = {
             ...cfg,
             agentVisibility: {
@@ -118,60 +118,67 @@ describe("桌面窗口", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /进入 CheckinBox/ }));
     expect(await screen.findByRole("button", { name: "一键全部签到" })).toBeEnabled();
+    // 默认只上首页：首页两张卡，侧栏没有这两个平台
     expect(document.querySelectorAll(".dash-agent")).toHaveLength(2);
+    expect(document.querySelector(".sidebar-list")?.textContent).not.toContain("Qoder CN");
+    expect(document.querySelector(".sidebar-list")?.textContent).not.toContain("Zcode");
 
     fireEvent.click(screen.getByRole("button", { name: "管理平台显示" }));
     const menu = screen.getByRole("dialog", { name: "平台显示管理" });
-    fireEvent.click(within(menu).getByRole("checkbox", { name: "Zcode 在侧栏显示" }));
+    fireEvent.click(within(menu).getByRole("checkbox", { name: "Qoder CN 在侧栏显示" }));
     await waitFor(() =>
-      expect(document.querySelector(".sidebar-list")?.textContent).not.toContain("Zcode")
+      expect(document.querySelector(".sidebar-list")?.textContent).toContain("Qoder CN")
     );
-    // 只 hide 侧栏时首页卡片不受影响
+    // 打开侧栏时首页卡片不受影响
     expect(document.querySelectorAll(".dash-agent")).toHaveLength(2);
 
     fireEvent.click(within(menu).getByRole("checkbox", { name: "Zcode 在首页显示" }));
     await waitFor(() => expect(document.querySelectorAll(".dash-agent")).toHaveLength(1));
     expect(invoke).toHaveBeenCalledWith("set_agent_visibility", {
-      providerId: "zcode", sidebar: false, home: null, launch: null,
+      providerId: "qoder", sidebar: true, home: null, launch: null,
     });
     expect(invoke).toHaveBeenCalledWith("set_agent_visibility", {
       providerId: "zcode", sidebar: null, home: false, launch: null,
     });
   });
 
-  it("导入真正落盘后按实际结果提示成功", async () => {
+  it("本机导入按实际落盘的账号提示新增或更新", async () => {
     const ov: Overview = {
       ...overview,
       providers: [
         {
-          id: "qoder", name: "Qoder CN", accent: "#6a5acd", docsUrl: "",
+          id: "workbuddy", name: "WorkBuddy", accent: "#6a5acd", docsUrl: "",
           supportsDiscovery: true, supportsOAuth: true, configured: false,
           hasClient: true, supportsClaim: true,
         },
       ],
     };
     const account = {
-      id: "acc-1", provider: "qoder", label: "测试号",
-      createdAt: 1, lastUsed: null, origin: "Qoder 客户端登录态",
+      id: "acc-1", provider: "workbuddy", label: "测试号",
+      createdAt: 1, lastUsed: null, origin: "WorkBuddy 客户端登录态",
     };
+    let alreadyAdded = false;
     vi.mocked(invoke).mockImplementation(async (command) => {
       switch (command) {
         case "overview": return ov;
         case "get_config": return config;
         case "autostart_enabled": return false;
-        case "discover_accounts": return [{ provider: "qoder", alreadyAdded: false, account }];
-        case "add_discovered_account": return [account];
+        case "import_client_accounts": return [{ alreadyAdded, account }];
         default: return [];
       }
     });
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
-    const nav = document.querySelector(".sidebar-list") as HTMLElement;
-    fireEvent.click(within(nav).getByRole("button", { name: /Qoder CN/ }));
+    const dash = document.querySelector(".dash-agents") as HTMLElement;
+    fireEvent.click(within(dash).getByRole("button", { name: /WorkBuddy/ }));
     fireEvent.click(await screen.findByRole("button", { name: "从本机导入" }));
 
     expect(await screen.findByText(/已导入 1 个账号：测试号/)).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("import_client_accounts", { providerId: "workbuddy" });
+    alreadyAdded = true;
+    fireEvent.click(screen.getByRole("button", { name: "从本机导入" }));
+    expect(await screen.findByText("已更新账号登录态：测试号")).toBeInTheDocument();
   });
 
   it("导入没有真正写入时不谎报成功", async () => {
@@ -185,33 +192,23 @@ describe("桌面窗口", () => {
         },
       ],
     };
-    const discovered = {
-      provider: "qoder",
-      alreadyAdded: false,
-      account: {
-        id: "acc-1", provider: "qoder", label: "测试号",
-        createdAt: 1, lastUsed: null, origin: "Qoder 客户端登录态",
-      },
-    };
     vi.mocked(invoke).mockImplementation(async (command) => {
       switch (command) {
         case "overview": return ov;
         case "get_config": return config;
         case "autostart_enabled": return false;
-        case "discover_accounts": return [discovered];
-        // 二次发现成功但实际没有落盘：不能弹“已导入”
-        case "add_discovered_account": return [];
+        case "import_client_accounts": throw new Error("写入账号池失败");
         default: return [];
       }
     });
 
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
-    const nav = document.querySelector(".sidebar-list") as HTMLElement;
-    fireEvent.click(within(nav).getByRole("button", { name: /Qoder CN/ }));
+    const dash = document.querySelector(".dash-agents") as HTMLElement;
+    fireEvent.click(within(dash).getByRole("button", { name: /Qoder CN/ }));
     fireEvent.click(await screen.findByRole("button", { name: "从本机导入" }));
 
-    expect(await screen.findByText(/导入没有写入：测试号/)).toBeInTheDocument();
+    expect(await screen.findByText(/导入失败.*写入账号池失败/)).toBeInTheDocument();
     expect(screen.queryByText(/已导入 1 个账号/)).not.toBeInTheDocument();
   });
 

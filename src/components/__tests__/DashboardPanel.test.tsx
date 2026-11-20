@@ -100,6 +100,8 @@ describe("DashboardPanel（7 天内到期）", () => {
     expect(card.querySelector(".welfare-note")?.textContent).toBe(
       "10:00 后开放 · 06:00-08:00"
     );
+    // 免费用户停发规则也放在首页说明里
+    expect(card.textContent).toContain("体验版（免费）用户已停发");
     // 悬浮说明里有完整信息
     expect(card.querySelector(".dash-agent-welfare")?.getAttribute("title")).toContain(
       "数量未知"

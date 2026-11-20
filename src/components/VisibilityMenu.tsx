@@ -1,5 +1,5 @@
 import { useEffect, useRef } from "react";
-import type { AgentVisibility, ProviderView } from "../lib/types";
+import { agentVisibilityOf, type AgentVisibility, type ProviderView } from "../lib/types";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 
 interface Props {
@@ -11,7 +11,7 @@ interface Props {
 
 /**
  * 平台显示管理（侧栏 Agents 标题旁的眼睛按钮弹出）。
- * 每个平台两个开关：侧栏导航 / 首页卡片。隐藏只影响显示，
+ * 每个平台三个开关：侧栏导航 / 首页卡片 / 启动页封面。隐藏只影响显示，
  * 自动签到与后台同步照常运行。Esc 或点菜单外关闭。
  */
 export default function VisibilityMenu({ providers, visibility, onChange, onClose }: Props) {
@@ -44,7 +44,7 @@ export default function VisibilityMenu({ providers, visibility, onChange, onClos
         <span>启动页</span>
       </div>
       {providers.map((p) => {
-        const vis = visibility[p.id] ?? { sidebar: true, home: true, launch: true };
+        const vis = agentVisibilityOf(visibility, p.id);
         const icon = agentIcon(p.id);
         return (
           <div className="vis-row" key={p.id}>

@@ -198,7 +198,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     expect(within(brief).getByRole("button", { name: "核对最新免费模型" })).toBeInTheDocument();
   });
 
-  it("Trae CN：每日 → 注册 → 每月 + 邀好友说明，支持浏览器授权", () => {
+  it("Trae CN：每日 → 注册 → 每月，单独显示暂无免费模型，支持浏览器授权", () => {
     renderPanel(
       group({
         provider: provider({
@@ -217,22 +217,24 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     expect(within(brief).getByText("自动领取")).toBeInTheDocument();
     expect(within(brief).getByText("注册送 1,500 积分")).toBeInTheDocument();
     expect(within(brief).getByText("每月 +500 积分")).toBeInTheDocument();
-    expect(
-      within(brief).getByText("邀好友：双方都有积分（以官方为准）")
-    ).toBeInTheDocument();
-    // 没有免费模型数据时不渲染「免费模型」行
-    expect(within(brief).queryByText("免费模型")).not.toBeInTheDocument();
+    expect(within(brief).queryByText(/邀好友/)).not.toBeInTheDocument();
+    const modelsRow = within(brief).getByText("免费模型").parentElement!;
+    expect(within(modelsRow).getByText("暂无免费模型")).toBeInTheDocument();
 
     expect(screen.getByRole("button", { name: "添加账号" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "从本机导入" })).toBeEnabled();
   });
 
-  it("Qoder：自动领取平台不显示「现在可领」标签，只保留开放时间说明", () => {
+  it("Qoder：自动领取平台不显示「现在可领」标签，并标明免费用户停发规则", () => {
     renderPanel(group({ provider: provider({ id: "qoder", name: "Qoder CN" }) }));
     const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
     expect(within(brief).queryByText("现在可领")).not.toBeInTheDocument();
     expect(within(brief).queryByText("10:00 开放")).not.toBeInTheDocument();
     expect(within(brief).getByText(/10:00 后开放/)).toBeInTheDocument();
+    expect(within(brief).getByText(/体验版（免费）用户已停发/)).toBeInTheDocument();
+    expect(
+      within(brief).getByRole("button", { name: "官方说明 ↗" })
+    ).toBeInTheDocument();
   });
 
   it("minimax：每日自动免费积分 + 暂无免费模型", () => {
