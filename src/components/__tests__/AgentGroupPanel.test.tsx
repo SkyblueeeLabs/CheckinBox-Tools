@@ -1,10 +1,12 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import type { ComponentProps } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import AgentGroupPanel from "../AgentGroupPanel";
+import { api } from "../../lib/api";
 import type { AgentGroup, ProviderView } from "../../lib/types";
 
 const noop = vi.fn();
+const closedSettings = { open: false, onOpen: noop, onClose: noop, onPathChanged: noop };
 
 function provider(over: Partial<ProviderView> = {}): ProviderView {
   return {
@@ -68,14 +70,26 @@ function renderPanel(
       onAlertChange={noop}
       onScheduleChange={noop}
       onChatSyncChange={onChatSyncChange}
+      settings={closedSettings}
       {...extra}
     />
   );
 }
 
+function renderSettings(g: AgentGroup, onChatSyncChange = noop) {
+  return renderPanel(g, onChatSyncChange, { settings: { ...closedSettings, open: true } });
+}
+
+beforeEach(() => {
+  vi.spyOn(api, "getClientPath").mockResolvedValue({
+    path: null, configuredPath: null, source: null, detectedPath: null, error: null,
+  });
+});
+afterEach(() => vi.restoreAllMocks());
+
 describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
-  it("支持同步的 agent（WorkBuddy）在面板顶部显示开关和说明", () => {
-    renderPanel(group());
+  it("支持同步的 agent（WorkBuddy）在设置弹窗显示开关和说明", () => {
+    renderSettings(group());
     expect(screen.getByText("换号同步聊天记录")).toBeInTheDocument();
     // WorkBuddy 的专属说明：合并语义 + MiniMax 关系说明
     expect(screen.getByText(/合并进目标账号/)).toBeInTheDocument();
@@ -83,7 +97,7 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
   });
 
   it("Qoder 不提供「换号同步聊天记录」开关（会话在本机共享，不搬库）", () => {
-    renderPanel(
+    renderSettings(
       group({
         provider: provider({ id: "qoder", name: "Qoder CN" }),
         schedule: { ...group().schedule, chatSyncSupported: false },
@@ -93,7 +107,7 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
   });
 
   it("不支持的 agent（如 MiniMax）不渲染开关", () => {
-    renderPanel(
+    renderSettings(
       group({
         provider: provider({ id: "minimax", name: "MiniMax Code" }),
         schedule: {
@@ -108,7 +122,7 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
 
   it("勾选/取消会回调 onChatSyncChange", () => {
     const onChange = vi.fn();
-    renderPanel(group(), onChange);
+    renderSettings(group(), onChange);
     const box = screen
       .getByText("换号同步聊天记录")
       .closest("label")!
@@ -118,7 +132,7 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
   });
 
   it("开关勾选态跟随 chatSyncEnabled", () => {
-    renderPanel(
+    renderSettings(
       group({
         schedule: { ...group().schedule, chatSyncEnabled: true },
       })
@@ -133,7 +147,7 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
 
 describe("不代领的平台（Zcode）", () => {
   it("不显示「自动签到」开关，改成一句说明", () => {
-    renderPanel(
+    renderSettings(
       group({
         provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }),
       })

@@ -41,7 +41,7 @@ use serde_json::{json, Map, Value};
 use std::path::{Path, PathBuf};
 
 use super::chat_sync::{self, ChatSyncReport};
-use super::os_crypt;
+use super::{launcher, os_crypt};
 use crate::core::paths::atomic_write;
 use crate::providers::qoder::account_id as qoder_account_id;
 
@@ -61,11 +61,21 @@ pub struct SwitchOutcome {
     pub backup: Option<String>,
     /// 写入的目标凭据文件
     pub target_file: String,
-    /// 启动的客户端
+    /// 本次选择的启动路径，启动失败后可以用同一路径重试。
     pub client_exe: String,
+    /// 登录态已写入之后，启动客户端失败的原因。
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub launch_error: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub config_error: Option<String>,
     /// 聊天记录同步结果（开关没开 = None；同步失败也在里面如实报告）
     #[serde(skip_serializing_if = "Option::is_none")]
     pub chat_sync: Option<ChatSyncReport>,
+}
+
+struct WrittenLogin {
+    backup: Option<String>,
+    target_file: String,
 }
 
 /// 这个平台能不能靠「写凭据文件」来切账号。
@@ -101,13 +111,21 @@ pub fn detect(provider: &str) -> Result<Option<DetectedAccount>> {
 /// `invalid_grant` 后会**删掉凭据**退回登录页（2026-11-05 实测：捕获后
 /// 2 秒客户端刷新，切换写入的 RT 已废，用户被迫重新录入账号）。
 pub fn begin_switch(provider: &str) -> Result<()> {
-    if crate::core::launcher::is_running(provider) && !crate::core::launcher::close_client(provider)
-    {
-        return Err(anyhow!(
+    match launcher::client_process_state(provider) {
+        launcher::ClientProcessState::Unknown => Err(anyhow!("无法确认客户端运行状态，请重试")),
+        launcher::ClientProcessState::Running if !launcher::close_client(provider) => Err(anyhow!(
             "客户端正在运行且无法自动关闭（可能权限不足）：请手动退出后重试"
-        ));
+        )),
+        _ => Ok(()),
     }
-    Ok(())
+}
+
+fn ensure_client_stopped(provider: &str) -> Result<()> {
+    match launcher::client_process_state(provider) {
+        launcher::ClientProcessState::Absent => Ok(()),
+        launcher::ClientProcessState::Running => Err(anyhow!("客户端在切换期间被重新打开，请重试")),
+        launcher::ClientProcessState::Unknown => Err(anyhow!("无法确认客户端已退出，请重试")),
+    }
 }
 
 /// 切换客户端登录的账号 —— **第二步：同步聊天记录 → 写凭据 → 启动**。
@@ -124,13 +142,12 @@ pub fn finish_switch(
     account_id: &str,
     label: &str,
     chat_sync_enabled: bool,
+    exe: &Path,
     on_progress: &mut impl FnMut(&str),
 ) -> Result<SwitchOutcome> {
     // 切换期间客户端又被打开了（用户手动/其他工具）：顶着运行中的客户端写
     // 会被它的退出回写覆盖，直接拒绝
-    if crate::core::launcher::is_running(provider) {
-        return Err(anyhow!("客户端在切换期间被重新打开，请重试"));
-    }
+    ensure_client_stopped(provider)?;
 
     let chat_target_id = if provider == "workbuddy" {
         // 旧版导入的池内 ID 可能是 token 指纹，WorkBuddy 的聊天只认客户端 UID。
@@ -187,18 +204,28 @@ pub fn finish_switch(
     if chat_sync_enabled && chat_sync::supports(provider) && chat_from.is_none() {
         on_progress("syncSkipped");
     }
+    ensure_client_stopped(provider)?;
     on_progress("writing");
-    let outcome = match provider {
-        "minimax" => switch_minimax(cred, account_id, label, on_progress)?,
-        "miaoshou" => switch_miaoshou(cred, account_id, label, on_progress)?,
-        "qoder" => switch_qoder(cred, account_id, label, on_progress)?,
-        "workbuddy" => switch_workbuddy(cred, account_id, label, on_progress)?,
-        "trae" => switch_trae(cred, account_id, label, on_progress)?,
+    let written = match provider {
+        "minimax" => switch_minimax(cred)?,
+        "miaoshou" => switch_miaoshou(cred, account_id, label)?,
+        "qoder" => switch_qoder(cred, label)?,
+        "workbuddy" => {
+            super::wb_session::prepare_switch_key(exe)?;
+            switch_workbuddy(cred, label)?
+        }
+        "trae" => switch_trae(cred)?,
         other => return Err(anyhow!("{other} 不支持切换客户端账号")),
     };
+    on_progress("launching");
+    let launch_error = launcher::launch(provider, exe).err().map(|e| e.to_string());
     Ok(SwitchOutcome {
+        backup: written.backup,
+        target_file: written.target_file,
+        client_exe: exe.to_string_lossy().into_owned(),
+        launch_error,
+        config_error: None,
         chat_sync: chat_sync_report,
-        ..outcome
     })
 }
 
@@ -340,12 +367,7 @@ fn detect_minimax() -> Result<Option<DetectedAccount>> {
     Ok(None)
 }
 
-fn switch_minimax(
-    cred: &Value,
-    _account_id: &str,
-    _label: &str,
-    on_progress: &mut impl FnMut(&str),
-) -> Result<SwitchOutcome> {
+fn switch_minimax(cred: &Value) -> Result<WrittenLogin> {
     let path = minimax_switch_path(cred)?;
 
     let raw = std::fs::read_to_string(&path)
@@ -488,14 +510,9 @@ fn switch_minimax(
         serde_json::to_string_pretty(&new_state)?.as_bytes(),
     )?;
 
-    on_progress("launching");
-    let client_exe = crate::core::launcher::launch("minimax")
-        .map_err(|e| anyhow!("凭据已写入客户端登录态，但客户端启动失败：{e}"))?;
-    Ok(SwitchOutcome {
+    Ok(WrittenLogin {
         backup,
         target_file: path.to_string_lossy().to_string(),
-        client_exe: client_exe.to_string_lossy().to_string(),
-        chat_sync: None,
     })
 }
 
@@ -539,12 +556,7 @@ fn detect_miaoshou() -> Result<Option<DetectedAccount>> {
     }))
 }
 
-fn switch_miaoshou(
-    cred: &Value,
-    account_id: &str,
-    label: &str,
-    on_progress: &mut impl FnMut(&str),
-) -> Result<SwitchOutcome> {
+fn switch_miaoshou(cred: &Value, account_id: &str, label: &str) -> Result<WrittenLogin> {
     let path = miaoshou_auth_file()
         .ok_or_else(|| anyhow!("没找到妙手的登录态文件（客户端还没登录过？）"))?;
 
@@ -595,14 +607,9 @@ fn switch_miaoshou(
     };
     atomic_write(&path, serde_json::to_string_pretty(&parsed)?.as_bytes())?;
 
-    on_progress("launching");
-    let client_exe = crate::core::launcher::launch("miaoshou")
-        .map_err(|e| anyhow!("凭据已写入客户端登录态，但客户端启动失败：{e}"))?;
-    Ok(SwitchOutcome {
+    Ok(WrittenLogin {
         backup,
         target_file: path.to_string_lossy().to_string(),
-        client_exe: client_exe.to_string_lossy().to_string(),
-        chat_sync: None,
     })
 }
 
@@ -747,12 +754,7 @@ pub(crate) fn qoder_switch_dir() -> Result<PathBuf> {
     Ok(dir)
 }
 
-fn switch_qoder(
-    cred: &Value,
-    _account_id: &str,
-    label: &str,
-    on_progress: &mut impl FnMut(&str),
-) -> Result<SwitchOutcome> {
+fn switch_qoder(cred: &Value, label: &str) -> Result<WrittenLogin> {
     let dir = qoder_switch_dir()?;
     let auth_file = dir.join("auth.v1.dat");
 
@@ -823,14 +825,9 @@ fn switch_qoder(
     };
     atomic_write(&auth_file, &blob)?;
 
-    on_progress("launching");
-    let client_exe = crate::core::launcher::launch("qoder")
-        .map_err(|e| anyhow!("凭据已写入客户端登录态，但客户端启动失败：{e}"))?;
-    Ok(SwitchOutcome {
+    Ok(WrittenLogin {
         backup,
         target_file: auth_file.to_string_lossy().to_string(),
-        client_exe: client_exe.to_string_lossy().to_string(),
-        chat_sync: None,
     })
 }
 
@@ -841,24 +838,13 @@ fn switch_qoder(
 /// 把目标账号的凭据写进 Trae 的 storage.json，然后启动客户端。
 ///
 /// 登录态和授权绑定的设备密钥一并写入，客户端继续共享本地会话和工作区。
-fn switch_trae(
-    cred: &Value,
-    _account_id: &str,
-    _label: &str,
-    on_progress: &mut impl FnMut(&str),
-) -> Result<SwitchOutcome> {
-    on_progress("writing");
+fn switch_trae(cred: &Value) -> Result<WrittenLogin> {
     let written = crate::providers::trae::write_local_credential(cred, true, "switch")
         .map_err(|e| anyhow!("写入 Trae 登录态失败：{e}"))?;
 
-    on_progress("launching");
-    let client_exe = crate::core::launcher::launch("trae")
-        .map_err(|e| anyhow!("凭据已写入 Trae 登录态，但客户端启动失败：{e}"))?;
-    Ok(SwitchOutcome {
+    Ok(WrittenLogin {
         backup: written.backup,
         target_file: written.storage_path.to_string_lossy().to_string(),
-        client_exe: client_exe.to_string_lossy().to_string(),
-        chat_sync: None,
     })
 }
 
@@ -1005,26 +991,16 @@ fn backup_sqlite(path: &std::path::Path) -> Result<Option<String>> {
     Ok(first)
 }
 
-fn switch_workbuddy(
-    cred: &Value,
-    _account_id: &str,
-    label: &str,
-    on_progress: &mut impl FnMut(&str),
-) -> Result<SwitchOutcome> {
+fn switch_workbuddy(cred: &Value, label: &str) -> Result<WrittenLogin> {
     // 新版客户端（5.6+）登录态在共享 auth 文件里 —— 有这个文件就以它为准
     // （对齐 Cockpit 的 workbuddy 切号：官方加密字段读写）；没有则是老客户端，
     // 走下面的 state.vscdb 老路。
     if let Some(auth_path) = crate::core::wb_session::auth_file() {
         if auth_path.is_file() {
             let (target_file, backup) = crate::core::wb_session::write_switch(cred, label)?;
-            on_progress("launching");
-            let client_exe = crate::core::launcher::launch("workbuddy")
-                .map_err(|e| anyhow!("凭据已写入客户端登录态，但客户端启动失败：{e}"))?;
-            return Ok(SwitchOutcome {
+            return Ok(WrittenLogin {
                 backup: backup.map(|p| p.to_string_lossy().to_string()),
                 target_file: target_file.to_string_lossy().to_string(),
-                client_exe: client_exe.to_string_lossy().to_string(),
-                chat_sync: None,
             });
         }
     }
@@ -1098,14 +1074,9 @@ fn switch_workbuddy(
         ));
     }
 
-    on_progress("launching");
-    let client_exe = crate::core::launcher::launch("workbuddy")
-        .map_err(|e| anyhow!("凭据已写入客户端登录态，但客户端启动失败：{e}"))?;
-    Ok(SwitchOutcome {
+    Ok(WrittenLogin {
         backup,
         target_file: db_path.to_string_lossy().to_string(),
-        client_exe: client_exe.to_string_lossy().to_string(),
-        chat_sync: None,
     })
 }
 

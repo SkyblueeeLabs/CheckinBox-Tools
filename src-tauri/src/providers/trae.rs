@@ -866,9 +866,6 @@ fn read_storage(path: &Path, allow_missing: bool) -> Result<Value> {
 
 pub(crate) fn preflight_switch(cred: &Value) -> Result<()> {
     validate_switch_credential(cred)?;
-    if crate::core::launcher::client_exe("trae").is_none() {
-        bail!("没有找到 Trae CN 客户端，请先安装客户端");
-    }
     let app_dir = match read_local_auth() {
         Some(local) => local.app_dir,
         None => default_app_dir()?,

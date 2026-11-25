@@ -7,6 +7,7 @@ import type {
   AuthChallenge,
   ChatBackupEntry,
   ClientAccountView,
+  ClientPathStatus,
   CloseAction,
   CreditPackagePage,
   CreditUsagePage,
@@ -115,8 +116,13 @@ export const api = {
     invoke<ChatBackupEntry[]>("delete_chat_backup", { provider, opId }),
   deleteOldChatBackups: (days: number) =>
     invoke<ChatBackupEntry[]>("delete_old_chat_backups", { days }),
-  launchClient: (providerId: string) =>
-    invoke<string>("launch_client", { providerId }),
+  launchClient: (providerId: string, previousExe?: string) =>
+    invoke<string>("launch_client", previousExe ? { providerId, previousExe } : { providerId }),
+  getClientPath: (providerId: string, redetect = false) =>
+    invoke<ClientPathStatus>("get_client_path", { providerId, redetect }),
+  setClientPath: (providerId: string, path: string | null) =>
+    invoke<ClientPathStatus>("set_client_path", { providerId, path }),
+  pickClientExe: () => invoke<string | null>("pick_client_exe"),
   detectClientAccount: (providerId: string) =>
     invoke<ClientAccountView | null>("detect_client_account", { providerId }),
   clientRunning: (providerId: string) =>

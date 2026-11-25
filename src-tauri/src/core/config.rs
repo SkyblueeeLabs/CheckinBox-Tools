@@ -285,6 +285,9 @@ pub struct AppConfig {
     /// 「多账号切换」就是改这个值。
     #[serde(default)]
     pub active_accounts: BTreeMap<String, String>,
+    /// 各平台手动选定的客户端 exe。没有配置时自动定位。
+    #[serde(default)]
+    pub client_paths: BTreeMap<String, String>,
     /// 积分预警阈值（剩余低于该值就在界面上标红）。
     /// 借鉴 Cockpit Tools 的 `*_quota_alert_threshold`。
     #[serde(default)]
@@ -319,6 +322,7 @@ impl Default for AppConfig {
             scheduler: SchedulerConfig::default(),
             update: UpdateConfig::default(),
             active_accounts: BTreeMap::new(),
+            client_paths: BTreeMap::new(),
             alert_thresholds: BTreeMap::new(),
             agent_order: Vec::new(),
             close_action: CloseAction::default(),

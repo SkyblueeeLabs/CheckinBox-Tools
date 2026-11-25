@@ -10,6 +10,7 @@ interface Props {
   onSelect: (id: string) => void;
   onOpenHome: () => void;
   onOpenSettings: () => void;
+  onOpenWebsite: (url: string) => void;
   /** 拖拽调序：把完整的新顺序交给上层落盘 */
   onReorder: (order: string[]) => void;
   /** 全量平台（含被隐藏的），显示管理菜单用 */
@@ -20,6 +21,11 @@ interface Props {
 
 /** 设置页的虚拟 id（不是真实 provider）。 */
 export const SETTINGS_ID = "__settings__";
+
+const CHECKINBOX_WEBSITES = [
+  { label: "官网", url: "https://skyblueeelabs.github.io/CheckinBox-Tools/" },
+  { label: "镜像站", url: "https://checkinbox-tools-uwpjuqh846z.qoder.zone/" },
+];
 
 interface DragState {
   /** 被拖的 agent id */
@@ -92,7 +98,7 @@ function AgentItemContent({ group }: { group: AgentGroup }) {
  *   - 松手浮动卡消失，条目在落位处淡入（scale 1.06 → 1）。
  * 顺序由后端落盘，重启后保持。
  */
-export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onReorder, providers, visibility, onVisibilityChange }: Props) {
+export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onOpenWebsite, onReorder, providers, visibility, onVisibilityChange }: Props) {
   const drag = useRef<DragState | null>(null);
   const lastDragEndAt = useRef(0);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -326,6 +332,22 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
             <span className="side-sub">同步 / 调度 / 数据</span>
           </span>
         </button>
+        <div className="sidebar-websites" role="group" aria-label="CheckinBox 网站">
+          {CHECKINBOX_WEBSITES.map(({ label, url }) => (
+            <a
+              key={url}
+              className="link"
+              href={url}
+              title={url}
+              onClick={(event) => {
+                event.preventDefault();
+                onOpenWebsite(url);
+              }}
+            >
+              {label} <span aria-hidden="true">↗</span>
+            </a>
+          ))}
+        </div>
       </div>
     </aside>
   );

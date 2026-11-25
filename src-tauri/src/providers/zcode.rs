@@ -3,8 +3,8 @@
 //! 产品标识：`zcode`，数据目录 `~/.zcode`，客户端 `ZCode.exe`。
 //!
 //! 协议（已实测）：
-//!   * 登录态：`~/.zcode/v2/credentials.json` —— AES-256-GCM 加密，
-//!     键 `zcodejwttoken` 解密后是 JWT；
+//!   * 登录态：`~/.zcode/v2/credentials.json` 里的 `zcodejwttoken`。
+//!     3.18 起通常通过 Windows 凭据管理器读取 AES 密钥，旧版使用 `enc:v1`；
 //!   * 设备标识：`~/.zcode/v2/onboarding-record.json`（**明文**），含
 //!     `deviceMid` 和 `decisions[].userId`；
 //!   * 余额：`GET https://zcode.z.ai/api/v1/zcode-plan/billing/balance`
@@ -26,6 +26,8 @@ use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
+use std::cell::OnceCell;
+use std::path::{Path, PathBuf};
 
 use crate::core::provider::{
     Account, AccountProfile, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
@@ -40,7 +42,9 @@ const JWT_KEY: &str = "zcodejwttoken";
 const CREDENTIALS_REL: &str = ".zcode/v2/credentials.json";
 const ONBOARDING_REL: &str = ".zcode/v2/onboarding-record.json";
 const ENC_PREFIX: &str = "enc:v1:";
+const SYSTEM_PREFIX: &str = "enc:v2:";
 const NONCE_LEN: usize = 12;
+const TAG_LEN: usize = 16;
 
 // ---------------------------------------------------------------------------
 // 本机登录态读取 + 解密
@@ -92,75 +96,190 @@ fn candidate_seeds() -> Vec<String> {
     seeds
 }
 
-fn try_decrypt(key: &[u8], iv: &[u8], tag: &[u8], ct: &[u8]) -> Option<String> {
-    if iv.len() != NONCE_LEN {
+fn decrypt_payload(key: &[u8], payload: &str) -> Option<String> {
+    let mut parts = payload.split('.');
+    let iv = B64URL.decode(parts.next()?).ok()?;
+    let tag = B64URL.decode(parts.next()?).ok()?;
+    let mut ct = B64URL.decode(parts.next()?).ok()?;
+    if parts.next().is_some() || iv.len() != NONCE_LEN || tag.len() != TAG_LEN {
         return None;
     }
     let cipher = Aes256Gcm::new_from_slice(key).ok()?;
-    // aes-gcm 的 decrypt 收 `ciphertext || tag`
-    let mut combined = Vec::with_capacity(ct.len() + tag.len());
-    combined.extend_from_slice(ct);
-    combined.extend_from_slice(tag);
+    ct.extend_from_slice(&tag);
     let plain = cipher
-        .decrypt(Nonce::from_slice(iv), Payload::from(combined.as_slice()))
+        .decrypt(Nonce::from_slice(&iv), Payload::from(ct.as_slice()))
         .ok()?;
     String::from_utf8(plain).ok()
 }
 
-/// 用固定 seed 解密一个 `enc:v1:<iv>.<tag>.<ct>` 字段（测试用）。
 fn decrypt_with_seed(seed: &str, encoded: &str) -> Option<String> {
-    let rest = encoded.strip_prefix(ENC_PREFIX)?;
-    let parts: Vec<&str> = rest.split('.').collect();
-    if parts.len() != 3 || parts[0].is_empty() || parts[1].is_empty() || parts[2].is_empty() {
+    decrypt_payload(
+        &Sha256::digest(seed.as_bytes()),
+        encoded.strip_prefix(ENC_PREFIX)?,
+    )
+}
+
+fn decrypt_system_payload(key: &[u8; 32], envelope: &str) -> Option<String> {
+    let (fingerprint, payload) = envelope.split_once(':')?;
+    if fingerprint != &format!("{:x}", Sha256::digest(key))[..24] {
         return None;
     }
-    let iv = B64URL.decode(parts[0]).ok()?;
-    let tag = B64URL.decode(parts[1]).ok()?;
-    let ct = B64URL.decode(parts[2]).ok()?;
-    let key = Sha256::digest(seed.as_bytes());
-    try_decrypt(&key, &iv, &tag, &ct)
+    decrypt_payload(key, payload)
 }
 
-/// 解密一个 `enc:v1:` 字段：逐个候选 seed 试，命中即返回。
-fn decrypt_field(encoded: &str) -> Option<String> {
-    for seed in candidate_seeds() {
-        if let Some(plain) = decrypt_with_seed(&seed, encoded) {
-            return Some(plain);
+#[cfg(windows)]
+fn read_system_key(path: &Path) -> Option<[u8; 32]> {
+    use windows_sys::Win32::Security::Credentials::{CredFree, CredReadW, CRED_TYPE_GENERIC};
+
+    // ZCode 用 path.resolve 后的路径派生账号名，keyring 在 Windows 上使用「账号.服务」。
+    let path = path.to_str()?.replace('/', "\\");
+    let account = Sha256::digest(path.as_bytes());
+    let target: Vec<u16> = format!("{account:x}.ZCode Credential Encryption")
+        .encode_utf16()
+        .chain(std::iter::once(0))
+        .collect();
+    let mut credential = std::ptr::null_mut();
+    // CredReadW 成功时返回由 CredFree 释放的结构。keyring 用 UTF-16LE 写入 43 字符的 base64url 密钥。
+    unsafe {
+        if CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) == 0 {
+            return None;
         }
+        let entry = &*credential;
+        let key = if entry.CredentialBlobSize == 86 && !entry.CredentialBlob.is_null() {
+            let blob = std::slice::from_raw_parts(entry.CredentialBlob, 86);
+            let encoded: Vec<u16> = blob
+                .chunks_exact(2)
+                .map(|pair| u16::from_le_bytes([pair[0], pair[1]]))
+                .collect();
+            String::from_utf16(&encoded)
+                .ok()
+                .and_then(|encoded| B64URL.decode(encoded).ok())
+                .and_then(|key| key.try_into().ok())
+        } else {
+            None
+        };
+        CredFree(credential.cast());
+        key
     }
+}
+
+#[cfg(not(windows))]
+fn read_system_key(_path: &Path) -> Option<[u8; 32]> {
     None
 }
 
-fn read_credentials() -> Option<Value> {
-    let path = credentials_path()?;
-    let raw = std::fs::read_to_string(path).ok()?;
-    serde_json::from_str(&raw).ok()
-}
-
-/// 取 Zcode 的 JWT（每次实时读，客户端会自己续期）。
-fn read_jwt() -> Option<String> {
-    let json = read_credentials()?;
-    let obj = json.as_object()?;
-    let mut keys: Vec<String> = Vec::new();
-    if obj.contains_key(JWT_KEY) {
-        keys.push(JWT_KEY.to_string());
+fn read_managed_secret(path: &Path) -> Option<String> {
+    let explicit_secret = std::env::var("ZCODE_CREDENTIAL_SECRET")
+        .ok()
+        .filter(|s| !s.is_empty());
+    let explicit_file = std::env::var_os("ZCODE_CREDENTIAL_SECRET_FILE").filter(|p| !p.is_empty());
+    if explicit_secret.is_some() {
+        return if explicit_file.is_none() {
+            explicit_secret
+        } else {
+            None
+        };
     }
-    for k in obj.keys() {
-        let lk = k.to_lowercase();
-        if lk.contains("zcode") && lk.contains("jwt") && k != JWT_KEY {
-            keys.push(k.clone());
+    let secret_path = explicit_file
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| path.with_file_name("credential-secret"));
+    let metadata = std::fs::metadata(&secret_path).ok()?;
+    if !metadata.is_file() || !(32..=4096).contains(&metadata.len()) {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        if explicit_file.is_none() && metadata.permissions().mode() & 0o077 != 0 {
+            return None;
         }
     }
-    for k in keys {
-        let Some(s) = obj[&k].as_str() else { continue };
-        if let Some(plain) = decrypt_field(s) {
-            // JWT 是三段式，顺手校验一下，避免把别的字段误当 token
-            if plain.split('.').count() == 3 {
-                return Some(plain);
+    let value = std::fs::read_to_string(secret_path).ok()?;
+    (32..=4096).contains(&value.len()).then_some(value)
+}
+
+struct LocalCredentials {
+    path: PathBuf,
+    fields: serde_json::Map<String, Value>,
+    system_key: OnceCell<Option<[u8; 32]>>,
+    managed_key: OnceCell<Option<[u8; 32]>>,
+}
+
+impl LocalCredentials {
+    fn read() -> Result<Option<Self>> {
+        let Some(path) = credentials_path() else {
+            return Ok(None);
+        };
+        let raw = match std::fs::read_to_string(&path) {
+            Ok(raw) => raw,
+            Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(_) => return Err(anyhow!("无法读取本机 ZCode 登录凭据文件")),
+        };
+        let fields =
+            serde_json::from_str(&raw).map_err(|_| anyhow!("本机 ZCode 登录凭据文件格式异常"))?;
+        Ok(Some(Self {
+            path,
+            fields,
+            system_key: OnceCell::new(),
+            managed_key: OnceCell::new(),
+        }))
+    }
+
+    fn decrypt(&self, encoded: &str) -> Option<String> {
+        if let Some(body) = encoded.strip_prefix(SYSTEM_PREFIX) {
+            let (source, envelope) = body.split_once(':')?;
+            let key = match source {
+                "os" => self.system_key.get_or_init(|| read_system_key(&self.path)),
+                "env" => self.managed_key.get_or_init(|| {
+                    read_managed_secret(&self.path)
+                        .map(|secret| Sha256::digest(secret.as_bytes()).into())
+                }),
+                _ => return None,
+            };
+            return decrypt_system_payload(key.as_ref()?, envelope);
+        }
+        candidate_seeds()
+            .iter()
+            .find_map(|seed| decrypt_with_seed(seed, encoded))
+    }
+
+    fn jwt(&self) -> Result<Option<String>> {
+        let candidates = self.fields.iter().filter_map(|(key, value)| {
+            let lower = key.to_ascii_lowercase();
+            (key != JWT_KEY && lower.contains("zcode") && lower.contains("jwt"))
+                .then_some(value)
+                .and_then(Value::as_str)
+        });
+        let mut found = false;
+        for token in self
+            .fields
+            .get(JWT_KEY)
+            .and_then(Value::as_str)
+            .into_iter()
+            .chain(candidates)
+        {
+            found = true;
+            if let Some(jwt) = self.decrypt(token) {
+                if jwt.split('.').count() == 3 && jwt.split('.').all(|part| !part.is_empty()) {
+                    return Ok(Some(jwt));
+                }
             }
         }
+        if found {
+            return Err(anyhow!("无法解密本机 ZCode 登录凭据，请使用同一个 Windows 用户打开 ZCode，确认已登录后再导入"));
+        }
+        Ok(None)
     }
-    None
+}
+
+/// 每次查询实时读取，客户端会自行续期。
+fn read_jwt() -> Result<String> {
+    let jwt = match LocalCredentials::read()? {
+        Some(credentials) => credentials.jwt()?,
+        None => None,
+    };
+    jwt.ok_or_else(|| anyhow!("未找到 ZCode 登录态：请先在本机登录 ZCode 客户端"))
 }
 
 fn read_onboarding() -> Option<Value> {
@@ -189,7 +308,7 @@ fn read_device_mid() -> Option<String> {
 
 /// 账号 id：优先 `onboarding-record.json` 的 `decisions[].userId`，
 /// 兜底解 JWT payload。
-fn read_user_id() -> Option<String> {
+fn read_user_id(jwt: &str) -> Option<String> {
     if let Some(json) = read_onboarding() {
         if let Some(id) = json["decisions"][0]["userId"].as_str() {
             if !id.is_empty() {
@@ -197,7 +316,6 @@ fn read_user_id() -> Option<String> {
             }
         }
     }
-    let jwt = read_jwt()?;
     let payload = jwt.split('.').nth(1)?;
     let bytes = B64URL.decode(payload).ok()?;
     let v: Value = serde_json::from_slice(&bytes).ok()?;
@@ -211,16 +329,14 @@ fn read_user_id() -> Option<String> {
     None
 }
 
-/// 账号昵称：解密 `oauth:bigmodel:user_info`。
-fn read_user_name() -> Option<String> {
-    let json = read_credentials()?;
-    let obj = json.as_object()?;
-    for (k, v) in obj {
+/// 账号昵称：解密 OAuth 用户资料。
+fn read_user_name(credentials: &LocalCredentials) -> Option<String> {
+    for (k, v) in &credentials.fields {
         if !k.contains("user_info") {
             continue;
         }
         let Some(s) = v.as_str() else { continue };
-        let Some(plain) = decrypt_field(s) else {
+        let Some(plain) = credentials.decrypt(s) else {
             continue;
         };
         let Ok(info) = serde_json::from_str::<Value>(&plain) else {
@@ -468,8 +584,7 @@ impl ZcodeProvider {
 
     /// 拉一次余额。只读接口，不需要验证码。
     async fn fetch_balance(&self) -> Result<Value> {
-        let jwt = read_jwt()
-            .ok_or_else(|| anyhow!("未找到 Zcode 登录态：请先在本机登录 Zcode 客户端"))?;
+        let jwt = read_jwt()?;
         let device_mid = read_device_mid().unwrap_or_default();
         let tz = crate::core::tz::iana_timezone();
 
@@ -523,8 +638,7 @@ impl ZcodeProvider {
     /// 和 `fetch_balance` 的分工：**balance = 已生效的套餐**，
     /// **preview = 现在能领的套餐**（官方 `getManualClaimPlanPreviews`）。
     async fn fetch_preview(&self) -> Result<Value> {
-        let jwt = read_jwt()
-            .ok_or_else(|| anyhow!("未找到 Zcode 登录态：请先在本机登录 Zcode 客户端"))?;
+        let jwt = read_jwt()?;
         let mut headers = reqwest::header::HeaderMap::new();
         set_header(&mut headers, "accept", "application/json");
         set_header(&mut headers, "authorization", &format!("Bearer {jwt}"));
@@ -583,11 +697,14 @@ impl Provider for ZcodeProvider {
     }
 
     async fn discover(&self) -> Result<Vec<(Account, Value)>> {
-        let Some(jwt) = read_jwt() else {
+        let Some(credentials) = LocalCredentials::read()? else {
             return Ok(Vec::new());
         };
-        let user_id = read_user_id().unwrap_or_else(|| "zcode".to_string());
-        let name = read_user_name().unwrap_or_else(|| "Zcode 账号".to_string());
+        let Some(jwt) = credentials.jwt()? else {
+            return Ok(Vec::new());
+        };
+        let user_id = read_user_id(&jwt).unwrap_or_else(|| "zcode".to_string());
+        let name = read_user_name(&credentials).unwrap_or_else(|| "ZCode 账号".to_string());
         let account = Account {
             id: user_id.clone(),
             provider: "zcode".to_string(),
@@ -629,7 +746,8 @@ impl Provider for ZcodeProvider {
     }
 
     async fn profile(&self, _account: &Account, _cred: &Value) -> Result<Option<AccountProfile>> {
-        Ok(read_user_name().map(|name| AccountProfile {
+        let name = LocalCredentials::read()?.as_ref().and_then(read_user_name);
+        Ok(name.map(|name| AccountProfile {
             name: Some(name),
             ..Default::default()
         }))
@@ -775,6 +893,27 @@ mod tests {
     }
 
     #[test]
+    fn 新版系统凭据读取并校验密钥指纹和密文() {
+        // 固定样例使用独立的 Node.js AES-256-GCM 生成，密钥为 32 个 0x01。
+        let token = "enc:v2:os:72cd6e8422c407fb6d098690:AgICAgICAgICAgIC.ttiQg1lwrAQLH-t-Yc8AAg.ZrSqZy4yp9O0";
+        let mut credentials = LocalCredentials {
+            path: PathBuf::new(),
+            fields: serde_json::Map::new(),
+            system_key: OnceCell::from(Some([1; 32])),
+            managed_key: OnceCell::new(),
+        };
+        credentials.fields.insert(JWT_KEY.into(), json!(token));
+        assert_eq!(credentials.jwt().unwrap().as_deref(), Some("abc.def.g"));
+        for invalid in [
+            token.replacen("72cd6e", "82cd6e", 1),
+            token.replacen("ttiQg1", "utiQg1", 1),
+        ] {
+            credentials.fields.insert(JWT_KEY.into(), json!(invalid));
+            assert!(credentials.jwt().is_err());
+        }
+    }
+
+    #[test]
     fn 种子fallback形态正确() {
         let seeds = candidate_seeds();
         assert!(!seeds.is_empty());
@@ -800,37 +939,15 @@ mod tests {
         assert_eq!(fmt_units(999.0), "999");
     }
 
-    /// 诊断用：确认本机的 `credentials.json` 真能解出字段（即 seed 猜对了）。
-    ///
-    /// 默认不跑（依赖本机 Zcode 登录态）。手动验证：
-    /// `cargo test -- --ignored 真实凭据能解出`
-    #[test]
-    #[ignore = "依赖本机 Zcode 登录态，手动跑：cargo test -- --ignored 真实凭据能解出"]
-    fn 真实凭据能解出() {
-        let Some(json) = read_credentials() else {
-            eprintln!("跳过：本机没有 {}", CREDENTIALS_REL);
-            return;
-        };
-        let Some(obj) = json.as_object() else {
-            panic!("credentials.json 不是对象");
-        };
-        let mut ok = 0;
-        for (k, v) in obj {
-            let Some(s) = v.as_str() else { continue };
-            if !s.starts_with(ENC_PREFIX) {
-                continue;
-            }
-            match decrypt_field(s) {
-                Some(plain) => {
-                    // 只打印长度和头尾，避免把 token 明文写进测试输出
-                    let head = plain.chars().take(12).collect::<String>();
-                    eprintln!("  {k}: 解密成功（{} 字节，开头 {head}…）", plain.len());
-                    ok += 1;
-                }
-                None => eprintln!("  {k}: 解密失败（seed 不匹配？）"),
-            }
-        }
-        assert!(ok > 0, "一个字段都没解出来：seed 可能不对");
+    /// 诊断用：验证导入入口能读取本机登录态，输出仅含断言结果。
+    #[tokio::test]
+    #[ignore = "依赖本机 ZCode 登录态，手动跑：cargo test -- --ignored 真实凭据能解出"]
+    async fn 真实凭据能解出() {
+        let accounts = ZcodeProvider::new()
+            .discover()
+            .await
+            .expect("读取 ZCode 登录态失败");
+        assert_eq!(accounts.len(), 1, "本机应存在一个 ZCode 登录账号");
     }
 
     /// 诊断用：打一次真实的余额接口，确认 headers / 解析都对。

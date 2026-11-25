@@ -4,6 +4,7 @@ import { WELFARE_KIND_TEXT, WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfare
 import TimeInput from "./TimeInput";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import AccountCard from "./AccountCard";
+import AgentSettingsDialog from "./AgentSettingsDialog";
 
 interface Props {
   group: AgentGroup;
@@ -27,6 +28,15 @@ interface Props {
   onAlertChange: (providerId: string, value: number) => void;
   /** 改「换号同步聊天记录」开关（仅 WorkBuddy 显示） */
   onChatSyncChange: (providerId: string, enabled: boolean) => void;
+  settings: {
+    open: boolean;
+    onOpen: () => void;
+    onClose: () => void;
+    onPathChanged: (path: string | null) => void;
+    prompt?: string;
+    continueLabel?: string;
+    onContinue?: () => void;
+  };
   /** WorkBuddy 实时免费模型核对状态 */
   liveFree?: LiveFreeModels | null;
   onRefreshFree?: () => void;
@@ -77,6 +87,7 @@ export default function AgentGroupPanel({
   onAlertChange,
   onScheduleChange,
   onChatSyncChange,
+  settings,
   liveFree,
   onRefreshFree,
 }: Props) {
@@ -256,91 +267,105 @@ export default function AgentGroupPanel({
         </div>
       )}
 
-      <details className="agent-options">
-        <summary>
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9" /><circle cx="13" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
-          <span>自动化设置</span>
-          <span className="agent-options-summary">
-            {provider.supportsClaim ? (schedule.enabled ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)} 自动签到` : "自动签到已关闭") : "官方客户端领取"}
-            {schedule.chatSyncSupported && ` · 聊天同步${schedule.chatSyncEnabled ? "已开启" : "已关闭"}`}
-          </span>
-          <span className="agent-options-caret" aria-hidden="true">⌄</span>
-        </summary>
-        <div className="agent-options-body">
-      {/* 换号同步聊天记录（WorkBuddy 按账号分片；Qoder 本地历史默认共享） */}
-      {schedule.chatSyncSupported && (
-        <div className="chat-sync">
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={schedule.chatSyncEnabled}
-              onChange={(e) => onChatSyncChange(provider.id, e.target.checked)}
-            />
-            <span>换号同步聊天记录</span>
-          </label>
-          <span className="chat-sync-hint" title={CHAT_SYNC_MINIMAX_NOTE}>
-            {CHAT_SYNC_HINT[provider.id] ?? "切换客户端账号时保留各账号的本地会话"}
-            <em className="chat-sync-note"> · {CHAT_SYNC_MINIMAX_NOTE}</em>
-          </span>
-        </div>
-      )}
-      {/* 这个 agent 自己的自动签到。
-          不代领的平台（Zcode：领取要过官方客户端的阿里云验证码）没有可自动
-          执行的东西，换成一句说明，避免用户以为开了就会自动到账。 */}
-      {provider.supportsClaim ? (
-        <div className="sched">
-          <label className="switch">
-            <input
-              type="checkbox"
-              checked={schedule.enabled}
-              onChange={(e) => onScheduleChange(provider.id, { enabled: e.target.checked })}
-            />
-            <span>自动签到</span>
-          </label>
+      <button
+        type="button"
+        className="agent-options"
+        aria-label={`${provider.name} 设置`}
+        aria-haspopup="dialog"
+        aria-expanded={settings.open}
+        onClick={settings.onOpen}
+      >
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9" /><circle cx="13" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+        <span>设置</span>
+        <span className="agent-options-summary">
+          {provider.supportsClaim ? (schedule.enabled ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)} 自动签到` : "自动签到已关闭") : "官方客户端领取"}
+          {schedule.chatSyncSupported && ` · 聊天同步${schedule.chatSyncEnabled ? "已开启" : "已关闭"}`}
+        </span>
+        <span className="agent-options-caret" aria-hidden="true">›</span>
+      </button>
+      {settings.open && (
+        <AgentSettingsDialog
+          provider={provider}
+          onClose={settings.onClose}
+          onPathChanged={settings.onPathChanged}
+          prompt={settings.prompt}
+          continueLabel={settings.continueLabel}
+          onContinue={settings.onContinue}
+        >
+          <section className="agent-settings-section">
+            <h3>自动化</h3>
+            {provider.supportsClaim ? (
+              <div className="sched">
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={schedule.enabled}
+                    onChange={(e) => onScheduleChange(provider.id, { enabled: e.target.checked })}
+                  />
+                  <span>自动签到</span>
+                </label>
 
-          <span className="sched-label">时间窗</span>
-          <span className="sched-win">
-            <TimeInput
-              value={schedule.startMinute}
-              onCommit={(m) => onScheduleChange(provider.id, { startMinute: m })}
-              ariaLabel={`${provider.name} 时间窗起`}
-            />
-            <span className="sched-dash">→</span>
-            <TimeInput
-              value={schedule.endMinute}
-              onCommit={(m) => onScheduleChange(provider.id, { endMinute: m })}
-              ariaLabel={`${provider.name} 时间窗止`}
-            />
-          </span>
-          <span className="sched-hint">窗内每账号随机错峰执行</span>
-          {RESET_HINT[provider.id] ? (
-            <span className="sched-hint warn">{RESET_HINT[provider.id]}</span>
-          ) : null}
+                <span className="sched-label">时间窗</span>
+                <span className="sched-win">
+                  <TimeInput
+                    value={schedule.startMinute}
+                    onCommit={(m) => onScheduleChange(provider.id, { startMinute: m })}
+                    ariaLabel={`${provider.name} 时间窗起`}
+                  />
+                  <span className="sched-dash">→</span>
+                  <TimeInput
+                    value={schedule.endMinute}
+                    onCommit={(m) => onScheduleChange(provider.id, { endMinute: m })}
+                    ariaLabel={`${provider.name} 时间窗止`}
+                  />
+                </span>
+                <span className="sched-hint">窗内每账号随机错峰执行</span>
+                {RESET_HINT[provider.id] && <span className="sched-hint warn">{RESET_HINT[provider.id]}</span>}
 
-          <span className="sched-label">预警</span>
-          <span className="sched-win">
-            <input
-              className="sched-threshold"
-              type="number"
-              min={0}
-              value={schedule.alertThreshold ?? 200}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v) && v >= 0) onAlertChange(provider.id, Math.round(v));
-              }}
-            />
-            <span className="sched-hint">剩余低于此值标红</span>
-          </span>
-        </div>
-      ) : (
-        <div className="sched-hint">
-          {provider.name} 每日额度需在官方客户端领取
-          {WELFARE_META[provider.id]?.timing ? `（${WELFARE_META[provider.id].timing}）` : ""}
-          ，本工具只展示余额并提醒
-        </div>
+                <label className="sched-win">
+                  <span className="sched-label">额度预警</span>
+                  <input
+                    className="sched-threshold"
+                    type="number"
+                    min={0}
+                    value={schedule.alertThreshold ?? 200}
+                    onChange={(e) => {
+                      const v = Number(e.target.value);
+                      if (Number.isFinite(v) && v >= 0) onAlertChange(provider.id, Math.round(v));
+                    }}
+                  />
+                  <span className="sched-hint">剩余低于此值标红</span>
+                </label>
+              </div>
+            ) : (
+              <p className="agent-settings-note">
+                {provider.name} 每日额度需在官方客户端领取
+                {WELFARE_META[provider.id]?.timing ? `（${WELFARE_META[provider.id].timing}）` : ""}
+                ，本工具只展示余额并提醒
+              </p>
+            )}
+          </section>
+          {schedule.chatSyncSupported && (
+            <section className="agent-settings-section">
+              <h3>换号</h3>
+              <div className="chat-sync">
+                <label className="switch">
+                  <input
+                    type="checkbox"
+                    checked={schedule.chatSyncEnabled}
+                    onChange={(e) => onChatSyncChange(provider.id, e.target.checked)}
+                  />
+                  <span>换号同步聊天记录</span>
+                </label>
+                <span className="chat-sync-hint" title={CHAT_SYNC_MINIMAX_NOTE}>
+                  {CHAT_SYNC_HINT[provider.id] ?? "切换客户端账号时保留各账号的本地会话"}
+                  <em className="chat-sync-note"> · {CHAT_SYNC_MINIMAX_NOTE}</em>
+                </span>
+              </div>
+            </section>
+          )}
+        </AgentSettingsDialog>
       )}
-        </div>
-      </details>
 
       {accounts.length === 0 ? (
         <div className="empty-state">

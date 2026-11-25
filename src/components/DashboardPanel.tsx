@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { agentVisibilityOf, type AgentGroup, type AgentVisibility, type Overview } from "../lib/types";
 import { fmtCompact, fmtPoints, fmtQuotaAmount, quotaUnit } from "../lib/api";
 import { EXPIRY_WINDOW_DAYS, expiringAccounts } from "../lib/expiry";
@@ -9,6 +10,7 @@ interface Props {
   groups: AgentGroup[];
   /** 点击某个 agent 卡 → 跳到该平台的面板 */
   onOpenAgent: (id: string) => void;
+  announcement?: ReactNode;
   /** 每个平台的显示开关；没列出的平台全部显示 */
   visibility: Record<string, AgentVisibility>;
 }
@@ -20,7 +22,7 @@ interface Props {
  * 下面是每个 agent 一张卡：官方图标、积分、账号数、今日签到状态，
  * 点击卡片跳到该平台的详情面板。
  */
-export default function DashboardPanel({ overview, groups, onOpenAgent, visibility }: Props) {
+export default function DashboardPanel({ overview, groups, onOpenAgent, announcement, visibility }: Props) {
   // 全局指标保持全量口径（与顶栏「今日已签 N/M」一致）；
   // 首页隐藏只影响下面的到期列表和 agent 卡片，不改汇总数字。
   const homeVisible = (id: string) => agentVisibilityOf(visibility, id).home;
@@ -55,6 +57,8 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, visibili
     <section className="panel dash">
       {/* 顶部不再重复「总览」标题 —— 顶栏已经标了当前页面，面板头纯属多余
           （平台/账号数在侧栏与顶栏「今日已签 N/M」里都能看到） */}
+
+      {announcement}
 
       {/* ---------- 全局关键指标 ---------- */}
       <div className="dash-stats">

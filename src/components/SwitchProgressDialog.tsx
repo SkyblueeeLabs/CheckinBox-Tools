@@ -4,10 +4,12 @@ import type { SwitchProgressStage } from "../lib/types";
 interface Props {
   providerName: string;
   accountLabel: string;
-  stage: SwitchProgressStage | "preparing" | "completed" | "failed";
+  stage: SwitchProgressStage | "preparing" | "completed" | "failed" | "launchFailed";
   chatSyncEnabled: boolean;
   detail?: string;
   error?: string;
+  onRetryLaunch: () => void;
+  onEditPath: () => void;
   onClose: () => void;
 }
 
@@ -27,12 +29,15 @@ export default function SwitchProgressDialog({
   chatSyncEnabled,
   detail,
   error,
+  onRetryLaunch,
+  onEditPath,
   onClose,
 }: Props) {
   const dialogRef = useRef<HTMLDialogElement>(null);
   const steps = BASE_STEPS.filter((step) => step.key !== "syncing" || chatSyncEnabled);
   const completed = stage === "completed";
-  const failed = stage === "failed";
+  const launchFailed = stage === "launchFailed";
+  const failed = stage === "failed" || launchFailed;
   const skippedSync = stage === "syncSkipped";
   const activeKey = skippedSync ? "writing" : stage;
   const activeIndex = steps.findIndex((step) => step.key === activeKey);
@@ -60,7 +65,7 @@ export default function SwitchProgressDialog({
           {completed ? "✓" : failed ? "!" : <span />}
         </div>
         <h2 id="switch-progress-title">
-          {completed ? "客户端已启动" : failed ? "切换未完成" : "正在切换账号"}
+          {completed ? "客户端已启动" : launchFailed ? "登录态已写入，启动失败" : failed ? "切换未完成" : "正在切换账号"}
         </h2>
         <p id="switch-progress-subtitle" className="switch-progress-subtitle">
           <strong>{providerName}</strong><span>·</span><span title={accountLabel}>{accountLabel}</span>
@@ -69,7 +74,8 @@ export default function SwitchProgressDialog({
         <ol className="switch-progress-steps">
           {steps.map((step, index) => {
             const isSkipped = skippedSync && step.key === "syncing";
-            const isDone = completed || isSkipped || (!failed && activeIndex >= 0 && index < activeIndex);
+            const isDone = completed || isSkipped || (launchFailed && step.key !== "launching")
+              || (!failed && activeIndex >= 0 && index < activeIndex);
             const isCurrent = !completed && !failed && !isSkipped && index === activeIndex;
             return (
               <li key={step.key} className={`${isDone ? "done" : ""} ${isCurrent ? "current" : ""} ${isSkipped ? "skipped" : ""}`}>
@@ -83,9 +89,15 @@ export default function SwitchProgressDialog({
           })}
         </ol>
 
-        {completed && detail && <p className="switch-progress-result">{detail}</p>}
+        {(completed || launchFailed) && detail && <p className="switch-progress-result">{detail}</p>}
         {failed && <p className="switch-progress-error" role="alert">{error || "请检查客户端状态后重试。"}</p>}
-        {(completed || failed) && <button className="btn small switch-progress-close" onClick={() => dialogRef.current?.close()}>完成</button>}
+        {(completed || failed) && (
+          <div className="switch-progress-actions">
+            {launchFailed && <button className="btn small" type="button" onClick={onEditPath}>调整路径</button>}
+            <button className="btn small" type="button" onClick={() => dialogRef.current?.close()}>完成</button>
+            {launchFailed && <button className="btn small primary" type="button" onClick={onRetryLaunch}>重试启动</button>}
+          </div>
+        )}
       </dialog>
   );
 }

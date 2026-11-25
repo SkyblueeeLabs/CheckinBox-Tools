@@ -480,6 +480,16 @@ button:disabled {
 .side-settings {
   justify-content: flex-start;
 }
+.sidebar-websites {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  padding-inline-start: 62px;
+}
+.sidebar-websites .link {
+  color: var(--text-2);
+  white-space: nowrap;
+}
 .settings-mark {
   width: 38px;
   height: 38px;
@@ -838,13 +848,11 @@ button:disabled {
 .agent-panel .panel-actions { gap: 6px; flex-wrap: wrap; justify-content: flex-end; }
 .agent-panel .panel-actions .btn { border: 1px solid var(--line); background: var(--surface); }
 .agent-options {
+  width: 100%;
   margin-top: 18px;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: var(--surface);
-}
-.agent-options > summary {
-  list-style: none;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -854,17 +862,39 @@ button:disabled {
   font-size: 12px;
   font-weight: 500;
 }
-.agent-options > summary::-webkit-details-marker { display: none; }
-.agent-options > summary > svg { width: 16px; height: 16px; flex: none; }
+.agent-options:hover { background: var(--surface-2); }
+.agent-options > svg { width: 16px; height: 16px; flex: none; }
 .agent-options-summary { flex: 1; text-align: right; color: var(--text-2); font-size: 11.5px; font-weight: 400; }
-.agent-options-caret { color: var(--text-3); transition: transform .16s; }
-.agent-options[open] .agent-options-caret { transform: rotate(180deg); }
-.agent-options[open] > summary { border-bottom: 1px solid var(--line); }
-.agent-options-body { padding: 2px 14px 14px; }
-.agent-options .chat-sync,
-.agent-options .sched { margin-top: 12px; padding: 0; background: none; gap: 10px; border-radius: 0; }
-.agent-options .chat-sync-hint { flex-basis: 100%; color: var(--text-2); }
-.agent-options .chat-sync-note { color: var(--text-3); }
+.agent-options-caret { color: var(--text-2); font-size: 16px; line-height: 1; }
+.agent-settings-dialog {
+  width: min(540px, calc(100vw - 40px));
+  max-height: calc(100vh - 48px);
+  overflow: auto;
+  margin: auto;
+  padding: 20px;
+  border: 1px solid var(--line);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--text);
+  box-shadow: var(--shadow);
+}
+.agent-settings-dialog::backdrop { background: rgb(11 11 13 / 28%); }
+.agent-settings-head, .agent-settings-section-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.agent-settings-head h2 { font-size: 17px; font-weight: 650; }
+.agent-settings-close { width: 28px; height: 28px; border-radius: 7px; color: var(--text-2); font-size: 19px; }
+.agent-settings-close:hover { background: var(--surface-2); }
+.agent-settings-section { border-top: 1px solid var(--line); margin-top: 14px; padding-top: 14px; }
+.agent-settings-section h3 { font-size: 13px; font-weight: 650; }
+.agent-settings-section-head > span, .agent-settings-note { color: var(--text-2); font-size: 12px; }
+.agent-client-path { margin-top: 8px; padding: 9px 10px; background: var(--surface-2); border-radius: 8px; font-size: 12px; overflow-wrap: anywhere; user-select: text; }
+.agent-settings-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 9px; }
+.agent-settings-actions.resume { justify-content: flex-end; margin-top: 16px; }
+.agent-settings-note, .agent-settings-error { margin-top: 8px; overflow-wrap: anywhere; }
+.agent-settings-error { color: var(--red); font-size: 12px; }
+.agent-settings-dialog .chat-sync,
+.agent-settings-dialog .sched { margin-top: 10px; padding: 0; background: none; gap: 10px; border-radius: 0; }
+.agent-settings-dialog .chat-sync-hint { flex-basis: 100%; color: var(--text-2); }
+.agent-settings-dialog .chat-sync-note { color: var(--text-3); }
 .agent-panel .quota-stats.summary {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
@@ -992,7 +1022,7 @@ button:disabled {
 .acct-tool.acct-remove:hover:not(:disabled) { color: var(--red); background: color-mix(in srgb, var(--red) 9%, var(--surface)); }
 .acct-refresh.is-loading svg { animation: spin 0.7s linear infinite; }
 .acct-refresh.is-loading:disabled { color: var(--agent-accent, var(--text-2)); opacity: 1; }
-.acct-mini:focus-visible, .acct-launch:focus-visible, .acct-tool:focus-visible, .acct-credits-link:focus-visible, .agent-options > summary:focus-visible { outline: 2px solid var(--agent-accent, var(--blue)); outline-offset: 3px; }
+.acct-mini:focus-visible, .acct-launch:focus-visible, .acct-tool:focus-visible, .acct-credits-link:focus-visible, .agent-options:focus-visible { outline: 2px solid var(--agent-accent, var(--blue)); outline-offset: 3px; }
 .acct-detail { border-top: 1px solid var(--line); padding: 14px 16px; display: flex; flex-direction: column; gap: 12px; overflow-wrap: anywhere; }
 .acct-origin-line { margin: 0; color: var(--text-2); font-size: 11.5px; }
 
@@ -2167,6 +2197,47 @@ button:disabled {
 /* ==========================================================================
    首页总览（Dashboard）
    ========================================================================== */
+.home-announcement {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 36px;
+  margin-bottom: 12px;
+  padding-inline: 10px 4px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--blue) 8%, var(--surface));
+  color: var(--text);
+  font-size: 13px;
+}
+.home-announcement-icon {
+  flex: none;
+  color: var(--blue);
+  font-size: 15px;
+  line-height: 1;
+}
+.home-announcement-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+.home-announcement-details { flex: none; }
+.home-announcement-close {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border-radius: 6px;
+  color: var(--text-2);
+  font-size: 16px;
+  line-height: 1;
+}
+.home-announcement-close:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
 .dash-stats {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
@@ -2632,7 +2703,7 @@ button:disabled {
 .switch-progress-steps li.skipped { color: var(--text-3); }
 .switch-progress-result, .switch-progress-error { margin: 8px 0 0; padding: 10px 12px; border-radius: var(--r-sm); background: var(--surface-2); color: var(--text-2); font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
 .switch-progress-error { background: color-mix(in srgb, var(--red) 8%, var(--surface)); color: var(--red); }
-.switch-progress-close { display: block; min-width: 92px; margin: 16px 0 0 auto; }
+.switch-progress-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 @media (prefers-reduced-motion: reduce) {
   .switch-progress-dialog { animation: none; }
   .switch-progress-mark > span, .switch-step-mark i { animation-duration: 2s; }

@@ -31,7 +31,7 @@ use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -233,7 +233,7 @@ impl WbKey {
 // 密钥获取（跑客户端 exe 的 Node 模式）+ 60 秒缓存
 // ---------------------------------------------------------------------------
 
-static KEY_CACHE: Mutex<Option<(WbKey, Instant)>> = Mutex::new(None);
+static KEY_CACHE: Mutex<Option<(WbKey, Instant, PathBuf)>> = Mutex::new(None);
 
 /// 密钥缓存失效（客户端升级换了密钥时调）。
 pub fn invalidate_key() {
@@ -244,26 +244,38 @@ pub fn invalidate_key() {
 
 /// 拿官方密钥：缓存 60 秒内直接用，否则跑一次客户端 exe 的 Node 模式。
 pub fn prepare_key() -> Result<WbKey> {
+    prepare_key_for(None)
+}
+
+/// 关闭客户端前确认加密登录态可读，并保留本次切换已定位的可执行文件。
+pub fn prepare_switch_key(exe: &Path) -> Result<()> {
+    if read_session_raw().as_ref().is_some_and(contains_encrypted_wrapper) {
+        prepare_key_for(Some(exe))?;
+    }
+    Ok(())
+}
+
+fn prepare_key_for(exe: Option<&Path>) -> Result<WbKey> {
     if let Ok(cache) = KEY_CACHE.lock() {
-        if let Some((key, at)) = &*cache {
-            if at.elapsed() < KEY_TTL {
+        if let Some((key, at, path)) = &*cache {
+            if at.elapsed() < KEY_TTL && exe.map_or(true, |exe| exe == path) {
                 return Ok(key.clone());
             }
         }
     }
-    let key = load_key()?;
+    let exe = exe.map(Path::to_path_buf)
+        .or_else(|| crate::core::launcher::client_exe("workbuddy"))
+        .ok_or_else(|| anyhow!("没有找到 WorkBuddy 客户端，无法读取官方加密密钥"))?;
+    let key = load_key(&exe)?;
     if let Ok(mut cache) = KEY_CACHE.lock() {
-        *cache = Some((key.clone(), Instant::now()));
+        *cache = Some((key.clone(), Instant::now(), exe));
     }
     Ok(key)
 }
 
 /// 跑客户端 exe 取密钥。客户端已关闭或正在运行都行 —— Node 模式不碰 GUI/单实例锁。
-fn load_key() -> Result<WbKey> {
-    let exe = crate::core::launcher::client_exe("workbuddy")
-        .ok_or_else(|| anyhow!("没有找到 WorkBuddy 客户端，无法读取官方加密密钥"))?;
-
-    let mut command = std::process::Command::new(&exe);
+fn load_key(exe: &Path) -> Result<WbKey> {
+    let mut command = std::process::Command::new(exe);
     command
         .env("ELECTRON_RUN_AS_NODE", "1")
         .env_remove("NODE_OPTIONS")

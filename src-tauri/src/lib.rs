@@ -42,6 +42,7 @@ pub fn run() {
             Some(vec!["--silent"]),
         ))
         .plugin(tauri_plugin_process::init())
+        .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::overview,
@@ -89,6 +90,9 @@ pub fn run() {
             commands::delete_client_login_backup,
             commands::prune_client_login_backups,
             commands::launch_client,
+            commands::get_client_path,
+            commands::set_client_path,
+            commands::pick_client_exe,
             commands::detect_client_account,
             commands::client_running,
             commands::switch_client_account,

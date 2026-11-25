@@ -9,12 +9,11 @@
 //! 而不是像 Cockpit 的 workbuddy 那样给每个账号一份独立数据目录 ——
 //! 那需要每个账号一个隔离的 userData，属于更大的架构改动。
 //!
-//! exe 定位策略（按优先级）：
-//!   1. **App Paths 注册表**（安装器注册的，最准；用 `winreg` crate 读，无编码问题）；
-//!   2. **标准安装根两级目录扫描**：Program Files / Program Files (x86) /
+//! exe 定位策略（按优先级）：手动配置、运行中的客户端路径、App Paths 注册表、
+//! 标准安装根两级目录扫描、旧版路径。
+//!   * **标准安装根**：Program Files / Program Files (x86) /
 //!      ProgramData / LocalAppData / 各盘符 `:\Programs`，按目录名关键词匹配；
 //!      Qoder 的版本化布局（`<安装根>\.qoder-versions\<版本>\`）单独处理；
-//!   3. 旧版本写死的路径，作为最后兜底（换机器后 1、2 基本能兜住）。
 
 use anyhow::{anyhow, Result};
 use std::path::{Path, PathBuf};
@@ -117,11 +116,13 @@ fn scan_roots() -> Vec<PathBuf> {
     if let Some(appdata) = dirs::data_dir() {
         roots.push(appdata);
     }
-    // 各盘符根下的 \Programs（覆盖 D:\Programs 这类自装位置）
+    // 各盘符下常用的安装目录（覆盖 D:\Programs / D:\Program Files）。
     for letter in b'C'..=b'Z' {
-        let programs = PathBuf::from(format!("{}:\\Programs", letter as char));
-        if programs.is_dir() {
-            roots.push(programs);
+        for name in ["Programs", "Program Files", "Program Files (x86)"] {
+            let programs = PathBuf::from(format!("{}:\\{name}", letter as char));
+            if programs.is_dir() {
+                roots.push(programs);
+            }
         }
     }
     roots.sort();
@@ -202,17 +203,73 @@ fn qoder_versioned_exe(root: &Path) -> Option<PathBuf> {
             .next()
             .and_then(|v| v.parse::<u64>().ok())
             .unwrap_or(0);
-        found.push((a, b, c, entry.path()));
+        let exe = entry.path().join("Qoder CN.exe");
+        if exe.is_file() {
+            found.push((a, b, c, exe));
+        }
     }
     found
         .into_iter()
         .max()
-        .map(|(_, _, _, dir)| dir.join("Qoder CN.exe"))
-        .filter(|p| p.is_file())
+        .map(|(_, _, _, exe)| exe)
 }
 
-/// 找某 agent 的客户端可执行文件。
+/// 已保存的路径始终由对应的平台规则校验。
+pub fn validate_client_exe(provider: &str, path: &Path) -> Result<()> {
+    let spec = spec_of(provider).ok_or_else(|| anyhow!("该平台没有桌面客户端"))?;
+    let matches_name = path.file_name().and_then(|name| name.to_str()).is_some_and(|name| {
+        spec.exe_names.iter().any(|candidate| name.eq_ignore_ascii_case(candidate))
+    });
+    if !matches_name {
+        return Err(anyhow!("请选择该平台的客户端程序：{}", spec.exe_names.join(" 或 ")));
+    }
+    if !path.is_absolute() || !path.is_file() {
+        return Err(anyhow!("客户端程序已移动、删除或无法访问，请重新选择"));
+    }
+    Ok(())
+}
+
+pub fn running_client_exe(provider: &str) -> Option<PathBuf> {
+    let spec = spec_of(provider)?;
+    winproc::matching_image_paths(spec.exe_names).into_iter()
+        .find(|path| validate_client_exe(provider, path).is_ok())
+}
+
+#[derive(Debug, Clone, Copy, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClientPathSource {
+    Manual,
+    Running,
+    Installed,
+}
+
+pub fn detect_client_exe(provider: &str) -> Option<(PathBuf, ClientPathSource)> {
+    if let Some(path) = running_client_exe(provider) {
+        return Some((path, ClientPathSource::Running));
+    }
+    installed_client_exe(provider)
+        .filter(|path| validate_client_exe(provider, path).is_ok())
+        .map(|path| (path, ClientPathSource::Installed))
+}
+
+pub fn resolve_client_exe(provider: &str, configured: Option<&str>) -> Result<(PathBuf, ClientPathSource)> {
+    if let Some(configured) = configured {
+        let path = PathBuf::from(configured);
+        validate_client_exe(provider, &path)?;
+        return Ok((path, ClientPathSource::Manual));
+    }
+    detect_client_exe(provider).ok_or_else(|| anyhow!("未检测到客户端，请选择它的 .exe 文件"))
+}
+
+/// 供客户端凭据和版本读取使用。界面命令使用当前 AppState 里的配置快照。
 pub fn client_exe(provider: &str) -> Option<PathBuf> {
+    let configured = std::fs::read(super::paths::config_file()).ok()
+        .and_then(|bytes| serde_json::from_slice::<super::config::AppConfig>(&bytes).ok())
+        .and_then(|mut config| config.client_paths.remove(provider));
+    resolve_client_exe(provider, configured.as_deref()).ok().map(|(path, _)| path)
+}
+
+fn installed_client_exe(provider: &str) -> Option<PathBuf> {
     let Some(spec) = spec_of(provider) else {
         return None;
     };
@@ -220,13 +277,18 @@ pub fn client_exe(provider: &str) -> Option<PathBuf> {
 
     // 先只找主 exe（含 Qoder 版本化布局），避免被「启动器」抢先
     if let Some(primary) = spec.exe_names.first() {
+        if let Some(path) = app_paths_lookup(primary) {
+            return Some(path);
+        }
         for dir in &dirs {
             let p = dir.join(primary);
             if p.is_file() {
                 return Some(p);
             }
-            if let Some(hit) = qoder_versioned_exe(dir) {
-                return Some(hit);
+            if provider == "qoder" {
+                if let Some(hit) = qoder_versioned_exe(dir) {
+                    return Some(hit);
+                }
             }
         }
     }
@@ -287,7 +349,7 @@ pub fn data_dir(provider: &str) -> Option<PathBuf> {
     }
 }
 
-/// 启动客户端。返回实际启动的可执行文件路径。
+/// 启动已经确认路径的客户端。
 ///
 /// ⚠️ 必须**经 explorer 分离启动**：客户端不能作为本进程的直接子进程 ——
 /// Electron 客户端启动时先拿单实例锁，拿不到就 `app.quit()` 秒退（退出码 0），
@@ -297,45 +359,55 @@ pub fn data_dir(provider: &str) -> Option<PathBuf> {
 ///
 /// 启动后还要**确认它真的活了** —— 客户端起不来时不能报成功，否则用户只看到
 /// 「已切换并重启」却找不到客户端。
-pub fn launch(provider: &str) -> Result<PathBuf> {
-    let exe =
-        client_exe(provider).ok_or_else(|| anyhow!("没有找到 {} 的客户端可执行文件", provider))?;
-
+pub fn launch(provider: &str, exe: &Path) -> Result<()> {
+    validate_client_exe(provider, exe)?;
+    let exact_path = if provider == "qoder" && exe.file_name().is_some_and(|name| {
+        name.to_string_lossy().eq_ignore_ascii_case("Qoder CN Launcher.exe")
+    }) {
+        // Launcher 会把请求交给版本目录里的 Qoder CN.exe。
+        None
+    } else {
+        Some(normalized_exe_path(exe))
+    };
     let _ = spawn_hidden("explorer.exe", &[&exe.to_string_lossy()]);
 
-    if wait_until_running(provider, std::time::Duration::from_secs(8)) {
-        return Ok(exe);
+    let timeout = std::time::Duration::from_secs(8);
+    if wait_until_running(provider, exact_path.as_deref(), timeout) {
+        return Ok(());
     }
 
     // 没起来：退回直接 spawn，好把退出码如实带出来（explorer 路径拿不到退出码）
-    let mut child = std::process::Command::new(&exe)
+    let mut child = std::process::Command::new(exe)
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null())
         .spawn()
         .map_err(|e| anyhow!("启动失败：{e}"))?;
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-    while std::time::Instant::now() < deadline {
-        std::thread::sleep(std::time::Duration::from_millis(200));
-        if is_running(provider) {
-            return Ok(exe);
-        }
-        if let Ok(Some(status)) = child.try_wait() {
-            return Err(anyhow!(
-                "客户端启动后立刻退出（退出码 {:?}）：请手动打开客户端",
-                status.code()
-            ));
-        }
+    if wait_until_running(provider, exact_path.as_deref(), timeout) {
+        return Ok(());
     }
-    Err(anyhow!("客户端启动超时（没起来）：请手动打开客户端"))
+    if let Ok(Some(status)) = child.try_wait() {
+        return Err(anyhow!("客户端启动后退出（退出码 {:?}）：请检查客户端是否可以手动打开", status.code()));
+    }
+    Err(anyhow!("等待客户端启动超时：未检测到所选程序在运行"))
+}
+
+fn normalized_exe_path(path: &Path) -> String {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()).to_string_lossy().to_lowercase()
 }
 
 /// 等客户端进程出现（Electron 主进程一起来就有进程名，不必等窗口）。
-fn wait_until_running(provider: &str, timeout: std::time::Duration) -> bool {
+fn wait_until_running(provider: &str, exact_path: Option<&str>, timeout: std::time::Duration) -> bool {
+    let Some(spec) = spec_of(provider) else { return false; };
     let deadline = std::time::Instant::now() + timeout;
     while std::time::Instant::now() < deadline {
         std::thread::sleep(std::time::Duration::from_millis(200));
-        if is_running(provider) {
+        let started = match exact_path {
+            Some(path) => winproc::matching_image_paths(spec.exe_names)
+                .iter().any(|running| normalized_exe_path(running) == path),
+            None => is_running(provider),
+        };
+        if started {
             return true;
         }
     }
@@ -505,10 +577,14 @@ fn run_hidden(program: &str, args: &[&str]) {
 
 #[cfg(windows)]
 mod winproc {
-    //! Toolhelp32 进程快照的 FFI。沿用 `dpapi.rs` 的做法：直接声明
-    //! `extern "system"`，不引入 windows-sys 这类绑定 crate。
+    //! Toolhelp32 进程快照和进程映像路径查询。
 
     use std::ffi::c_void;
+    use std::os::windows::ffi::OsStringExt;
+    use std::path::PathBuf;
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
 
     const TH32CS_SNAPPROCESS: u32 = 0x2;
     const INVALID_HANDLE_VALUE: *mut c_void = usize::MAX as *mut c_void;
@@ -556,6 +632,33 @@ mod winproc {
     /// 枚举失败返回 `Err` —— 调用方需要区分「枚举失败」与「确实没有该进程」：
     /// 前者是**不知道**，后者才是「没在跑」（两者对凭据刷新的含义相反）。
     pub fn process_names_result() -> Result<Vec<String>, String> {
+        processes().map(|entries| entries.into_iter().map(|(_, name)| name).collect())
+    }
+
+    pub fn matching_image_paths(names: &[&str]) -> Vec<PathBuf> {
+        let Ok(entries) = processes() else { return Vec::new(); };
+        names.iter().flat_map(|name| {
+            entries.iter().filter(|(_, actual)| actual.eq_ignore_ascii_case(name))
+                .filter_map(|(pid, _)| image_path(*pid))
+        }).collect()
+    }
+
+    fn image_path(pid: u32) -> Option<PathBuf> {
+        // 查询时只打开已经按程序名匹配的进程。
+        let mut path = vec![0u16; 32768];
+        let mut len = path.len() as u32;
+        unsafe {
+            let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+            if process.is_null() {
+                return None;
+            }
+            let ok = QueryFullProcessImageNameW(process, 0, path.as_mut_ptr(), &mut len);
+            CloseHandle(process);
+            (ok != 0).then(|| std::ffi::OsString::from_wide(&path[..len as usize]).into())
+        }
+    }
+
+    fn processes() -> Result<Vec<(u32, String)>, String> {
         unsafe {
             let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
             if snap == INVALID_HANDLE_VALUE || snap.is_null() {
@@ -574,7 +677,7 @@ mod winproc {
                     .position(|c| *c == 0)
                     .unwrap_or(entry.sz_exe_file.len());
                 let name = String::from_utf16_lossy(&entry.sz_exe_file[..len]).to_lowercase();
-                out.push(name);
+                out.push((entry.th32_process_id, name));
                 if Process32NextW(snap, &mut entry) == 0 {
                     break;
                 }
@@ -587,6 +690,10 @@ mod winproc {
 
 #[cfg(not(windows))]
 mod winproc {
+    pub fn matching_image_paths(_names: &[&str]) -> Vec<std::path::PathBuf> {
+        Vec::new()
+    }
+
     /// 非 Windows 上没有进程枚举 —— 一律「不知道」，
     /// 不能当成「客户端没在跑」（那会让凭据刷新顶掉客户端的登录）。
     pub fn process_names_result() -> Result<Vec<String>, String> {
@@ -653,10 +760,32 @@ mod tests {
     }
 
     #[test]
+    fn 手动路径优先且按平台验证() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("WorkBuddy.exe");
+        std::fs::write(&path, []).unwrap();
+        let setting = path.to_str().unwrap();
+        let (resolved, source) = resolve_client_exe("workbuddy", Some(setting)).unwrap();
+        assert_eq!(resolved, path);
+        assert!(matches!(source, ClientPathSource::Manual));
+        assert!(resolve_client_exe("qoder", Some(setting)).is_err());
+        std::fs::remove_file(&path).unwrap();
+        assert!(resolve_client_exe("workbuddy", Some(setting)).is_err());
+    }
+
+    #[test]
     fn 进程名可枚举() {
         // 至少能列出当前进程（测试进程自身）
         let names = winproc::process_names_result().expect("Toolhelp32 应该能枚举到进程");
         assert!(!names.is_empty(), "Toolhelp32 应该能枚举到进程");
+    }
+
+    #[test]
+    fn 可读取运行中进程的实际路径() {
+        let exe = std::env::current_exe().unwrap();
+        let name = exe.file_name().unwrap().to_str().unwrap();
+        let paths = winproc::matching_image_paths(&[name]);
+        assert!(paths.iter().any(|path| normalized_exe_path(path) == normalized_exe_path(&exe)));
     }
 
     #[test]
@@ -701,7 +830,7 @@ mod tests {
         {
             return;
         }
-        let exe = client_exe("workbuddy").expect("应能定位到客户端");
+        let (exe, _) = detect_client_exe("workbuddy").expect("应能定位到客户端");
         let name = exe.file_name().unwrap_or_default().to_string_lossy();
         assert_eq!(name, "WorkBuddy.exe", "解析到了 {exe:?}");
     }

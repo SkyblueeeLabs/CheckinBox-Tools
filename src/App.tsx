@@ -15,6 +15,7 @@ import type {
 import Sidebar, { SETTINGS_ID } from "./components/Sidebar";
 import AgentGroupPanel from "./components/AgentGroupPanel";
 import DashboardPanel from "./components/DashboardPanel";
+import HomeAnnouncement from "./components/HomeAnnouncement";
 import LaunchScreen from "./components/LaunchScreen";
 import SettingsPanel from "./components/SettingsPanel";
 import LogPanel from "./components/LogPanel";
@@ -39,9 +40,32 @@ interface SwitchProgressState {
   accountId: string;
   accountLabel: string;
   chatSyncEnabled: boolean;
-  stage: SwitchProgressStage | "preparing" | "completed" | "failed";
+  stage: SwitchProgressStage | "preparing" | "completed" | "failed" | "launchFailed";
   detail?: string;
   error?: string;
+  clientExe?: string;
+}
+
+type AgentSettingsResume =
+  | { kind: "open" }
+  | { kind: "switch"; accountId: string }
+  | { kind: "restart"; progress: SwitchProgressState };
+
+interface AgentSettingsRequest {
+  providerId: string;
+  resume?: AgentSettingsResume;
+  prompt?: string;
+}
+
+function clientActionMessage(error: unknown): string {
+  if (error && typeof error === "object" && "message" in error && typeof error.message === "string") {
+    return error.message;
+  }
+  return String(error);
+}
+
+function needsClientPath(error: unknown): boolean {
+  return !!error && typeof error === "object" && "needsPath" in error && error.needsPath === true;
 }
 
 export default function App() {
@@ -52,6 +76,7 @@ export default function App() {
   const [selected, setSelected] = useState<string>(HOME_ID);
   const [busy, setBusy] = useState(false);
   const [switchProgress, setSwitchProgress] = useState<SwitchProgressState | null>(null);
+  const [agentSettings, setAgentSettings] = useState<AgentSettingsRequest | null>(null);
   const [syncing, setSyncing] = useState(false);
   const [quotaLoadingId, setQuotaLoadingId] = useState<string | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
@@ -86,6 +111,10 @@ export default function App() {
     setToasts((prev) => [...prev.slice(-3), { id, kind, text }]);
     setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== id)), 5200);
   }, []);
+
+  const openWebsite = (url: string) => {
+    void api.openExternal(url).catch((e) => pushToast("err", `打开网站失败：${e}`));
+  };
 
   const updater = useUpdater(
     config,
@@ -436,13 +465,21 @@ export default function App() {
     }
   };
 
+  const showAgentSettings = (providerId: string, resume?: AgentSettingsResume, prompt?: string) => {
+    setSelected(providerId);
+    setAgentSettings({ providerId, resume, prompt });
+  };
+
   const launch = async (providerId: string) => {
     try {
-      const exe = await api.launchClient(providerId);
+      await api.launchClient(providerId);
       pushToast("ok", `已打开客户端`);
-      void exe;
     } catch (e) {
-      pushToast("err", `${e}`);
+      if (needsClientPath(e)) {
+        showAgentSettings(providerId, { kind: "open" }, clientActionMessage(e));
+      } else {
+        pushToast("err", clientActionMessage(e));
+      }
     }
   };
 
@@ -476,17 +513,59 @@ export default function App() {
     try {
       const result = await api.switchClientAccount(providerId, accountId);
       const chatNote = result.chatSync ? `；${result.chatSync.detail}` : "";
-      setSwitchProgress((current) => current ? { ...current, stage: "completed", detail: result.chatSync?.detail } : current);
-      pushToast(
-        "ok",
-        `${label}：已切换客户端账号并重启，同时设为当前账号${result.backup ? "（原登录态已备份）" : ""}${chatNote}`
-      );
+      setSwitchProgress((current) => current ? {
+        ...current,
+        stage: result.launchError ? "launchFailed" : "completed",
+        clientExe: result.clientExe,
+        detail: result.chatSync?.detail,
+        error: result.launchError,
+      } : current);
+      if (result.configError) pushToast("err", result.configError);
+      if (!result.launchError) {
+        pushToast("ok", `${label}：已切换客户端账号并重启${result.backup ? "（原登录态已备份）" : ""}${chatNote}`);
+      }
       await refresh();
     } catch (e) {
-      setSwitchProgress((current) => current ? { ...current, stage: "failed", error: String(e) } : current);
+      if (needsClientPath(e)) {
+        setSwitchProgress(null);
+        showAgentSettings(providerId, { kind: "switch", accountId }, clientActionMessage(e));
+      } else {
+        setSwitchProgress((current) => current ? { ...current, stage: "failed", error: clientActionMessage(e) } : current);
+      }
     } finally {
       unlisten();
       setBusy(false);
+    }
+  };
+
+  const retryClientLaunch = async (progress: SwitchProgressState) => {
+    setBusy(true);
+    setSwitchProgress({ ...progress, stage: "launching", error: undefined });
+    try {
+      await api.launchClient(progress.providerId, progress.clientExe);
+      setSwitchProgress({ ...progress, stage: "completed", error: undefined });
+      await refresh();
+    } catch (e) {
+      const message = clientActionMessage(e);
+      if (needsClientPath(e)) {
+        setSwitchProgress(null);
+        showAgentSettings(progress.providerId, { kind: "restart", progress }, message);
+      } else {
+        setSwitchProgress({ ...progress, stage: "launchFailed", error: message });
+      }
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const continueAgentSettings = () => {
+    if (!agentSettings?.resume) return;
+    const { providerId, resume } = agentSettings;
+    setAgentSettings(null);
+    switch (resume.kind) {
+      case "switch": void switchClient(providerId, resume.accountId); break;
+      case "restart": void retryClientLaunch(resume.progress); break;
+      case "open": void launch(providerId); break;
     }
   };
 
@@ -808,6 +887,11 @@ export default function App() {
           chatSyncEnabled={switchProgress.chatSyncEnabled}
           detail={switchProgress.detail}
           error={switchProgress.error}
+          onRetryLaunch={() => void retryClientLaunch(switchProgress)}
+          onEditPath={() => {
+            setSwitchProgress(null);
+            showAgentSettings(switchProgress.providerId, { kind: "restart", progress: switchProgress });
+          }}
           onClose={() => setSwitchProgress(null)}
         />
       )}
@@ -974,6 +1058,7 @@ export default function App() {
         onSelect={setSelected}
         onOpenHome={() => setSelected(HOME_ID)}
         onOpenSettings={() => setSelected(SETTINGS_ID)}
+        onOpenWebsite={openWebsite}
         providers={overview.providers}
         visibility={config.agentVisibility}
         onVisibilityChange={patchVisibility}
@@ -1112,6 +1197,7 @@ export default function App() {
             groups={groups}
             visibility={config.agentVisibility}
             onOpenAgent={(id) => setSelected(id)}
+            announcement={<HomeAnnouncement onOpenDetails={openWebsite} />}
           />
         ) : inSettings ? (
           <SettingsPanel
@@ -1159,6 +1245,27 @@ export default function App() {
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
             onAlertChange={patchAlert}
             onChatSyncChange={patchChatSync}
+            settings={{
+              open: agentSettings?.providerId === current.provider.id,
+              onOpen: () => showAgentSettings(current.provider.id),
+              onClose: () => setAgentSettings(null),
+              onPathChanged: (path) => {
+                setOverview((previous) => previous ? {
+                  ...previous,
+                  providers: previous.providers.map((provider) => provider.id === current.provider.id
+                    ? { ...provider, hasClient: !!path, clientExe: path }
+                    : provider),
+                } : previous);
+                setAgentSettings((previous) => previous?.providerId === current.provider.id && previous.resume?.kind === "restart" ? {
+                  ...previous,
+                  resume: { kind: "restart", progress: { ...previous.resume.progress, clientExe: path ?? undefined } },
+                } : previous);
+              },
+              prompt: agentSettings?.prompt,
+              continueLabel: agentSettings?.resume?.kind === "switch" ? "继续换号"
+                : agentSettings?.resume?.kind === "restart" ? "重试启动" : "打开客户端",
+              onContinue: agentSettings?.resume ? continueAgentSettings : undefined,
+            }}
             liveFree={liveFree}
             onRefreshFree={() => void refreshFreeModels()}
           />

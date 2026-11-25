@@ -1,6 +1,7 @@
 //! Tauri 命令层：UI 与后端之间的唯一入口。
 
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use chrono::TimeZone;
@@ -8,6 +9,7 @@ use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter, Manager, State};
 
 use crate::core::config::{AppConfig, CloseAction};
+use crate::core::launcher;
 use crate::core::logging::{self, LogEntry};
 use crate::core::provider::{Account, CheckinStatus, ClaimState, CreditItem, Provider, Quota};
 use crate::core::quota_history;
@@ -31,6 +33,7 @@ pub struct AppState {
     pub inbox: Inbox,
     checkin_running: tokio::sync::Mutex<()>,
     sync_running: tokio::sync::Mutex<()>,
+    client_switch_running: tokio::sync::Mutex<()>,
     pub providers: Vec<Arc<dyn Provider>>,
     /// 各平台适配器的具体类型（浏览器授权导入不走通用 trait，需要单独拿到）
     pub qoder: Arc<crate::providers::qoder::QoderProvider>,
@@ -77,6 +80,7 @@ impl AppState {
             inbox: Inbox::new(),
             checkin_running: tokio::sync::Mutex::new(()),
             sync_running: tokio::sync::Mutex::new(()),
+            client_switch_running: tokio::sync::Mutex::new(()),
             providers: list,
             qoder,
             minimax,
@@ -646,7 +650,10 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
         .iter()
         .filter_map(|id| state.provider(id))
         .map(|p| {
-            let exe = crate::core::launcher::client_exe(p.id());
+            let exe = launcher::resolve_client_exe(
+                p.id(),
+                config.client_paths.get(p.id()).map(String::as_str),
+            ).ok().map(|(path, _)| path);
             ProviderView {
                 id: p.id().to_string(),
                 name: p.display_name().to_string(),
@@ -2089,10 +2096,103 @@ pub async fn set_active_account(
     })
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientActionError {
+    message: String,
+    needs_path: bool,
+}
+
+impl From<String> for ClientActionError {
+    fn from(message: String) -> Self {
+        Self { message, needs_path: false }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ClientPathStatus {
+    configured_path: Option<String>,
+    path: Option<String>,
+    source: Option<launcher::ClientPathSource>,
+    detected_path: Option<String>,
+    error: Option<String>,
+}
+
+fn client_path_status(provider_id: &str, configured_path: Option<String>, redetect: bool) -> ClientPathStatus {
+    let detected_path = if redetect && configured_path.is_some() {
+        launcher::detect_client_exe(provider_id).map(|(path, _)| path.to_string_lossy().into_owned())
+    } else {
+        None
+    };
+    let (path, source, error) = match launcher::resolve_client_exe(provider_id, configured_path.as_deref()) {
+        Ok((path, source)) => (Some(path.to_string_lossy().into_owned()), Some(source), None),
+        Err(error) => (None, None, Some(error.to_string())),
+    };
+    ClientPathStatus { configured_path, path, source, detected_path, error }
+}
+
+#[tauri::command]
+pub async fn get_client_path(state: State<'_, AppState>, provider_id: String, redetect: bool) -> Result<ClientPathStatus, String> {
+    let configured = state.config.lock().unwrap().client_paths.get(&provider_id).cloned();
+    Ok(client_path_status(&provider_id, configured, redetect))
+}
+
+#[tauri::command]
+pub async fn set_client_path(state: State<'_, AppState>, provider_id: String, path: Option<String>) -> Result<ClientPathStatus, String> {
+    if state.provider(&provider_id).is_none() {
+        return Err(format!("未知平台：{provider_id}"));
+    }
+    if let Some(path) = &path {
+        launcher::validate_client_exe(&provider_id, Path::new(path)).map_err(|error| error.to_string())?;
+    }
+    state.update_config(|config| {
+        if let Some(path) = &path {
+            config.client_paths.insert(provider_id.clone(), path.clone());
+        } else {
+            config.client_paths.remove(&provider_id);
+        }
+        Ok(())
+    })?;
+    if provider_id == "workbuddy" {
+        crate::core::wb_session::invalidate_key();
+    }
+    Ok(client_path_status(&provider_id, path, false))
+}
+
+#[tauri::command]
+pub async fn pick_client_exe(window: tauri::WebviewWindow) -> Result<Option<String>, String> {
+    use tauri_plugin_dialog::DialogExt;
+
+    let (send, receive) = tokio::sync::oneshot::channel();
+    window.dialog().file().set_parent(&window)
+        .set_title("选择客户端程序")
+        .add_filter("可执行文件", &["exe"])
+        .pick_file(move |path| { let _ = send.send(path); });
+    let selected = receive.await.map_err(|e| e.to_string())?;
+    selected.map(|path| {
+        path.into_path().map(|path| path.to_string_lossy().into_owned()).map_err(|e| e.to_string())
+    }).transpose()
+}
+
+fn require_client_exe(state: &AppState, provider_id: &str, previous_exe: Option<&str>) -> Result<PathBuf, ClientActionError> {
+    let configured = state.config.lock().unwrap().client_paths.get(provider_id).cloned();
+    if configured.is_none() {
+        if let Some(path) = previous_exe.map(Path::new).filter(|path| launcher::validate_client_exe(provider_id, path).is_ok()) {
+            return Ok(path.to_path_buf());
+        }
+    }
+    launcher::resolve_client_exe(provider_id, configured.as_deref()).map(|(path, _)| path).map_err(|e| {
+        ClientActionError { message: e.to_string(), needs_path: true }
+    })
+}
+
 /// 打开该 agent 的客户端（用当前账号的上下文）。
 #[tauri::command]
-pub async fn launch_client(provider_id: String) -> Result<String, String> {
-    let exe = crate::core::launcher::launch(&provider_id).map_err(|e| e.to_string())?;
+pub async fn launch_client(state: State<'_, AppState>, provider_id: String, previous_exe: Option<String>) -> Result<String, ClientActionError> {
+    let _guard = state.client_switch_running.try_lock().map_err(|_| "客户端操作进行中，请稍后重试".to_string())?;
+    let exe = require_client_exe(&state, &provider_id, previous_exe.as_deref())?;
+    launcher::launch(&provider_id, &exe).map_err(|e| e.to_string())?;
     Ok(exe.to_string_lossy().to_string())
 }
 
@@ -2260,24 +2360,8 @@ pub async fn switch_client_account(
     state: State<'_, AppState>,
     provider_id: String,
     account_id: String,
-) -> Result<crate::core::client_switch::SwitchOutcome, String> {
-    if !crate::core::client_switch::is_switchable(&provider_id) {
-        return Err(format!(
-            "{provider_id} 不支持切换客户端账号（凭据格式无法注入）"
-        ));
-    }
-    let store = state.store.lock().unwrap().clone();
-    let account = store
-        .list_of(&provider_id)
-        .into_iter()
-        .find(|a| a.id == account_id)
-        .ok_or_else(|| format!("账号不存在：{account_id}"))?;
-    let cred = store
-        .credential(&provider_id, &account_id)
-        .map_err(|e| e.to_string())?;
-    let cred = prepare_switch_cred(&state, &account, cred).await?;
-
-    let mut report_progress = |stage: &str| {
+) -> Result<crate::core::client_switch::SwitchOutcome, ClientActionError> {
+    switch_account(&state, &provider_id, &account_id, |account, stage| {
         let _ = app.emit(
             "switch-progress",
             SwitchProgressEvent {
@@ -2287,53 +2371,89 @@ pub async fn switch_client_account(
                 stage: stage.to_string(),
             },
         );
-    };
+    }).await
+}
+
+async fn switch_account(
+    state: &AppState,
+    provider_id: &str,
+    account_id: &str,
+    mut report: impl FnMut(&Account, &str),
+) -> Result<crate::core::client_switch::SwitchOutcome, ClientActionError> {
+    if !crate::core::client_switch::is_switchable(provider_id) {
+        return Err(format!(
+            "{provider_id} 不支持切换客户端账号（凭据格式无法注入）"
+        ).into());
+    }
+    let _guard = state.client_switch_running.try_lock()
+        .map_err(|_| "客户端操作进行中，请稍后重试".to_string())?;
+    let exe = require_client_exe(state, provider_id, None)?;
+    let store = state.store.lock().unwrap().clone();
+    let account = store
+        .list_of(provider_id)
+        .into_iter()
+        .find(|a| a.id == account_id)
+        .ok_or_else(|| format!("账号不存在：{account_id}"))?;
+    let cred = store
+        .credential(provider_id, account_id)
+        .map_err(|e| e.to_string())?;
+    let cred = prepare_switch_cred(state, &account, cred).await?;
+    if provider_id == "workbuddy" {
+        crate::core::wb_session::prepare_switch_key(&exe).map_err(|e| e.to_string())?;
+    }
+    let mut report_progress = |stage: &str| report(&account, stage);
 
     // 第一步：关客户端。捕获放在关**之后** —— 客户端退出前最后一次提交的凭据
     // 最活（它自己会按点刷新并轮换 RT，先捕获可能拿到下一分钟就作废的 RT）
     report_progress("closing");
-    let was_running = crate::core::launcher::is_running(&provider_id);
-    crate::core::client_switch::begin_switch(&provider_id).map_err(|e| e.to_string())?;
+    let was_running = launcher::is_running(provider_id);
+    let original_exe = if was_running { launcher::running_client_exe(provider_id) } else { None };
+    crate::core::client_switch::begin_switch(provider_id).map_err(|e| e.to_string())?;
 
     // 第二步：捕获客户端当前登录的账号 —— 谁都不丢，且是客户端最后提交的凭据
     report_progress("capturing");
-    capture_client_login(&state, &provider_id).await;
+    capture_client_login(state, provider_id).await;
 
     // 第三步：切换前保活 —— 写进客户端的必须是「活」凭据。MiniMax 客户端遇到
     // 死 RT 会**删掉凭据**退回登录页（用户只能重新录入），所以过期必须刷新
     // 成功才写，刷不动就如实报错
     report_progress("validating");
-    let cred = match switch_cred_guard(&state, &account, cred).await {
+    let cred = match switch_cred_guard(state, &account, cred).await {
         Ok(cred) => cred,
         Err(e) => {
             if was_running {
-                let _ = crate::core::launcher::launch(&provider_id);
+                if let Err(restart) = launcher::launch(provider_id, original_exe.as_deref().unwrap_or(&exe)) {
+                    return Err(format!("{e}。原客户端重新打开失败：{restart}").into());
+                }
             }
-            return Err(e);
+            return Err(e.into());
         }
     };
 
     // 「同步聊天记录」开关：开着且平台支持时，换号会把本地会话记录带给目标账号
     let chat_sync_enabled = {
         let config = state.config.lock().unwrap();
-        config.scheduler.agent(&provider_id).chat_sync_enabled
+        config.scheduler.agent(provider_id).chat_sync_enabled
     };
 
-    let outcome = crate::core::client_switch::finish_switch(
-        &provider_id,
+    let mut outcome = crate::core::client_switch::finish_switch(
+        provider_id,
         &cred,
-        &account_id,
+        account_id,
         &account.label,
         chat_sync_enabled,
+        &exe,
         &mut report_progress,
     )
     .map_err(|e| e.to_string())?;
 
-    // 客户端已经登录这个账号了，工具里的「当前账号」跟着同步
-    state.update_config(|config| {
-        config.set_active(&provider_id, &account_id);
+    // 登录态已落盘。即使客户端启动失败，重试也只需要打开客户端。
+    if let Err(error) = state.update_config(|config| {
+        config.set_active(provider_id, account_id);
         Ok(())
-    })?;
+    }) {
+        outcome.config_error = Some(format!("保存当前账号设置失败：{error}"));
+    }
     Ok(outcome)
 }
 
@@ -3411,57 +3531,26 @@ pub fn cli_restore_client_backup(provider: &str, op_id: &str) -> Result<(), Stri
 ///   CheckinBox --switch-client <minimax|miaoshou> <account_id>
 pub async fn cli_switch_client(provider_id: &str, account_id: &str) -> Result<(), String> {
     let state = AppState::new();
-    let store = state.store.lock().unwrap().clone();
-    let account = store
-        .list_of(provider_id)
-        .into_iter()
-        .find(|a| a.id == account_id)
-        .ok_or_else(|| format!("账号不存在：{account_id}"))?;
-    let cred = store
-        .credential(provider_id, account_id)
-        .map_err(|e| e.to_string())?;
-    let cred = prepare_switch_cred(&state, &account, cred).await?;
-
-    // 与界面路径同序：先关客户端，再捕获（拿它最后提交的凭据），再保活
-    let was_running = crate::core::launcher::is_running(provider_id);
-    crate::core::client_switch::begin_switch(provider_id).map_err(|e| e.to_string())?;
-    capture_client_login(&state, provider_id).await;
-    let cred = match switch_cred_guard(&state, &account, cred).await {
-        Ok(cred) => cred,
-        Err(e) => {
-            if was_running {
-                let _ = crate::core::launcher::launch(provider_id);
-            }
-            return Err(e);
+    let mut label = String::new();
+    let out = switch_account(&state, provider_id, account_id, |account, stage| {
+        if stage == "closing" {
+            label = account.label.clone();
         }
-    };
+    }).await.map_err(|e| e.message)?;
 
-    // CLI 同样尊重配置里的「同步聊天记录」开关
-    let chat_sync_enabled = state
-        .config
-        .lock()
-        .unwrap()
-        .scheduler
-        .agent(provider_id)
-        .chat_sync_enabled;
-    let mut report_progress = |_: &str| {};
-    let out = crate::core::client_switch::finish_switch(
-        provider_id,
-        &cred,
-        account_id,
-        &account.label,
-        chat_sync_enabled,
-        &mut report_progress,
-    )
-    .map_err(|e| e.to_string())?;
-
-    println!("已把 {} 的客户端账号切换成 {}", provider_id, account.label);
+    println!("已写入 {} 客户端的账号 {}", provider_id, label);
     println!("  写入凭据: {}", out.target_file);
     if let Some(bak) = out.backup {
         println!("  原登录态备份: {bak}");
     }
     if let Some(chat) = out.chat_sync {
         println!("  聊天记录: {}", chat.detail);
+    }
+    if let Some(error) = out.config_error {
+        eprintln!("  {error}");
+    }
+    if let Some(error) = out.launch_error {
+        return Err(format!("登录态已写入；客户端启动失败：{error}"));
     }
     println!("  客户端: {}", out.client_exe);
     Ok(())

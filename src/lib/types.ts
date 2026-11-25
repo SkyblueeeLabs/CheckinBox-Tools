@@ -212,6 +212,8 @@ export interface SwitchOutcome {
   /** 写入的凭据文件 */
   targetFile: string;
   clientExe: string;
+  launchError?: string;
+  configError?: string;
   /** 聊天记录同步结果（开关没开就是 undefined） */
   chatSync?: {
     action: string;
@@ -221,6 +223,14 @@ export interface SwitchOutcome {
     added: number;
     replaced: number;
   };
+}
+
+export interface ClientPathStatus {
+  configuredPath: string | null;
+  path: string | null;
+  source: "manual" | "running" | "installed" | null;
+  detectedPath: string | null;
+  error: string | null;
 }
 
 export type SwitchProgressStage =

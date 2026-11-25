@@ -1,6 +1,6 @@
 import { invoke } from "@tauri-apps/api/core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
 import { defaultAgentVisibility, type AppConfig, type Notice, type Overview } from "./lib/types";
 
@@ -25,7 +25,10 @@ const notice: Notice = {
 describe("桌面窗口", () => {
   beforeEach(() => {
     vi.resetAllMocks();
+    localStorage.clear();
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("离线")));
   });
+  afterEach(() => vi.unstubAllGlobals());
 
   it("首屏失败后可以重试，签到记录读取失败也能打开总览", async () => {
     let failOverview = true;
@@ -67,6 +70,130 @@ describe("桌面窗口", () => {
     await waitFor(() => expect(within(dialog).queryByText("未读")).not.toBeInTheDocument());
     expect(within(dialog).getByRole("button", { name: "全部标为已读" })).toBeDisabled();
     expect(invoke).toHaveBeenCalledWith("mark_notices_read", { ids: [notice.id] });
+  });
+
+  it("侧栏的官网和镜像站分别交给系统浏览器打开", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "overview") return overview;
+      if (command === "get_config") return config;
+      return [];
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
+    const websites = within(await screen.findByRole("group", { name: "CheckinBox 网站" }));
+    for (const [name, url] of [
+      ["官网", "https://skyblueeelabs.github.io/CheckinBox-Tools/"],
+      ["镜像站", "https://checkinbox-tools-uwpjuqh846z.qoder.zone/"],
+    ]) {
+      const link = websites.getByRole("link", { name });
+      expect(link).toHaveAttribute("href", url);
+      expect(link).toHaveAttribute("title", url);
+      fireEvent.click(link);
+      expect(invoke).toHaveBeenCalledWith("open_external", { url });
+    }
+  });
+
+  it("首页公告离线可见，关闭后重启仍隐藏，新公告可正常显示", async () => {
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      if (command === "overview") return overview;
+      if (command === "get_config") return config;
+      return [];
+    });
+
+    const openHome = async () => {
+      const app = render(<App />);
+      fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
+      await screen.findByRole("button", { name: "一键全部签到" });
+      return app;
+    };
+
+    const first = await openHome();
+    expect(screen.getByRole("region", { name: "公告" })).toHaveTextContent(
+      "ZCode 账号导入已修复 · 各 Agent 可在设置中自定义客户端路径",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "关闭这条公告" }));
+    expect(screen.queryByRole("region", { name: "公告" })).not.toBeInTheDocument();
+    first.unmount();
+
+    const second = await openHome();
+    expect(screen.queryByRole("region", { name: "公告" })).not.toBeInTheDocument();
+    second.unmount();
+
+    const url = "https://skyblueeelabs.github.io/CheckinBox-Tools/";
+    vi.mocked(fetch).mockResolvedValueOnce(new Response(JSON.stringify({
+      id: "next-announcement", text: "有一条新公告", detailsUrl: url,
+    })));
+    const third = await openHome();
+    const banner = await screen.findByRole("region", { name: "公告" });
+    expect(banner).toHaveTextContent("有一条新公告");
+    fireEvent.click(within(banner).getByRole("button", { name: "查看详情" }));
+    expect(invoke).toHaveBeenCalledWith("open_external", { url });
+    expect(banner).toBeInTheDocument();
+    third.unmount();
+
+    await openHome();
+    expect(screen.getByRole("region", { name: "公告" })).toHaveTextContent("有一条新公告");
+  });
+
+  it("换号路径缺失时先选程序，登录态写入后的重试只启动客户端", async () => {
+    const exe = "D:\\Custom\\WorkBuddy.exe";
+    const ov: Overview = {
+      ...overview,
+      providers: [{
+        id: "workbuddy", name: "WorkBuddy", accent: "#0052d9", docsUrl: "",
+        supportsDiscovery: true, supportsOAuth: true, configured: true, hasClient: false, supportsClaim: true,
+      }],
+      agents: { workbuddy: {
+        enabled: true, startMinute: 360, endMinute: 480, accountCount: 1,
+        todayClaimed: 0, todayClaimable: 0, refreshIntervalMinutes: 10,
+        switchable: true, chatSyncEnabled: false, chatSyncSupported: true,
+      } },
+      accounts: [{
+        account: { id: "account-1", provider: "workbuddy", label: "测试账号", createdAt: 1, origin: "本机" },
+        providerName: "WorkBuddy", accent: "#0052d9", isActive: false, isClientLogin: false,
+        projectCount: 0, sessionCount: 0, isLow: false, alertThreshold: 200, trend: [], supportsClaim: true,
+      }],
+    };
+    let selected = false;
+    vi.mocked(invoke).mockImplementation(async (command) => {
+      switch (command) {
+        case "overview": return ov;
+        case "get_config": return config;
+        case "switch_client_account":
+          if (!selected) throw { needsPath: true, message: "未检测到客户端" };
+          return { targetFile: "auth.json", clientExe: exe, launchError: "等待启动超时" };
+        case "get_client_path":
+          return { path: null, configuredPath: null, source: null, detectedPath: null, error: "未检测到客户端" };
+        case "pick_client_exe": return exe;
+        case "set_client_path":
+          selected = true;
+          return { path: exe, configuredPath: exe, source: "manual", detectedPath: null, error: null };
+        case "launch_client": return exe;
+        default: return [];
+      }
+    });
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole("button", { name: /进入 CheckinBox/ }));
+    fireEvent.click(within(document.querySelector(".dash-agents")!).getByRole("button", { name: /WorkBuddy/ }));
+    fireEvent.click(await screen.findByRole("button", { name: "切换并打开客户端" }));
+
+    const settings = within(await screen.findByRole("dialog", { name: "WorkBuddy 设置" }));
+    const continueSwitch = settings.getByRole("button", { name: "继续换号" });
+    expect(continueSwitch).toBeDisabled();
+    const pick = settings.getByRole("button", { name: "选择程序" });
+    await waitFor(() => expect(pick).toBeEnabled());
+    fireEvent.click(pick);
+    await waitFor(() => expect(continueSwitch).toBeEnabled());
+    expect(invoke).toHaveBeenCalledWith("set_client_path", { providerId: "workbuddy", path: exe });
+    fireEvent.click(continueSwitch);
+
+    const failed = within(await screen.findByRole("dialog", { name: "登录态已写入，启动失败" }));
+    fireEvent.click(failed.getByRole("button", { name: "重试启动" }));
+    expect(await screen.findByRole("dialog", { name: "客户端已启动" })).toBeInTheDocument();
+    expect(invoke).toHaveBeenCalledWith("launch_client", { providerId: "workbuddy", previousExe: exe });
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "switch_client_account")).toHaveLength(2);
   });
 
   it("Qoder / Zcode 默认只在首页；从菜单打开侧栏、隐藏首页都会落盘", async () => {
