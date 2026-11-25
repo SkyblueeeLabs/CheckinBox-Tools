@@ -11,10 +11,10 @@ use crate::notifications::{self, NoticeKind};
 /// (版本号, 说明正文)。正文按行分段展示。
 const NOTES: &[(&str, &str)] = &[(
     "0.2.2",
-    "新增：Qoder CN 免费模型实时核对，从官方活动文档读取进行中的限时免费活动（如 HungerG），平台面板和首页福利条会显示免费清单。\n\
-     调整：平台面板的设置入口移到头部，并显示自动签到时间窗；更新提示移到侧栏底部，侧栏显示当前版本号。\n\
-     调整：Trae CN 图标换用客户端原生高清图。\n\
-     统一：平台名 Zcode 改为 ZCode。",
+    "新增：Qoder CN 免费模型实时核对，从官方活动文档读取进行中的限时免费活动（如 HungerG）。\n\
+     新增：各平台设置里可选客户端路径；首页公告支持从官网更新。\n\
+     修复：ZCode 本机导入改用 Windows 凭据管理器里的密钥解密，失败时给出明确提示。\n\
+     调整：平台设置入口移到头部，更新提示移到侧栏，Trae CN 图标换高清，Zcode 统一为 ZCode。",
 )];
 
 fn notes_for(version: &str) -> Option<&'static str> {
