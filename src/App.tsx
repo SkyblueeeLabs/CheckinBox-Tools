@@ -868,11 +868,18 @@ export default function App() {
 
   const unread = notices?.filter((notice) => !notice.read).length ?? 0;
   const noticesButton = (
-    <button className="btn notices-button" onClick={openNotices} aria-haspopup="dialog"
+    <button
+      className="icon-button notices-button"
+      onClick={openNotices}
+      aria-haspopup="dialog"
       aria-label={unread ? `应用内提醒，${unread} 条未读` : "应用内提醒"}
+      title={unread ? `应用内提醒（${unread} 条未读）` : "应用内提醒"}
     >
-      提醒
-      {unread > 0 && <span className="notices-badge" aria-hidden="true">{unread}</span>}
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+        <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
+        <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+      </svg>
+      {unread > 0 && <span className="notices-dot" aria-hidden="true" />}
     </button>
   );
   const overlays = (
@@ -1055,6 +1062,9 @@ export default function App() {
   const inSettings = selected === SETTINGS_ID;
   const inHome = selected === HOME_ID;
   const current = groups.find((g) => g.provider.id === selected);
+  const autoClaimableCount = groups
+    .filter((g) => g.provider.supportsClaim)
+    .reduce((sum, g) => sum + g.claimableCount, 0);
   const providerNames = Object.fromEntries(
     overview.providers.map((p) => [p.id, p.name])
   );
@@ -1181,7 +1191,6 @@ export default function App() {
           </div>
 
           <div className="topbar-right">
-            {noticesButton}
             {updater.action === "ready" && (
               <button
                 className="btn primary update-chip"
@@ -1190,16 +1199,6 @@ export default function App() {
                 重启更新
               </button>
             )}
-            <button
-              className="cover-button"
-              onClick={() => setCoverOpen(true)}
-              aria-label="看一眼赛博鸡蛋"
-              title="看一眼赛博鸡蛋（启动页封面）"
-            >
-              <svg viewBox="0 0 120 150" fill="none" stroke="currentColor" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                <path d="M60 8 C88 8 108 44 108 82 C108 116 86 142 60 142 C34 142 12 116 12 82 C12 44 32 8 60 8 Z" />
-              </svg>
-            </button>
             <div className="topbar-switches">
               <label className="switch" title="总闸：关掉后所有 agent 都不跑">
                 <input
@@ -1207,7 +1206,7 @@ export default function App() {
                   checked={config.scheduler.enabled}
                   onChange={(e) => toggleMaster(e.target.checked)}
                 />
-                <span>签到总闸</span>
+                <span>总闸</span>
               </label>
               <span className="topbar-switch-sep" aria-hidden="true" />
               <label className="switch" title="后台自动同步积分 / 签到状态 / 账号资料">
@@ -1219,8 +1218,22 @@ export default function App() {
                 <span>自动同步</span>
               </label>
             </div>
-            <button className="btn primary" onClick={runAll} disabled={busy}>
-              {busy ? "签到中…" : "一键全部签到"}
+            {noticesButton}
+            <button
+              className="cover-button"
+              onClick={() => setCoverOpen(true)}
+              aria-label="看一眼赛博鸡蛋"
+              title="看一眼赛博鸡蛋（启动页封面）"
+            >
+              <svg viewBox="0 0 120 150" fill="none" stroke="currentColor" strokeWidth="10" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M60 8 C88 8 108 44 108 82 C108 116 86 142 60 142 C34 142 12 116 12 82 C12 44 32 8 60 8 Z" />
+              </svg>
+            </button>
+            <button className="btn primary topbar-claim-btn" onClick={runAll} disabled={busy}>
+              <span>{busy ? "签到中…" : "一键全部签到"}</span>
+              {!busy && autoClaimableCount > 0 && (
+                <span className="btn-count num" aria-hidden="true">{autoClaimableCount}</span>
+              )}
             </button>
           </div>
         </header>

@@ -167,12 +167,28 @@ describe("不代领的平台（ZCode）", () => {
   });
 });
 
-describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模型）", () => {
+function expandWelfare(brief: HTMLElement) {
+  fireEvent.click(within(brief).getByRole("button", { name: /展开详情/ }));
+}
+
+describe("AgentGroupPanel（福利统一口径：默认单行摘要，展开看积分/额度与免费模型）", () => {
+  it("默认收起为单行摘要，点击可展开/收起详情", () => {
+    renderPanel(group(), noop, { onRefreshFree: noop });
+    const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expect(within(brief).queryByText("积分/额度")).not.toBeInTheDocument();
+    const toggle = within(brief).getByRole("button", { name: /展开详情/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    fireEvent.click(toggle);
+    expect(within(brief).getByText("积分/额度")).toBeInTheDocument();
+    expect(within(brief).getByRole("button", { name: /收起详情/ })).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("妙手：注册送 1,000 + 每月 200 统一自动到账 + 免费模型 chip + 核对月份", () => {
     renderPanel(
       group({ provider: provider({ id: "miaoshou", name: "妙手", supportsClaim: false }) })
     );
     const brief = screen.getByRole("note", { name: "妙手 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("积分/额度")).toBeInTheDocument();
     expect(within(brief).getByText("注册")).toBeInTheDocument();
     expect(within(brief).getByText("注册送 1,000 积分")).toBeInTheDocument();
@@ -189,6 +205,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
       group({ provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }) })
     );
     const brief = screen.getByRole("note", { name: "ZCode 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("每日")).toBeInTheDocument();
     expect(within(brief).getByText("手动领取")).toBeInTheDocument();
     expect(within(brief).getByText(/19:00 开放领取/)).toBeInTheDocument();
@@ -200,6 +217,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
   it("WorkBuddy 未核对：每日自动 + 注册/每月自动到账 + 免费模型待核对", () => {
     renderPanel(group(), noop, { onRefreshFree: noop });
     const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("每日")).toBeInTheDocument();
     expect(within(brief).getByText("自动领取")).toBeInTheDocument();
     expect(within(brief).getByText("注册")).toBeInTheDocument();
@@ -226,6 +244,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
       })
     );
     const brief = screen.getByRole("note", { name: "Trae CN 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("每日")).toBeInTheDocument();
     expect(within(brief).getByText("单账号每日福利")).toBeInTheDocument();
     expect(within(brief).getByText("自动领取")).toBeInTheDocument();
@@ -242,6 +261,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
   it("Qoder：自动领取平台不显示「现在可领」标签，并标明免费用户停发规则", () => {
     renderPanel(group({ provider: provider({ id: "qoder", name: "Qoder CN" }) }));
     const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
+    expandWelfare(brief);
     expect(within(brief).queryByText("现在可领")).not.toBeInTheDocument();
     expect(within(brief).queryByText("10:00 开放")).not.toBeInTheDocument();
     expect(within(brief).getByText(/10:00 后开放/)).toBeInTheDocument();
@@ -254,6 +274,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
   it("minimax：每日自动免费积分 + 暂无免费模型", () => {
     renderPanel(group({ provider: provider({ id: "minimax", name: "MiniMax Code" }) }));
     const brief = screen.getByRole("note", { name: "MiniMax Code 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("自动领取")).toBeInTheDocument();
     expect(within(brief).getByText("暂无免费模型")).toBeInTheDocument();
   });
@@ -273,6 +294,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
       onRefreshFree,
     });
     const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("Hy4")).toBeInTheDocument();
     expect(within(brief).queryByText("Pro")).not.toBeInTheDocument();
     expect(within(brief).getByText(/实时/)).toBeInTheDocument();
@@ -286,6 +308,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
       onRefreshFree: noop,
     });
     const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText(/实时核对不可用/)).toBeInTheDocument();
     expect(within(brief).getByText(/有免费模型/)).toBeInTheDocument();
   });
@@ -309,6 +332,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
       }
     );
     const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("HungerG")).toBeInTheDocument();
     expect(within(brief).queryByText("Qwen4-Max")).not.toBeInTheDocument();
     expect(within(brief).getByText(/实时/)).toBeInTheDocument();
@@ -326,6 +350,7 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
       }
     );
     const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
+    expandWelfare(brief);
     expect(within(brief).getByText("本期暂无免费模型")).toBeInTheDocument();
   });
 });

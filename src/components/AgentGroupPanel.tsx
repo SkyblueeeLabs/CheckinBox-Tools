@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import type { AgentGroup, LiveFreeModels } from "../lib/types";
 import { api, fmtQuotaAmount, quotaLabels } from "../lib/api";
 import { WELFARE_KIND_TEXT, WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfareOpenState, welfareOf } from "../lib/welfare";
@@ -109,6 +110,26 @@ export default function AgentGroupPanel({
   const openState = welfareOpenState(provider.id);
   const welfare = welfareOf(group);
   const meta = WELFARE_META[provider.id];
+  const [welfareOpen, setWelfareOpen] = useState(false);
+  useEffect(() => {
+    setWelfareOpen(false);
+  }, [provider.id]);
+  const liveFreeNames = liveFree?.models.filter((m) => m.free).map((m) => m.name) ?? [];
+  const freeSummaryText = (() => {
+    if (!free) return null;
+    if (hasLiveFree) {
+      if (liveFreeNames.length > 0) return `含 ${liveFreeNames.length} 个免费模型`;
+      if (liveFree && !liveFree.loading && !liveFree.error) return "本期暂无免费模型";
+      return "含免费模型";
+    }
+    if (free.models?.length) return `含 ${free.models.length} 个免费模型`;
+    return free.note ?? FREE_STATUS_TEXT[free.status];
+  })();
+  const welfareSummary = [
+    ...welfare.benefits.map((b) => (b.modeText ? `${b.label}（${b.modeText}）` : b.label)),
+    openState?.label,
+    freeSummaryText,
+  ].filter(Boolean).join(" · ");
   // 缺省视为已就绪；Trae 首版先展示「即将开放」。
   const oauthReady = provider.oauthReady !== false;
 
@@ -202,97 +223,121 @@ export default function AgentGroupPanel({
         </div>
       </header>
 
-      {/* 福利统一口径：第一行积分/额度，第二行免费模型；时效敏感标注核对月份 */}
+      {/* 福利统一口径：默认单行摘要，点击展开积分/额度与免费模型详情 */}
       {meta && (
-        <div className="welfare-brief" role="note" aria-label={`${provider.name} 福利`}>
-          <div className="wb-row">
-            <span className="wb-label">积分/额度</span>
-            {welfare.benefits.map((b) => (
-              <span className="wb-benefit" key={b.kind}>
-                <span className="wb-cadence">{WELFARE_KIND_TEXT[b.kind]}</span>
-                <span className="wb-credits">{b.label}</span>
-                {b.modeText && <span className={`wb-mode ${b.mode}`}>{b.modeText}</span>}
-              </span>
-            ))}
-            {openState && (
-              <span className={`wb-open ${openState.open ? "on" : ""}`}>{openState.label}</span>
-            )}
-            {welfare.note && <span className="wb-note">{welfare.note}</span>}
-            {welfare.extraNote && (
-              <span className="wb-note">{welfare.extraNote}</span>
-            )}
-            {welfare.docs && (
-              <button
-                type="button"
-                className="wb-docs"
-                onClick={() => void api.openExternal(welfare.docs!.url)}
-              >
-                {welfare.docs.label} ↗
-              </button>
-            )}
-          </div>
-          {free && (
-          <div className="wb-row">
-            <span className="wb-label">免费模型</span>
-            {hasLiveFree ? (
-              <>
-                {liveFree?.models
-                  .filter((m) => m.free)
-                  .map((m) => (
-                    <span key={m.id} className="wb-chip" title={`计费倍率 ${m.credits || "未知"}`}>
-                      {m.name}
-                    </span>
-                  ))}
-                {liveFree &&
-                  !liveFree.loading &&
-                  !liveFree.error &&
-                  !liveFree.models.some((m) => m.free) && (
-                    <span className="wb-none">
-                      {provider.id === "qoder" ? "本期暂无免费模型" : "本期目录暂无免费模型"}
-                    </span>
-                  )}
-                {!liveFree && <span className="wb-none">有免费模型 · 待实时核对</span>}
-                {liveFree?.loading && <span className="wb-none">核对中…</span>}
-                {liveFree?.error && (
-                  <span className="wb-none">有免费模型 · 实时核对不可用</span>
-                )}
-                {liveFree && !liveFree.loading && !liveFree.error && (
-                  <span className="wb-live">
-                    实时{" "}
-                    {new Date(liveFree.fetchedAt).toLocaleTimeString("zh-CN", {
-                      hour: "2-digit",
-                      minute: "2-digit",
-                    })}
+        <div
+          className={`welfare-brief ${welfareOpen ? "open" : ""}`}
+          role="note"
+          aria-label={`${provider.name} 福利`}
+        >
+          <button
+            type="button"
+            className="wb-summary-bar"
+            aria-expanded={welfareOpen}
+            onClick={() => setWelfareOpen((v) => !v)}
+            title={welfare.title}
+          >
+            <span className="wb-summary-text">
+              <b className="wb-summary-title">福利说明</b>
+              <span className="wb-summary-sep" aria-hidden="true">·</span>
+              <span className="wb-summary-content">{welfareSummary}</span>
+            </span>
+            <span className="wb-toggle">
+              {welfareOpen ? "收起详情 ▴" : "展开详情 ▾"}
+            </span>
+          </button>
+          {welfareOpen && (
+            <div className="wb-details">
+              <div className="wb-row">
+                <span className="wb-label">积分/额度</span>
+                {welfare.benefits.map((b) => (
+                  <span className="wb-benefit" key={b.kind}>
+                    <span className="wb-cadence">{WELFARE_KIND_TEXT[b.kind]}</span>
+                    <span className="wb-credits">{b.label}</span>
+                    {b.modeText && <span className={`wb-mode ${b.mode}`}>{b.modeText}</span>}
                   </span>
+                ))}
+                {openState && (
+                  <span className={`wb-open ${openState.open ? "on" : ""}`}>{openState.label}</span>
                 )}
-                {onRefreshFree && (
+                {welfare.note && <span className="wb-note">{welfare.note}</span>}
+                {welfare.extraNote && (
+                  <span className="wb-note">{welfare.extraNote}</span>
+                )}
+                {welfare.docs && (
                   <button
-                    className={`wb-refresh ${liveFree?.loading ? "is-loading" : ""}`}
-                    onClick={onRefreshFree}
-                    disabled={liveFree?.loading}
-                    aria-label="核对最新免费模型"
-                    title={
-                      provider.id === "qoder"
-                        ? "从官方活动文档核对当前免费模型"
-                        : "从 WorkBuddy 模型目录实时核对当前免费模型"
-                    }
+                    type="button"
+                    className="wb-docs"
+                    onClick={() => void api.openExternal(welfare.docs!.url)}
                   >
-                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                      <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
-                      <path d="M21 3v5h-5" />
-                    </svg>
+                    {welfare.docs.label} ↗
                   </button>
                 )}
-              </>
-            ) : free.models?.length ? (
-              free.models.map((m) => (
-                <span key={m} className="wb-chip">{m}</span>
-              ))
-            ) : (
-              <span className="wb-none">{free.note ?? FREE_STATUS_TEXT[free.status]}</span>
-            )}
-            {free.asOf && <span className="wb-asof">核对 {free.asOf}</span>}
-          </div>
+              </div>
+              {free && (
+                <div className="wb-row">
+                  <span className="wb-label">免费模型</span>
+                  {hasLiveFree ? (
+                    <>
+                      {liveFree?.models
+                        .filter((m) => m.free)
+                        .map((m) => (
+                          <span key={m.id} className="wb-chip" title={`计费倍率 ${m.credits || "未知"}`}>
+                            {m.name}
+                          </span>
+                        ))}
+                      {liveFree &&
+                        !liveFree.loading &&
+                        !liveFree.error &&
+                        !liveFree.models.some((m) => m.free) && (
+                          <span className="wb-none">
+                            {provider.id === "qoder" ? "本期暂无免费模型" : "本期目录暂无免费模型"}
+                          </span>
+                        )}
+                      {!liveFree && <span className="wb-none">有免费模型 · 待实时核对</span>}
+                      {liveFree?.loading && <span className="wb-none">核对中…</span>}
+                      {liveFree?.error && (
+                        <span className="wb-none">有免费模型 · 实时核对不可用</span>
+                      )}
+                      {liveFree && !liveFree.loading && !liveFree.error && (
+                        <span className="wb-live">
+                          实时{" "}
+                          {new Date(liveFree.fetchedAt).toLocaleTimeString("zh-CN", {
+                            hour: "2-digit",
+                            minute: "2-digit",
+                          })}
+                        </span>
+                      )}
+                      {onRefreshFree && (
+                        <button
+                          className={`wb-refresh ${liveFree?.loading ? "is-loading" : ""}`}
+                          onClick={onRefreshFree}
+                          disabled={liveFree?.loading}
+                          aria-label="核对最新免费模型"
+                          title={
+                            provider.id === "qoder"
+                              ? "从官方活动文档核对当前免费模型"
+                              : "从 WorkBuddy 模型目录实时核对当前免费模型"
+                          }
+                        >
+                          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+                            <path d="M21 3v5h-5" />
+                          </svg>
+                        </button>
+                      )}
+                    </>
+                  ) : free.models?.length ? (
+                    free.models.map((m) => (
+                      <span key={m} className="wb-chip">{m}</span>
+                    ))
+                  ) : (
+                    <span className="wb-none">{free.note ?? FREE_STATUS_TEXT[free.status]}</span>
+                  )}
+                  {free.asOf && <span className="wb-asof">核对 {free.asOf}</span>}
+                </div>
+              )}
+            </div>
           )}
         </div>
       )}

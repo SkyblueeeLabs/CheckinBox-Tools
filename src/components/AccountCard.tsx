@@ -110,6 +110,9 @@ export default function AccountCard({
       ? `打开${view.providerName}领取`
       : "打开客户端";
   const checkinLabel = hasError && state !== "claimable" ? "重试" : "签到";
+  const primaryCheckin = view.supportsClaim && state === "claimable" && !hasError;
+  const primaryCheckinText =
+    status && status.points > 0 ? `立即签到 +${fmtPoints(status.points)}` : "立即签到";
   const refreshLabel = unit.unit === "Token" ? "刷新额度" : "刷新积分";
   // 积分和签到状态常报同一个错（同一个 401）：只显示一次，别把卡片撑高
   const shownQuotaError = quotaError && quotaError !== error ? quotaError : null;
@@ -205,19 +208,48 @@ export default function AccountCard({
       </div>
 
       <div className="acct-footer" role="group" aria-label="账号操作">
-        <button
-          className="acct-launch"
-          onClick={canSwitchClient ? onSwitchClient : onLaunch}
-          disabled={busy}
-          aria-label={launchLabel}
-          title={canSwitchClient ? "备份原登录态，切换到此账号并重启客户端" : launchLabel}
-        >
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-            <path d="M13 5h6v6m0-6-9 9m7-1v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5" />
-          </svg>
-          <span>{canSwitchClient ? "切换并打开" : launchLabel}</span>
-        </button>
+        {primaryCheckin ? (
+          <button
+            className="acct-launch is-checkin"
+            onClick={onCheckin}
+            disabled={busy}
+            aria-label={checkinLabel}
+            title={primaryCheckinText}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="4" y="5" width="16" height="15" rx="2" />
+              <path d="M8 3v4m8-4v4M4 10h16m-11 5 2 2 4-4" />
+            </svg>
+            <span>{primaryCheckinText}</span>
+          </button>
+        ) : (
+          <button
+            className="acct-launch"
+            onClick={canSwitchClient ? onSwitchClient : onLaunch}
+            disabled={busy}
+            aria-label={launchLabel}
+            title={canSwitchClient ? "备份原登录态，切换到此账号并重启客户端" : launchLabel}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M13 5h6v6m0-6-9 9m7-1v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5" />
+            </svg>
+            <span>{canSwitchClient ? "切换并打开" : launchLabel}</span>
+          </button>
+        )}
         <div className="acct-tools">
+          {primaryCheckin && (
+            <button
+              className="acct-tool"
+              onClick={canSwitchClient ? onSwitchClient : onLaunch}
+              disabled={busy}
+              aria-label={launchLabel}
+              title={canSwitchClient ? "备份原登录态，切换到此账号并重启客户端" : launchLabel}
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M13 5h6v6m0-6-9 9m7-1v5a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1h5" />
+              </svg>
+            </button>
+          )}
           <button
             className={`acct-tool acct-refresh ${quotaLoading ? "is-loading" : ""}`}
             onClick={onRefreshQuota}
@@ -230,9 +262,9 @@ export default function AccountCard({
               <path d="M21 3v5h-5" />
             </svg>
           </button>
-          {view.supportsClaim && (
+          {view.supportsClaim && !primaryCheckin && (
             <button
-              className={`acct-tool ${state === "claimable" && !hasError ? "is-claimable" : ""}`}
+              className="acct-tool"
               onClick={onCheckin}
               disabled={busy || (state !== "claimable" && !hasError)}
               aria-label={checkinLabel}

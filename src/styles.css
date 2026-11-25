@@ -667,6 +667,23 @@ button:disabled {
   height: 14px;
   background: var(--line);
 }
+.topbar-claim-btn {
+  gap: 7px;
+}
+.btn-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 19px;
+  height: 19px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1;
+}
 
 /* ==========================================================================
    按钮
@@ -1136,6 +1153,15 @@ button:disabled {
 .acct-tool { width: 28px; color: var(--text-2); }
 .acct-launch svg, .acct-tool svg { width: 14px; height: 14px; flex: none; }
 .acct-launch:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
+.acct-launch.is-checkin {
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+.acct-launch.is-checkin:hover:not(:disabled) {
+  background: #222226;
+  color: #fff;
+}
 .acct-tool:hover:not(:disabled) { background: var(--surface-3); color: var(--text); }
 .acct-tool.is-selected:disabled { color: var(--agent-accent, var(--text)); opacity: 1; }
 .acct-tool.is-claimable:not(:disabled) {
@@ -2217,11 +2243,38 @@ button:disabled {
 .toast.warn { border-left: 3px solid var(--orange); }
 .toast.err { border-left: 3px solid var(--red); }
 
-.notices-button {
+.icon-button.notices-button {
+  position: relative;
+  width: 36px;
+  height: 36px;
+  padding: 0;
   display: inline-flex;
   align-items: center;
-  gap: 6px;
-  white-space: nowrap;
+  justify-content: center;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--line);
+  background: var(--surface);
+  color: var(--text-2);
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+.icon-button.notices-button svg {
+  width: 16px;
+  height: 16px;
+}
+.icon-button.notices-button:hover {
+  background: var(--surface-2);
+  color: var(--text);
+  border-color: var(--line-2);
+}
+.notices-dot {
+  position: absolute;
+  top: 7px;
+  right: 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--red);
+  box-shadow: 0 0 0 2px var(--surface);
 }
 .notices-badge,
 .notice-unread {
@@ -2398,6 +2451,9 @@ button:disabled {
   color: var(--text-3);
   font-variant-numeric: tabular-nums;
 }
+.dash-stat-sub.warn {
+  color: #b45309;
+}
 
 .dash-agents {
   display: grid;
@@ -2487,18 +2543,68 @@ button:disabled {
   color: var(--text);
 }
 
-/* 平台面板「福利 / 免费模型」核对提示条 */
+/* 平台面板「福利 / 免费模型」核对提示条（默认单行可折叠） */
 .welfare-brief {
   display: flex;
   flex-direction: column;
-  gap: 5px;
   margin: 12px 0 0;
-  padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: var(--r-sm);
   background: color-mix(in srgb, var(--agent-accent, var(--blue)) 4%, var(--surface));
   font-size: 11.5px;
   color: var(--text-2);
+}
+.wb-summary-bar {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 7px 12px;
+  text-align: left;
+  color: inherit;
+  min-width: 0;
+  border-radius: var(--r-sm);
+  transition: background 0.12s;
+}
+.wb-summary-bar:hover {
+  background: color-mix(in srgb, var(--agent-accent, var(--blue)) 6%, transparent);
+}
+.wb-summary-text {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  flex: 1;
+}
+.wb-summary-title {
+  flex: none;
+  color: var(--text);
+  font-weight: 650;
+}
+.wb-summary-sep {
+  flex: none;
+  color: var(--text-3);
+}
+.wb-summary-content {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.wb-toggle {
+  flex: none;
+  font-size: 11px;
+  font-weight: 650;
+  color: var(--agent-accent, var(--blue));
+  white-space: nowrap;
+}
+.wb-details {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  padding: 8px 12px 9px;
+  border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent);
 }
 .wb-row {
   display: flex;
@@ -2620,17 +2726,18 @@ button:disabled {
   color: var(--text-3);
 }
 
-/* 福利行：每日数量 + 领取方式（自动/需手动）+ 时间窗/领取说明 */
+/* 福利行：严格单行省略，悬停看完整信息，保证同行卡片高矮齐平 */
 .dash-agent-welfare {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   align-items: center;
-  gap: 4px 8px;
+  gap: 6px;
   margin-top: auto;
   padding-top: 10px;
   border-top: 1px solid var(--line);
   font-size: 11.5px;
   min-width: 0;
+  overflow: hidden;
 }
 .welfare-amount {
   font-weight: 650;
@@ -2658,6 +2765,7 @@ button:disabled {
   display: inline-flex;
   align-items: center;
   gap: 4px;
+  flex: none;
 }
 .welfare-mode.manual {
   color: #b8820a;

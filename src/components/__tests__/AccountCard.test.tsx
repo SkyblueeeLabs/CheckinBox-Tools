@@ -175,15 +175,21 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(screen.queryByText("累计发放总积分")).not.toBeInTheDocument();
   });
 
-  it("直接从卡片签到和设为当前", () => {
+  it("直接从卡片签到和设为当前（可签到态突出主按钮，同时保留切换客户端入口）", () => {
     const onCheckin = vi.fn();
     const onSetActive = vi.fn();
+    const onSwitchClient = vi.fn();
     renderCard({
       status: { state: "claimable", points: 400, streakDays: 0, message: "可签到 +400 积分", bonusPoints: 0 },
-    }, true, { onCheckin, onSetActive });
-    fireEvent.click(screen.getByRole("button", { name: "签到" }));
+    }, true, { onCheckin, onSetActive, onSwitchClient });
+    const checkinBtn = screen.getByRole("button", { name: "签到" });
+    expect(checkinBtn).toHaveTextContent("立即签到 +400");
+    expect(checkinBtn.classList.contains("is-checkin")).toBe(true);
+    fireEvent.click(checkinBtn);
+    fireEvent.click(screen.getByRole("button", { name: "切换并打开客户端" }));
     fireEvent.click(screen.getByRole("button", { name: "设为当前" }));
     expect(onCheckin).toHaveBeenCalledOnce();
+    expect(onSwitchClient).toHaveBeenCalledOnce();
     expect(onSetActive).toHaveBeenCalledOnce();
     expect(screen.getByRole("button", { name: "积分明细" })).toBeEnabled();
     expect(screen.queryByText("本机")).not.toBeInTheDocument();

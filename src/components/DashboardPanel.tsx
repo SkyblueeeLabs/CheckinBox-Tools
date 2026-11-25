@@ -27,11 +27,25 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
   // 首页隐藏只影响下面的到期列表和 agent 卡片，不改汇总数字。
   const homeVisible = (id: string) => agentVisibilityOf(visibility, id).home;
   const visibleGroups = groups.filter((g) => homeVisible(g.provider.id));
-  const totalRemaining = groups.reduce((s, g) => s + g.totalRemaining, 0);
-  const totalGranted = groups.reduce((s, g) => s + g.totalGranted, 0);
+  const pointsGroups = groups.filter((g) => quotaUnit(g.provider.id) !== "Token");
+  const tokenGroups = groups.filter((g) => quotaUnit(g.provider.id) === "Token");
+  const pointsRemaining = pointsGroups.reduce((s, g) => s + g.totalRemaining, 0);
+  const pointsGranted = pointsGroups.reduce((s, g) => s + g.totalGranted, 0);
+  const tokenRemaining = tokenGroups.reduce((s, g) => s + g.totalRemaining, 0);
+  const tokenGranted = tokenGroups.reduce((s, g) => s + g.totalGranted, 0);
+  const hasTokenQuota = tokenRemaining > 0 || tokenGranted > 0;
+  const tokenProviderLabel = tokenGroups
+    .filter((g) => g.totalRemaining > 0 || g.totalGranted > 0)
+    .map((g) => g.provider.name)
+    .join("/") || "Token 平台";
   const accountCount = overview.accounts.length;
   const claimedCount = groups.reduce((s, g) => s + g.claimedToday, 0);
-  const claimableCount = groups.reduce((s, g) => s + g.claimableCount, 0);
+  const autoClaimableCount = groups
+    .filter((g) => g.provider.supportsClaim)
+    .reduce((s, g) => s + g.claimableCount, 0);
+  const manualClaimableCount = groups
+    .filter((g) => !g.provider.supportsClaim)
+    .reduce((s, g) => s + g.claimableCount, 0);
   const expiring = expiringAccounts(overview.accounts).filter((x) =>
     homeVisible(x.view.account.provider)
   );
@@ -40,16 +54,48 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
   const expiringUnits = [...new Set(expiring.map((x) => quotaUnit(x.view.account.provider)))];
   const expiringUnitText = expiringUnits.length === 1 ? expiringUnits[0] : expiringUnits.join("+");
 
-  // 全局汇总混着积分和 Token（ZCode 一个平台就是 3 亿级），紧凑展示 + 悬停看精确值
+  const claimSub = (() => {
+    if (autoClaimableCount > 0 && manualClaimableCount > 0) {
+      return `${autoClaimableCount} 个可签 · ${manualClaimableCount} 个待手领`;
+    }
+    if (autoClaimableCount > 0) return `${autoClaimableCount} 个待签`;
+    if (manualClaimableCount > 0) return `${manualClaimableCount} 个待手领`;
+    return "全部处理完毕";
+  })();
+
+  // 通用积分与 Token 额度拆开展示，避免 3 亿 Token 把几千积分淹没成 300.0M
   const stats = [
-    { label: "剩余总积分", value: fmtCompact(totalRemaining), full: fmtPoints(totalRemaining) },
-    { label: "累计发放总积分", value: fmtCompact(totalGranted), full: fmtPoints(totalGranted) },
-    { label: "账号总数", value: String(accountCount), full: undefined, sub: `${groups.length} 个平台` },
+    {
+      label: hasTokenQuota ? "剩余通用积分" : "剩余总积分",
+      value: fmtCompact(pointsRemaining),
+      full: fmtPoints(pointsRemaining),
+      sub: hasTokenQuota
+        ? tokenRemaining > 0
+          ? `另 ${tokenProviderLabel} ${fmtQuotaAmount(tokenRemaining, tokenGroups[0].provider.id)} Token`
+          : "不含 Token 额度"
+        : undefined,
+      tone: undefined as "warn" | undefined,
+    },
+    {
+      label: hasTokenQuota ? "累计发放积分" : "累计发放总积分",
+      value: fmtCompact(pointsGranted),
+      full: fmtPoints(pointsGranted),
+      sub: hasTokenQuota ? "不含 Token 额度" : undefined,
+      tone: undefined as "warn" | undefined,
+    },
+    {
+      label: "账号总数",
+      value: String(accountCount),
+      full: undefined,
+      sub: `${groups.length} 个平台`,
+      tone: undefined as "warn" | undefined,
+    },
     {
       label: "今日已签",
       value: `${claimedCount} / ${accountCount}`,
       full: undefined,
-      sub: claimableCount > 0 ? `${claimableCount} 个待签` : "全部处理完毕",
+      sub: claimSub,
+      tone: (autoClaimableCount > 0 || manualClaimableCount > 0 ? "warn" : undefined) as "warn" | undefined,
     },
   ];
 
@@ -66,7 +112,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
           <div key={s.label} className="dash-stat">
             <span className="dash-stat-label">{s.label}</span>
             <span className="dash-stat-value" title={s.full}>{s.value}</span>
-            {s.sub && <span className="dash-stat-sub">{s.sub}</span>}
+            {s.sub && <span className={`dash-stat-sub ${s.tone ?? ""}`}>{s.sub}</span>}
           </div>
         ))}
       </div>

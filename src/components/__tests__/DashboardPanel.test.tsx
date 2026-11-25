@@ -123,4 +123,45 @@ describe("DashboardPanel（7 天内到期）", () => {
     // 汇总仍含被隐藏平台（500+100=600），与顶栏口径一致
     expect(document.querySelectorAll(".dash-stat-value")[0].textContent).toBe("600");
   });
+
+  it("包含 Token 平台（ZCode）时，通用积分与 Token 拆开展示", () => {
+    const mixed: Overview = {
+      ...overview,
+      providers: [
+        ...overview.providers,
+        {
+          id: "zcode",
+          name: "ZCode",
+          accent: "#111111",
+          docsUrl: "",
+          supportsDiscovery: false,
+          supportsOAuth: false,
+          configured: true,
+          hasClient: true,
+          supportsClaim: false,
+        },
+      ],
+      accounts: [
+        ...overview.accounts,
+        {
+          ...account("z1", 1, 300_000_000),
+          account: { id: "z1", provider: "zcode", label: "ZCode账号", createdAt: 0, origin: "" },
+          providerName: "ZCode",
+          supportsClaim: false,
+        },
+      ],
+    };
+    render(
+      <DashboardPanel
+        overview={mixed}
+        groups={buildGroups(mixed)}
+        visibility={{}}
+        onOpenAgent={vi.fn()}
+      />
+    );
+    expect(screen.getByText("剩余通用积分")).toBeInTheDocument();
+    expect(document.querySelectorAll(".dash-stat-value")[0].textContent).toBe("600");
+    expect(screen.getByText("另 ZCode 3亿 Token")).toBeInTheDocument();
+    expect(screen.getByText("不含 Token 额度")).toBeInTheDocument();
+  });
 });
