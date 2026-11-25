@@ -64,7 +64,7 @@ describe("fmtCredits / fmtQuotaAmount（WorkBuddy 小数口径）", () => {
     expect(fmtCredits(Number.NaN)).toBe("0");
   });
 
-  it("fmtQuotaAmount 按平台路由：WorkBuddy 两位小数，其它取整，Zcode 缩写", () => {
+  it("fmtQuotaAmount 按平台路由：WorkBuddy 两位小数，其它取整，ZCode 缩写", () => {
     expect(fmtQuotaAmount(3805.50000093, "workbuddy")).toBe("3,805.5");
     expect(fmtQuotaAmount(3805.50000093, "minimax")).toBe("3,806");
     expect(fmtQuotaAmount(298890433, "zcode")).toBe("2.99亿");

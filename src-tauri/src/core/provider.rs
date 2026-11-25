@@ -272,7 +272,7 @@ pub trait Provider: Send + Sync {
     /// 这个平台是否支持「自动领取」。
     ///
     /// `false` = 只展示状态 + 提醒，调度器和「一键全部签到」都不会调用
-    /// `claim()`。给「领取必须走官方客户端」的平台用（例如 Zcode ——
+    /// `claim()`。给「领取必须走官方客户端」的平台用（例如 ZCode ——
     /// 领取要过阿里云验证码，第三方做不了）。
     fn supports_claim(&self) -> bool {
         true

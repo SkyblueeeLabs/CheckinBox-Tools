@@ -22,7 +22,7 @@ interface Props {
 /**
  * 状态徽章文案。
  *
- * `supportsClaim === false` 的平台（Zcode）不代领 —— 领取要过官方客户端的
+ * `supportsClaim === false` 的平台（ZCode）不代领 —— 领取要过官方客户端的
  * 阿里云验证码，所以文案说「待领取 / 已领取」，按钮也是「打开客户端领取」。
  */
 function stateText(supportsClaim: boolean, state: string): string {
@@ -95,7 +95,7 @@ export default function AccountCard({
   const { status, error, quotaError, account } = view;
   const state = status?.state ?? "unknown";
   const remaining = view.quota?.totalRemaining;
-  // Zcode 的额度是 Token，其它平台是积分 —— 标签和数字格式都跟着单位走
+  // ZCode 的额度是 Token，其它平台是积分 —— 标签和数字格式都跟着单位走
   const unit = quotaLabels(account.provider);
   const detailsLabel = unit.unit === "Token" ? "额度明细" : "积分明细";
   const groups = view.quota?.creditGroups ?? [];
@@ -232,7 +232,7 @@ export default function AccountCard({
           </button>
           {view.supportsClaim && (
             <button
-              className="acct-tool"
+              className={`acct-tool ${state === "claimable" && !hasError ? "is-claimable" : ""}`}
               onClick={onCheckin}
               disabled={busy || (state !== "claimable" && !hasError)}
               aria-label={checkinLabel}

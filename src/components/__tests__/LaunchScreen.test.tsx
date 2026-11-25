@@ -34,7 +34,7 @@ function ov(accounts: AccountView[]): Overview {
         hasClient: true, supportsClaim: true,
       },
       {
-        id: "zcode", name: "Zcode", accent: "#111111", docsUrl: "",
+        id: "zcode", name: "ZCode", accent: "#111111", docsUrl: "",
         supportsDiscovery: false, supportsOAuth: false, configured: true,
         hasClient: true, supportsClaim: false,
       },
@@ -82,7 +82,7 @@ describe("LaunchScreen（赛博鸡蛋孵化舱）", () => {
   });
 
   it("蛋状态：可领=领按钮、需手动=去领取、已领=裂壳计数，统计条实时", () => {
-    // Zcode 默认不上启动页，这里显式打开以覆盖三种蛋状态
+    // ZCode 默认不上启动页，这里显式打开以覆盖三种蛋状态
     const p = props({
       visibility: { zcode: { sidebar: false, home: true, launch: true } },
     });

@@ -85,6 +85,7 @@ export const api = {
     invoke<FreeModel[]>("fetch_workbuddy_free_models", {
       accountId: accountId ?? null,
     }),
+  fetchQoderFreeModels: () => invoke<FreeModel[]>("fetch_qoder_free_models"),
   setAgentSchedule: (
     providerId: string,
     patch: { enabled?: boolean; startMinute?: number; endMinute?: number },
@@ -186,12 +187,12 @@ export function fmtCredits(n: number): string {
 /** 额度按 Token 展示的平台（每日额度是 3 亿级 Token，不是积分） */
 const TOKEN_PROVIDERS = new Set(["zcode"]);
 
-/** 该平台的额度单位：Zcode 是 Token，其它平台是积分 */
+/** 该平台的额度单位：ZCode 是 Token，其它平台是积分 */
 export function quotaUnit(providerId?: string | null): "Token" | "积分" {
   return providerId && TOKEN_PROVIDERS.has(providerId) ? "Token" : "积分";
 }
 
-/** 面板里「剩余 / 累计发放」的标签文案（Zcode 说 Token，其它平台说积分） */
+/** 面板里「剩余 / 累计发放」的标签文案（ZCode 说 Token，其它平台说积分） */
 export function quotaLabels(providerId?: string | null): {
   unit: string;
   remaining: string;

@@ -92,8 +92,8 @@ export default function App() {
   const [launchDone, setLaunchDone] = useState(false);
   /** 「随时看一眼」封面浮层：顶栏蛋图标打开，Esc/返回 关闭，不丢导航状态 */
   const [coverOpen, setCoverOpen] = useState(false);
-  /** WorkBuddy 实时免费模型核对结果（福利提示条用） */
-  const [liveFree, setLiveFree] = useState<LiveFreeModels | null>(null);
+  /** 实时免费模型核对结果（按平台分开缓存；福利提示条用） */
+  const [liveFreeByProvider, setLiveFreeByProvider] = useState<Record<string, LiveFreeModels>>({});
   const [loadError, setLoadError] = useState<string | null>(null);
   const [notices, setNotices] = useState<Notice[] | null>(null);
   const [noticeError, setNoticeError] = useState<string | null>(null);
@@ -661,31 +661,50 @@ export default function App() {
     [pushToast]
   );
 
-  /** 实时核对 WorkBuddy 当前免费模型（模型目录与客户端对话选择器同源） */
-  const refreshFreeModels = useCallback(async () => {
-    setLiveFree((prev) => ({
-      models: prev?.models ?? [],
-      fetchedAt: prev?.fetchedAt ?? 0,
-      loading: true,
-      error: null,
+  /** 实时核对免费模型：WorkBuddy 走模型目录，Qoder 走官方活动文档 */
+  const refreshFreeModels = useCallback(async (providerId: string) => {
+    setLiveFreeByProvider((prev) => ({
+      ...prev,
+      [providerId]: {
+        models: prev[providerId]?.models ?? [],
+        fetchedAt: prev[providerId]?.fetchedAt ?? 0,
+        loading: true,
+        error: null,
+      },
     }));
     try {
-      const models = await api.fetchWorkbuddyFreeModels();
-      setLiveFree({ models, fetchedAt: Date.now(), loading: false, error: null });
+      const models =
+        providerId === "workbuddy"
+          ? await api.fetchWorkbuddyFreeModels()
+          : providerId === "qoder"
+            ? await api.fetchQoderFreeModels()
+            : [];
+      setLiveFreeByProvider((prev) => ({
+        ...prev,
+        [providerId]: { models, fetchedAt: Date.now(), loading: false, error: null },
+      }));
     } catch (e) {
-      setLiveFree((prev) => ({
-        models: prev?.models ?? [],
-        fetchedAt: prev?.fetchedAt ?? 0,
-        loading: false,
-        error: String(e),
+      setLiveFreeByProvider((prev) => ({
+        ...prev,
+        [providerId]: {
+          models: prev[providerId]?.models ?? [],
+          fetchedAt: prev[providerId]?.fetchedAt ?? 0,
+          loading: false,
+          error: String(e),
+        },
       }));
     }
   }, []);
 
-  // 进入 WorkBuddy 面板时自动核对一次最新免费模型
+  // 进入 WorkBuddy / Qoder 面板时自动核对一次最新免费模型
   useEffect(() => {
-    if (selected === "workbuddy" && !liveFree) void refreshFreeModels();
-  }, [selected, liveFree, refreshFreeModels]);
+    if (
+      (selected === "workbuddy" || selected === "qoder") &&
+      !liveFreeByProvider[selected]
+    ) {
+      void refreshFreeModels(selected);
+    }
+  }, [selected, liveFreeByProvider, refreshFreeModels]);
 
   /** 平台显示开关：乐观更新 + 落盘；隐藏侧栏时若正停留在该平台页则回首页 */
   const patchVisibility = useCallback(
@@ -1062,6 +1081,22 @@ export default function App() {
         providers={overview.providers}
         visibility={config.agentVisibility}
         onVisibilityChange={patchVisibility}
+        version={updater.currentVersion}
+        updateNotice={
+          updater.action === "ready" && updater.update
+            ? {
+                version: updater.update.version,
+                ready: true,
+                onOpen: () => void updater.restart(),
+              }
+            : updater.update && !updater.dialogOpen
+              ? {
+                  version: updater.update.version,
+                  ready: false,
+                  onOpen: updater.openDialog,
+                }
+              : null
+        }
         onReorder={(order) => {
           // order 只含当前可见平台：隐藏的平台保持原槽位，合并成完整顺序再落盘
           const visible = new Set(order);
@@ -1147,18 +1182,14 @@ export default function App() {
 
           <div className="topbar-right">
             {noticesButton}
-            {updater.action === "ready" ? (
+            {updater.action === "ready" && (
               <button
                 className="btn primary update-chip"
                 onClick={() => void updater.restart()}
               >
                 重启更新
               </button>
-            ) : updater.update && !updater.dialogOpen ? (
-              <button className="btn update-chip" onClick={updater.openDialog}>
-                更新 v{updater.update.version}
-              </button>
-            ) : null}
+            )}
             <button
               className="cover-button"
               onClick={() => setCoverOpen(true)}
@@ -1169,22 +1200,25 @@ export default function App() {
                 <path d="M60 8 C88 8 108 44 108 82 C108 116 86 142 60 142 C34 142 12 116 12 82 C12 44 32 8 60 8 Z" />
               </svg>
             </button>
-            <label className="switch" title="总闸：关掉后所有 agent 都不跑">
-              <input
-                type="checkbox"
-                checked={config.scheduler.enabled}
-                onChange={(e) => toggleMaster(e.target.checked)}
-              />
-              <span>签到总闸</span>
-            </label>
-            <label className="switch" title="后台自动同步积分 / 签到状态 / 账号资料">
-              <input
-                type="checkbox"
-                checked={config.scheduler.syncEnabled}
-                onChange={(e) => toggleSync(e.target.checked)}
-              />
-              <span>自动同步</span>
-            </label>
+            <div className="topbar-switches">
+              <label className="switch" title="总闸：关掉后所有 agent 都不跑">
+                <input
+                  type="checkbox"
+                  checked={config.scheduler.enabled}
+                  onChange={(e) => toggleMaster(e.target.checked)}
+                />
+                <span>签到总闸</span>
+              </label>
+              <span className="topbar-switch-sep" aria-hidden="true" />
+              <label className="switch" title="后台自动同步积分 / 签到状态 / 账号资料">
+                <input
+                  type="checkbox"
+                  checked={config.scheduler.syncEnabled}
+                  onChange={(e) => toggleSync(e.target.checked)}
+                />
+                <span>自动同步</span>
+              </label>
+            </div>
             <button className="btn primary" onClick={runAll} disabled={busy}>
               {busy ? "签到中…" : "一键全部签到"}
             </button>
@@ -1266,8 +1300,8 @@ export default function App() {
                 : agentSettings?.resume?.kind === "restart" ? "重试启动" : "打开客户端",
               onContinue: agentSettings?.resume ? continueAgentSettings : undefined,
             }}
-            liveFree={liveFree}
-            onRefreshFree={() => void refreshFreeModels()}
+            liveFree={liveFreeByProvider[current.provider.id] ?? null}
+            onRefreshFree={() => void refreshFreeModels(current.provider.id)}
           />
         ) : (
           <div className="empty-state">

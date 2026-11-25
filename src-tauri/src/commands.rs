@@ -93,7 +93,7 @@ impl AppState {
         self.providers.iter().find(|p| p.id() == id).cloned()
     }
 
-    fn update_config(
+    pub(crate) fn update_config(
         &self,
         update: impl FnOnce(&mut AppConfig) -> Result<(), String>,
     ) -> Result<AppConfig, String> {
@@ -543,6 +543,12 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             display_account.label = name.clone();
             relabel.push(display_account.clone());
         }
+        if account.provider == "zcode" && account.origin == "本机 Zcode 登录态" {
+            display_account.origin = "本机 ZCode 登录态".to_string();
+            if account.label == "Zcode 账号" {
+                display_account.label = "ZCode 账号".to_string();
+            }
+        }
 
         if let Some(s) = &fetched.status {
             if s.state == ClaimState::Claimed {
@@ -800,7 +806,7 @@ pub async fn checkin_all_inner(app: &AppHandle, state: &AppState) -> Result<Task
         let Some(provider) = state.provider(&account.provider) else {
             continue;
         };
-        // 只展示 + 提醒的平台（Zcode）不进「一键全部签到」
+        // 只展示 + 提醒的平台（ZCode）不进「一键全部签到」
         if !provider.supports_claim() {
             continue;
         }
@@ -1515,7 +1521,7 @@ fn notify_checkin_failure(
     );
 }
 
-/// 领取提醒：给「不代领」的平台（Zcode）用。
+/// 领取提醒：给「不代领」的平台（ZCode）用。
 ///
 /// 一旦上游出现可领取的套餐就提醒一次（每天每账号最多一条）。
 /// **不写死时间** —— 实测开放时刻并不固定（18:11 / 19:33 / 19:49 / 20:25 都见过），
@@ -1989,6 +1995,15 @@ pub async fn fetch_workbuddy_free_models(
         .credential("workbuddy", &account.id)
         .map_err(|e| e.to_string())?;
     crate::providers::workbuddy::fetch_free_models(&cred)
+        .await
+        .map_err(|e| e.to_string())
+}
+
+/// 实时核对 Qoder CN 当前免费模型（官方活动文档，不需要账号）。
+#[tauri::command]
+pub async fn fetch_qoder_free_models() -> Result<Vec<crate::providers::qoder::FreeModel>, String>
+{
+    crate::providers::qoder::fetch_free_models()
         .await
         .map_err(|e| e.to_string())
 }
@@ -2995,7 +3010,7 @@ async fn run_checkin(
         }
     };
 
-    // 只展示 + 提醒的平台（Zcode）不代领：领取要过官方客户端的阿里云验证码，
+    // 只展示 + 提醒的平台（ZCode）不代领：领取要过官方客户端的阿里云验证码，
     // 第三方做不了。直接按原状态返回，不碰 claim()。
     if !provider.supports_claim() {
         return AccountResult {
@@ -3111,7 +3126,7 @@ async fn sync_one(app: &AppHandle, state: &AppState, account: &Account) -> bool 
     // 签到状态（失败不致命，UI 里仍以 overview 的结果为准）
     let status = provider.status(account, &cred).await;
     if let Ok(status) = &status {
-        // 「不代领」的平台（Zcode）：出现可领取的套餐时提醒一次
+        // 「不代领」的平台（ZCode）：出现可领取的套餐时提醒一次
         notify_claim_reminder(app, provider.as_ref(), account, status);
     }
 
@@ -3219,7 +3234,7 @@ pub async fn scheduler_loop(app: AppHandle) {
                 if !agent_cfg.enabled || !agent_cfg.is_valid() {
                     continue;
                 }
-                // 只展示 + 提醒的平台（Zcode）不参与自动领取：
+                // 只展示 + 提醒的平台（ZCode）不参与自动领取：
                 // 领取要过官方客户端的阿里云验证码，第三方做不了。
                 if !state
                     .provider(&account.provider)
@@ -3379,7 +3394,7 @@ pub async fn scheduler_loop(app: AppHandle) {
 // ---------------------------------------------------------------------------
 
 /// 把所有「读本机客户端登录态」的平台账号导入账号池
-/// （MiniMax / Qoder / 妙手 / WorkBuddy / Zcode）。
+/// （MiniMax / Qoder / 妙手 / WorkBuddy / ZCode）。
 pub fn cli_import_local() -> Result<(), String> {
     let rt = tokio::runtime::Runtime::new().map_err(|e| e.to_string())?;
     rt.block_on(async {

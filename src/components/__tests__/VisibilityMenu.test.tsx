@@ -17,7 +17,7 @@ const providers: ProviderView[] = [
   },
   {
     id: "zcode",
-    name: "Zcode",
+    name: "ZCode",
     accent: "#111111",
     docsUrl: "",
     supportsDiscovery: false,
@@ -29,7 +29,7 @@ const providers: ProviderView[] = [
 ];
 
 describe("VisibilityMenu（平台显示管理）", () => {
-  it("Qoder / Zcode 默认只上首页；显式配置可覆盖，回调只带被改的字段", () => {
+  it("Qoder / ZCode 默认只上首页；显式配置可覆盖，回调只带被改的字段", () => {
     const onChange = vi.fn();
     render(
       <VisibilityMenu
@@ -46,13 +46,13 @@ describe("VisibilityMenu（平台显示管理）", () => {
     expect(
       (screen.getByRole("checkbox", { name: "Qoder CN 在启动页显示" }) as HTMLInputElement).checked
     ).toBe(false);
-    // Zcode 显式配置了 launch=true，覆盖平台默认
+    // ZCode 显式配置了 launch=true，覆盖平台默认
     const zcodeSidebar = screen.getByRole("checkbox", {
-      name: "Zcode 在侧栏显示",
+      name: "ZCode 在侧栏显示",
     }) as HTMLInputElement;
     expect(zcodeSidebar.checked).toBe(false);
     expect(
-      (screen.getByRole("checkbox", { name: "Zcode 在启动页显示" }) as HTMLInputElement).checked
+      (screen.getByRole("checkbox", { name: "ZCode 在启动页显示" }) as HTMLInputElement).checked
     ).toBe(true);
 
     fireEvent.click(zcodeSidebar);

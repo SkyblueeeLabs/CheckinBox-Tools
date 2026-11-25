@@ -149,7 +149,7 @@ pub enum CloseAction {
 /// 单个平台的显示开关（侧栏导航 / 首页卡片）。
 /// 隐藏只影响显示：自动签到与后台同步照常运行。
 /// 缺省条目按平台取默认值（见 `AgentVisibility::default_for`）：
-/// Qoder / 妙手 / Zcode 只在首页出现，其余平台三处都显示。
+/// Qoder / 妙手 / ZCode 只在首页出现，其余平台三处都显示。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentVisibility {
@@ -174,7 +174,7 @@ impl Default for AgentVisibility {
 
 impl AgentVisibility {
     /// 某平台在用户没配置过时的默认显示。
-    /// Qoder / 妙手 / Zcode 默认只上首页：侧栏和启动页不占位置，但仍可在
+    /// Qoder / 妙手 / ZCode 默认只上首页：侧栏和启动页不占位置，但仍可在
     /// 「管理平台显示」里手动打开。
     pub fn default_for(provider: &str) -> Self {
         if matches!(provider, "qoder" | "miaoshou" | "zcode") {
@@ -310,6 +310,9 @@ pub struct AppConfig {
     /// 每个平台的显示开关（侧栏 / 首页 / 启动页）；没列出的平台按平台默认值。
     #[serde(default)]
     pub agent_visibility: BTreeMap<String, AgentVisibility>,
+    /// 已经写入过应用内提醒的版本号（每个版本只发一次更新说明）。
+    #[serde(default)]
+    pub release_notes_version: Option<String>,
 }
 
 fn default_ui_refresh_seconds() -> u32 {
@@ -329,6 +332,7 @@ impl Default for AppConfig {
             notifications_enabled: true,
             ui_refresh_seconds: default_ui_refresh_seconds(),
             agent_visibility: BTreeMap::new(),
+            release_notes_version: None,
         }
     }
 }
@@ -498,7 +502,7 @@ mod tests {
             cfg.visibility_of("workbuddy"),
             AgentVisibility { sidebar: true, home: true, launch: true }
         );
-        // Qoder / 妙手 / Zcode：默认只上首页
+        // Qoder / 妙手 / ZCode：默认只上首页
         for id in ["qoder", "miaoshou", "zcode"] {
             assert_eq!(
                 cfg.visibility_of(id),

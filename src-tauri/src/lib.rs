@@ -25,6 +25,7 @@ pub mod commands;
 mod core;
 mod notifications;
 mod providers;
+pub mod release_notes;
 pub mod selftest;
 mod tray;
 
@@ -71,6 +72,7 @@ pub fn run() {
             commands::set_agent_order,
             commands::set_agent_visibility,
             commands::fetch_workbuddy_free_models,
+            commands::fetch_qoder_free_models,
             commands::set_agent_schedule,
             commands::set_scheduler_enabled,
             commands::set_sync_enabled,
@@ -131,6 +133,10 @@ pub fn run() {
         .setup(|app| {
             app.manage(commands::AppState::new());
             tray::setup(app.handle())?;
+            // 必须在托盘初始化之后：发布提醒会刷新托盘未读数
+            if let Err(err) = release_notes::publish_if_new(app.handle()) {
+                eprintln!("写入版本更新说明失败：{err}");
+            }
             // 正常启动显示主窗口；开机自启带 --silent 时只驻留托盘
             if !std::env::args().any(|arg| arg == "--silent") {
                 tray::show_main_window(app.handle())?;

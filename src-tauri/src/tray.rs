@@ -49,6 +49,10 @@ pub async fn take_window_request(app: AppHandle) -> Option<WindowRequest> {
 pub fn update_unread(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
+        // 启动早期（托盘还没建好）也可能触发刷新，这里不能 panic
+        let Some(tray_state) = handle.try_state::<TrayState>() else {
+            return;
+        };
         let Ok(count) = handle.state::<AppState>().inbox.unread_count() else {
             return;
         };
@@ -60,7 +64,7 @@ pub fn update_unread(app: &AppHandle) {
                 format!("CheckinBox · {count} 条未读提醒"),
             )
         };
-        let _ = handle.state::<TrayState>().notices.set_text(label);
+        let _ = tray_state.notices.set_text(label);
         if let Some(tray) = handle.tray_by_id("main") {
             let _ = tray.set_tooltip(Some(tooltip));
         }

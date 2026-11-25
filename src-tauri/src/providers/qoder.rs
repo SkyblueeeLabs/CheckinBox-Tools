@@ -1071,12 +1071,228 @@ fn urlenc(value: &str) -> String {
 }
 
 // ---------------------------------------------------------------------------
+// 免费模型（官方活动文档）
+// ---------------------------------------------------------------------------
+
+/// 官方活动文档站。客户端模型选择器的倍率走签名网关（第三方调不动），
+/// 但匿名模型的限时免费活动都会在文档站开一个 `events/*-free` 页面。
+const DOCS_BASE: &str = "https://docs.qoder.cn";
+const DOCS_SITEMAP: &str = "/sitemap.xml";
+/// 文档站更新不频繁，半小时拉一次足够。
+const FREE_EVENTS_TTL: std::time::Duration = std::time::Duration::from_secs(30 * 60);
+
+/// 官方活动页里的一条免费模型（与 WorkBuddy 的目录条目同形，前端共用渲染）。
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FreeModel {
+    pub id: String,
+    pub name: String,
+    /// 计费倍率原文（活动页写的是 0.0×）
+    pub credits: String,
+    pub free: bool,
+}
+
+type FreeModelCache = std::sync::Mutex<Option<(std::time::Instant, Vec<FreeModel>)>>;
+
+fn free_model_cache() -> &'static FreeModelCache {
+    static CACHE: std::sync::OnceLock<FreeModelCache> = std::sync::OnceLock::new();
+    CACHE.get_or_init(|| std::sync::Mutex::new(None))
+}
+
+/// 从官方活动文档核对当前正在进行的免费模型活动。
+///
+/// 拉 sitemap → 挑出 `events/*-free` 活动页 → 标题带「已结束」的跳过。
+/// 结果缓存 30 分钟；网络或解析失败时退回上次缓存（没有缓存才报错）。
+pub async fn fetch_free_models() -> Result<Vec<FreeModel>> {
+    if let Ok(guard) = free_model_cache().lock() {
+        if let Some((at, models)) = guard.as_ref() {
+            if at.elapsed() < FREE_EVENTS_TTL {
+                return Ok(models.clone());
+            }
+        }
+    }
+    match fetch_free_models_uncached().await {
+        Ok(models) => {
+            if let Ok(mut guard) = free_model_cache().lock() {
+                *guard = Some((std::time::Instant::now(), models.clone()));
+            }
+            Ok(models)
+        }
+        Err(err) => {
+            if let Ok(guard) = free_model_cache().lock() {
+                if let Some((_, models)) = guard.as_ref() {
+                    return Ok(models.clone());
+                }
+            }
+            Err(err)
+        }
+    }
+}
+
+async fn fetch_free_models_uncached() -> Result<Vec<FreeModel>> {
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(25))
+        .user_agent("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+        .build()?;
+    let xml = client
+        .get(format!("{DOCS_BASE}{DOCS_SITEMAP}"))
+        .send()
+        .await?
+        .error_for_status()?
+        .text()
+        .await?;
+    let mut out = Vec::new();
+    for slug in free_event_slugs(&xml) {
+        let Ok(resp) = client
+            .get(format!("{DOCS_BASE}/events/{slug}"))
+            .send()
+            .await
+        else {
+            continue;
+        };
+        let Ok(resp) = resp.error_for_status() else {
+            continue;
+        };
+        let Ok(html) = resp.text().await else {
+            continue;
+        };
+        let Some(title) = page_title(&html) else {
+            continue;
+        };
+        if title.contains("已结束") {
+            continue;
+        }
+        let Some(name) = free_model_name(&title).or_else(|| section_model_name(&html)) else {
+            continue;
+        };
+        out.push(FreeModel {
+            id: slug,
+            name,
+            credits: "0.0×".to_string(),
+            free: true,
+        });
+    }
+    Ok(out)
+}
+
+/// sitemap 里的中文站免费活动页（`events/*-free`，去掉 `/en/` 镜像与重复项）。
+fn free_event_slugs(xml: &str) -> Vec<String> {
+    const PREFIX: &str = "https://docs.qoder.cn/events/";
+    let mut out: Vec<String> = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find(PREFIX) {
+        let tail = &rest[start + PREFIX.len()..];
+        let end = tail
+            .find(|c: char| !(c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+            .unwrap_or(tail.len());
+        let slug = &tail[..end];
+        if slug.ends_with("-free") && !out.iter().any(|s| s == slug) {
+            out.push(slug.to_string());
+        }
+        rest = &tail[end.max(1)..];
+    }
+    out
+}
+
+fn page_title(html: &str) -> Option<String> {
+    let start = html.find("<title>")? + "<title>".len();
+    let rest = &html[start..];
+    let end = rest.find("</title>")?;
+    Some(rest[..end].trim().to_string())
+}
+
+/// 标题形如「匿名模型 HungerG 限时免费使用 - Qoder CN」。
+fn free_model_name(title: &str) -> Option<String> {
+    let start = title.find("匿名模型")? + "匿名模型".len();
+    let rest = title[start..].trim_start();
+    let end = rest
+        .find("限时免费")
+        .or_else(|| rest.find(' '))
+        .unwrap_or(rest.len());
+    let name = rest[..end].trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+/// 标题没写模型名时的兜底：「指定模型：匿名模型 HungerG，在模型选择器中显示为 HungerG。」
+fn section_model_name(html: &str) -> Option<String> {
+    const ANCHOR: &str = "指定模型</strong>";
+    let rest = html
+        .find(ANCHOR)
+        .map(|i| &html[i + ANCHOR.len()..])
+        .or_else(|| html.find("指定模型").map(|i| &html[i + "指定模型".len()..]))?;
+    let rest = rest.trim_start_matches(|c: char| c == '：' || c == ':' || c.is_whitespace());
+    let end = rest
+        .find(|c: char| c == '，' || c == ',' || c == '<' || c == '。')
+        .unwrap_or(rest.len());
+    let text = rest[..end].trim();
+    let name = text
+        .strip_prefix("匿名模型")
+        .map(str::trim_start)
+        .unwrap_or(text)
+        .trim();
+    (!name.is_empty()).then(|| name.to_string())
+}
+
+// ---------------------------------------------------------------------------
 // 测试
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn 从sitemap挑出中文站免费活动() {
+        let xml = r#"<urlset>
+          <url><loc>https://docs.qoder.cn/events/hungerg-free</loc></url>
+          <url><loc>https://docs.qoder.cn/events/qoduck-free</loc></url>
+          <url><loc>https://docs.qoder.cn/events/100credits</loc></url>
+          <url><loc>https://docs.qoder.cn/en/events/hungerg-free</loc></url>
+          <url><loc>https://docs.qoder.cn/events/hungerg-free</loc></url>
+          <url><loc>https://docs.qoder.cn/cli/models</loc></url>
+        </urlset>"#;
+        assert_eq!(
+            free_event_slugs(xml),
+            vec!["hungerg-free".to_string(), "qoduck-free".to_string()]
+        );
+    }
+
+    #[test]
+    fn 活动页标题能取到模型名() {
+        let html = "<html><head><title>匿名模型 HungerG 限时免费使用 - Qoder CN</title></head></html>";
+        let title = page_title(html).expect("应能取到标题");
+        assert!(!title.contains("已结束"));
+        assert_eq!(free_model_name(&title).as_deref(), Some("HungerG"));
+    }
+
+    #[test]
+    fn 已结束的活动标题带标记() {
+        let html = "<title>【已结束】匿名模型 Qoduck 限时免费体验 - Qoder CN</title>";
+        let title = page_title(html).expect("应能取到标题");
+        assert!(title.contains("已结束"));
+    }
+
+    #[test]
+    fn 标题没写模型名时用正文指定模型兜底() {
+        let html = "<li><strong>指定模型</strong>：匿名模型 HungerG，在模型选择器中显示为 HungerG。</li>";
+        assert_eq!(section_model_name(html).as_deref(), Some("HungerG"));
+    }
+
+    /// 真机验证：真实拉取官方活动文档（依赖网络与官方活动是否在办）。
+    #[tokio::test]
+    #[ignore = "依赖本机网络 + Qoder 官方活动文档，手动跑：cargo test -- --ignored 实际活动文档能核对免费模型"]
+    async fn 实际活动文档能核对免费模型() {
+        let models = fetch_free_models().await.expect("拉取官方活动文档失败");
+        for m in &models {
+            assert!(m.free);
+            assert_eq!(m.credits, "0.0×");
+            assert!(!m.name.is_empty());
+        }
+        assert!(
+            models.iter().any(|m| !m.name.is_empty()),
+            "当前应至少有一个进行中的免费模型活动"
+        );
+    }
 
     #[test]
     fn browser_import_requires_real_account_identity_and_refresh_token() {

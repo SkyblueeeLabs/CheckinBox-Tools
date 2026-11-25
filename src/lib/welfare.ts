@@ -23,7 +23,7 @@ export interface WelfareMeta {
   dailyMode?: "auto" | "manual";
   /** 每日签到的平台说明（开放时间等） */
   dailyNote?: string;
-  /** 领取/生效时段（如 Zcode 的 19:00 开放、23:00 生效） */
+  /** 领取/生效时段（如 ZCode 的 19:00 开放、23:00 生效） */
   timing?: string;
   /** 每日开放领取的小时（UTC+8），仅手动领取平台用于实时提示 */
   openHour?: number;
@@ -79,7 +79,7 @@ export interface FreeModelInfo {
   models?: string[];
   /** current=有免费模型；none=暂无免费模型 */
   status: "current" | "none";
-  /** 清单由实时接口核对（WorkBuddy 模型目录） */
+  /** 清单由实时来源核对（WorkBuddy 模型目录 / Qoder 官方活动文档） */
   live?: boolean;
   note?: string;
   asOf?: string;
@@ -103,13 +103,14 @@ export const FREE_MODELS: Record<string, FreeModelInfo> = {
   },
   zcode: { status: "none", asOf: "2026-11-16" },
   minimax: { status: "none", asOf: "2026-11-16" },
-  qoder: { status: "none", asOf: "2026-11-16" },
+  // 实时清单由 fetch_qoder_free_models 从官方活动文档（events/*-free）核对
+  qoder: { status: "current", live: true, asOf: "2026-11-25" },
   trae: { status: "none", asOf: "2026-11-19" },
 };
 
 /** 每日开放领取的实时状态（现在可领 / 未到点）。
  *
- * 只给**需要手动领取**的平台用（Zcode）：自动领取的平台由工具在时间窗内处理，
+ * 只给**需要手动领取**的平台用（ZCode）：自动领取的平台由工具在时间窗内处理，
  * 时间到了不代表还没领，再显示「现在可领」会误报；其余平台返回 null。
  */
 export function welfareOpenState(
@@ -170,7 +171,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
             group.schedule.endMinute
           )}`
         : "";
-    // 时段说明（Zcode 的 19:00 开放 / 23:00 生效）优先于普通说明
+    // 时段说明（ZCode 的 19:00 开放 / 23:00 生效）优先于普通说明
     note = meta.timing ?? [meta.dailyNote, window].filter(Boolean).join(" · ");
     const modeText = meta.dailyMode === "manual" ? "手动领取" : "自动领取";
 
@@ -182,7 +183,7 @@ export function welfareOf(group: AgentGroup): WelfareView {
     const cycleBase = cycle?.length ? Math.min(...cycle.map((d) => d.points)) : null;
     const cycleBonus = cycle?.filter((d) => d.points > (cycleBase ?? 0)) ?? [];
 
-    // **单账号**数量：各账号今日积分（Zcode 为每日 Token 额度），0 = 未加载/未开放。
+    // **单账号**数量：各账号今日积分（ZCode 为每日 Token 额度），0 = 未加载/未开放。
     const amounts = group.accounts.map((a) => {
       if (group.provider.id === "zcode") return a.quota?.totalGranted ?? 0;
       // 有周期面板时按基础档报数（加成单独成条，不把加成说成每天都有）

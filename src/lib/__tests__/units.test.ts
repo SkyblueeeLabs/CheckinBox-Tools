@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { fmtCompact, fmtPoints, fmtQuotaAmount, quotaLabels, quotaUnit } from "../api";
 
-describe("quotaUnit / quotaLabels（Zcode 额度是 Token，其它平台是积分）", () => {
+describe("quotaUnit / quotaLabels（ZCode 额度是 Token，其它平台是积分）", () => {
   it("zcode 判定为 Token，标签不带「总」字", () => {
     expect(quotaUnit("zcode")).toBe("Token");
     expect(quotaLabels("zcode")).toEqual({

@@ -129,7 +129,7 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.benefits[0].label).toBe("单账号 +100 Credits/日");
   });
 
-  it("Zcode：单账号每日 Token 额度 + 需手动（官方客户端领取）+ 领取/生效时段", () => {
+  it("ZCode：单账号每日 Token 额度 + 需手动（官方客户端领取）+ 领取/生效时段", () => {
     const w = welfareOf(group("zcode", false, [account(0, 300_000_000)]));
     expect(w.benefits[0].label).toBe("单账号 +3亿 Token/日");
     expect(w.benefits[0].mode).toBe("manual");

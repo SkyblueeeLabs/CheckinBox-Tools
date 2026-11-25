@@ -1,4 +1,4 @@
-//! Zcode（Z.ai / 智谱）适配器。
+//! ZCode（Z.ai / 智谱）适配器。
 //!
 //! 产品标识：`zcode`，数据目录 `~/.zcode`，客户端 `ZCode.exe`。
 //!
@@ -13,7 +13,7 @@
 //! **鉴权方式**：请求头带 `authorization: Bearer <jwt>` + `x-device-mid` +
 //! `x-zcode-app-version` 等（照抄官方客户端，见 dsh-zcode-free 的逆向）。
 //!
-//! **重要**：Zcode 的每日额度（3 亿 GLM-5.3-Flash Token）**只能在官方客户端
+//! **重要**：ZCode 的每日额度（3 亿 GLM-5.3-Flash Token）**只能在官方客户端
 //! 领取** —— 领取接口要过阿里云验证码，第三方无法自动完成。所以本适配器
 //! **只做「余额展示 + 领取提示」**，`supports_claim()` 返回 `false`，
 //! 调度器和「一键全部签到」都不会调用 `claim()`。
@@ -37,7 +37,7 @@ const BASE: &str = "https://zcode.z.ai";
 const BALANCE_PATH: &str = "/api/v1/zcode-plan/billing/balance";
 /// 官方客户端版本号。上游可能按它做兼容判断，客户端大版本升级后需要同步。
 const APP_VERSION: &str = "3.17.2";
-/// `credentials.json` 里 JWT 所在的键（Zcode 自己的命名）。
+/// `credentials.json` 里 JWT 所在的键（ZCode 自己的命名）。
 const JWT_KEY: &str = "zcodejwttoken";
 const CREDENTIALS_REL: &str = ".zcode/v2/credentials.json";
 const ONBOARDING_REL: &str = ".zcode/v2/onboarding-record.json";
@@ -60,7 +60,7 @@ fn onboarding_path() -> Option<std::path::PathBuf> {
 
 /// 候选 seed，按优先级排列。
 ///
-/// Zcode 桌面端用 `zcode-credential-fallback:<platform>:<homedir>:<username>`
+/// ZCode 桌面端用 `zcode-credential-fallback:<platform>:<homedir>:<username>`
 /// 当 AES 密钥的 seed（见 dsh-zcode-free 的逆向）。两个坑：
 ///   * `os.platform()` 在 Windows 上是 `win32`，而 Rust 的
 ///     `std::env::consts::OS` 是 `windows`，需要映射；
@@ -409,7 +409,7 @@ fn active_plan<'a>(data: &'a Value, now: i64) -> Option<&'a Value> {
 }
 
 fn plan_name(p: &Value) -> String {
-    p["name"].as_str().unwrap_or("Zcode 套餐").to_string()
+    p["name"].as_str().unwrap_or("ZCode 套餐").to_string()
 }
 
 fn plan_model(p: &Value) -> String {
@@ -445,7 +445,7 @@ fn parse_status(data: &Value, now: i64) -> CheckinStatus {
             state: ClaimState::Claimable,
             points: 0,
             streak_days: 0,
-            message: "当前无生效中的套餐，点「打开 Zcode 领取」去官方客户端领取".to_string(),
+            message: "当前无生效中的套餐，点「打开 ZCode 领取」去官方客户端领取".to_string(),
             day_index: None,
             bonus_points: 0,
             days: Vec::new(),
@@ -465,7 +465,7 @@ fn parse_claimable(data: &Value) -> Option<CheckinStatus> {
         points: 0,
         streak_days: 0,
         message: format!(
-            "可领取 {} · {} {}，点「打开 Zcode 领取」",
+            "可领取 {} · {} {}，点「打开 ZCode 领取」",
             plan_name(p),
             plan_model(p),
             fmt_units(grant as f64)
@@ -506,7 +506,7 @@ fn parse_quota(data: &Value, now: i64) -> Quota {
     }
 
     if buckets.is_empty() {
-        return Quota::empty("暂无生效中的 Zcode 套餐，可打开客户端领取每日额度");
+        return Quota::empty("暂无生效中的 ZCode 套餐，可打开客户端领取每日额度");
     }
 
     let mut items = Vec::new();
@@ -552,7 +552,7 @@ fn parse_quota(data: &Value, now: i64) -> Quota {
         message: format!(
             "{} 剩余 {} / 共 {}",
             if label.is_empty() {
-                "Zcode 额度"
+                "ZCode 额度"
             } else {
                 &label
             },
@@ -615,17 +615,17 @@ impl ZcodeProvider {
         if !status.is_success() {
             let code = body["code"].as_i64().unwrap_or(0);
             if status.as_u16() == 401 || code == 4001 {
-                return Err(anyhow!("Zcode 登录态已过期，请打开 Zcode 客户端重新登录"));
+                return Err(anyhow!("ZCode 登录态已过期，请打开 ZCode 客户端重新登录"));
             }
             return Err(anyhow!(
-                "Zcode 余额接口返回 HTTP {}：{}",
+                "ZCode 余额接口返回 HTTP {}：{}",
                 status.as_u16(),
                 body["msg"].as_str().unwrap_or("")
             ));
         }
         if body["code"].as_i64().unwrap_or(-1) != 0 {
             return Err(anyhow!(
-                "Zcode 余额接口返回 {}：{}",
+                "ZCode 余额接口返回 {}：{}",
                 body["code"],
                 body["msg"].as_str().unwrap_or("")
             ));
@@ -654,17 +654,17 @@ impl ZcodeProvider {
         if !status.is_success() {
             let code = body["code"].as_i64().unwrap_or(0);
             if status.as_u16() == 401 || code == 4001 {
-                return Err(anyhow!("Zcode 登录态已过期，请打开 Zcode 客户端重新登录"));
+                return Err(anyhow!("ZCode 登录态已过期，请打开 ZCode 客户端重新登录"));
             }
             return Err(anyhow!(
-                "Zcode 预览接口返回 HTTP {}：{}",
+                "ZCode 预览接口返回 HTTP {}：{}",
                 status.as_u16(),
                 body["msg"].as_str().unwrap_or("")
             ));
         }
         if body["code"].as_i64().unwrap_or(-1) != 0 {
             return Err(anyhow!(
-                "Zcode 预览接口返回 {}：{}",
+                "ZCode 预览接口返回 {}：{}",
                 body["code"],
                 body["msg"].as_str().unwrap_or("")
             ));
@@ -680,7 +680,7 @@ impl Provider for ZcodeProvider {
     }
 
     fn display_name(&self) -> &'static str {
-        "Zcode"
+        "ZCode"
     }
 
     fn accent(&self) -> &'static str {
@@ -691,7 +691,7 @@ impl Provider for ZcodeProvider {
         "https://zcode.z.ai"
     }
 
-    /// Zcode 的每日额度只能走官方客户端的阿里云验证码领取，本工具不代领。
+    /// ZCode 的每日额度只能走官方客户端的阿里云验证码领取，本工具不代领。
     fn supports_claim(&self) -> bool {
         false
     }
@@ -711,7 +711,7 @@ impl Provider for ZcodeProvider {
             label: name,
             created_at: chrono::Utc::now().timestamp(),
             last_used: None,
-            origin: "本机 Zcode 登录态".to_string(),
+            origin: "本机 ZCode 登录态".to_string(),
         };
         let cred = json!({ "jwt": jwt, "user_id": user_id });
         Ok(vec![(account, cred)])
@@ -735,7 +735,7 @@ impl Provider for ZcodeProvider {
     async fn claim(&self, _account: &Account, _cred: &Value) -> Result<ClaimOutcome> {
         // 不会被调用（supports_claim() == false），这里只是如实说明。
         Ok(ClaimOutcome::failed(
-            "Zcode 需在官方客户端领取，本工具不提供自动领取",
+            "ZCode 需在官方客户端领取，本工具不提供自动领取",
         ))
     }
 
@@ -955,7 +955,7 @@ mod tests {
     /// 默认不跑。手动验证：
     /// `cargo test -- --ignored 真实余额接口能取到 --nocapture`
     #[tokio::test]
-    #[ignore = "依赖本机网络 + Zcode 登录态"]
+    #[ignore = "依赖本机网络 + ZCode 登录态"]
     async fn 真实余额接口能取到() {
         let body = match ZcodeProvider::new().fetch_balance().await {
             Ok(v) => v,
@@ -981,7 +981,7 @@ mod tests {
     ///
     /// `cargo test -- --ignored 真实预览接口能取到 --nocapture`
     #[tokio::test]
-    #[ignore = "依赖本机网络 + Zcode 登录态"]
+    #[ignore = "依赖本机网络 + ZCode 登录态"]
     async fn 真实预览接口能取到() {
         let body = match ZcodeProvider::new().fetch_preview().await {
             Ok(v) => v,

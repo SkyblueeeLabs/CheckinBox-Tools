@@ -6,15 +6,15 @@ import zcode from "../assets/agents/zcode.png";
 import trae from "../assets/agents/trae.png";
 
 /**
- * 各平台的官方图标（从本机客户端安装目录里取的原版，统一 96×96）：
+ * 各平台的官方图标（从本机客户端提取）：
  *   MiniMax Code → 客户端 resources/icon.ico
  *   Qoder CN     → 客户端 application-icons/qoder-light.png
  *   妙手         → 客户端 resources/icon.png
  *   WorkBuddy    → 客户端 WorkBuddy.exe 的图标资源（96×96 帧）。注意本机还装着
  *                  旧版 CodeBuddy（D:\Programs\CodeBuddy），它的紫色吉祥物和
  *                  WorkBuddy 的绿色不是同一个图标，别拿错 exe
- *   Zcode        → 客户端 resources/icon_windows.png（1024×1024 → 96×96）
- *   Trae CN      → 客户端 Trae CN.exe 的图标资源（32×32 放大到 96×96）
+ *   ZCode        → 客户端 resources/icon_windows.png（1024×1024 → 96×96）
+ *   Trae CN      → 客户端 Trae CN.exe 图标资源中的原生 512×512 PNG
  */
 export const AGENT_ICONS: Record<string, string> = {
   minimax,

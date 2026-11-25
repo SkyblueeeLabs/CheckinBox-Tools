@@ -66,7 +66,7 @@ fn spec_of(provider: &str) -> Option<ClientSpec> {
             legacy_paths: &[],
         }),
         "zcode" => Some(ClientSpec {
-            // 智谱 Zcode（Z.ai），安装目录名 `ZCode`
+            // 智谱 ZCode（Z.ai），安装目录名 `ZCode`
             exe_names: &["ZCode.exe"],
             dir_keywords: &["zcode"],
             legacy_paths: &[r"D:\Program Files\ZCode\ZCode.exe"],

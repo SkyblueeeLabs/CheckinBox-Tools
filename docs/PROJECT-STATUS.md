@@ -12,7 +12,7 @@
 - **是什么**：Windows 桌面工具（Tauri 2 + React 18 + Rust），把本机已登录的 AI 编程客户端
   接进来，统一看积分 + 按平台自己的活动刷新时刻自动签到 + 看流水和趋势。
 - **现在能跑**：MiniMax Code、Qoder CN、WorkBuddy、妙手 四个平台的「账号接入 / 签到 /
-  积分 / 趋势 / 流水」全部打通；Zcode 为后加，只做「余额展示 + 领取提醒」（**不代领**，
+  积分 / 趋势 / 流水」全部打通；ZCode 为后加，只做「余额展示 + 领取提醒」（**不代领**，
   领取必须走官方客户端的阿里云验证码，见 §3）；能出独立 exe 和 NSIS/MSI 安装包。
   （WorkBuddy 为后加：积分已真机验证，换号和聊天同步的端到端待复验，见 §8.3）
 - **MiniMax 链路已加固**（2026-11-12）：客户端运行态三态守卫、多代备份可回滚、
@@ -49,8 +49,8 @@
 | Qoder CN：本机客户端导入 / 设备授权 / 活动领取 / 积分 / 真实昵称 / token 自动续期 | ✅ 真机验证 | `providers/qoder.rs` |
 | 妙手：本机导入 / 积分（**无每日签到**） | ✅ 真机验证 | `providers/miaoshou.rs` |
 | WorkBuddy（CodeBuddy）：Cockpit 账号库多账号导入 / 本机客户端导入 / 积分 / 签到（当前账号域未开活动时如实显示） | ✅ 真机验证（4 账号积分正常） | `providers/workbuddy.rs` |
-| Zcode（智谱 Z.ai）：本机导入 / **余额展示 + 领取提醒**。**刻意不代领** —— 每日 3 亿 GLM-5.3-Flash Token 的领取要过阿里云验证码，只有官方客户端的 Electron 渲染进程能生成 | ✅ 真机验证（解密 + 余额/预览接口已通） | `providers/zcode.rs` |
-| Zcode 领取提醒（轮询 `billing/preview`，出现可领取套餐时写入应用内提醒，每天每账号一条） | ✅ 接口已通 | `commands.rs::notify_claim_reminder` |
+| ZCode（智谱 Z.ai）：本机导入 / **余额展示 + 领取提醒**。**刻意不代领** —— 每日 3 亿 GLM-5.3-Flash Token 的领取要过阿里云验证码，只有官方客户端的 Electron 渲染进程能生成 | ✅ 真机验证（解密 + 余额/预览接口已通） | `providers/zcode.rs` |
+| ZCode 领取提醒（轮询 `billing/preview`，出现可领取套餐时写入应用内提醒，每天每账号一条） | ✅ 接口已通 | `commands.rs::notify_claim_reminder` |
 | 凭据 DPAPI 加密落盘 | ✅ | `core/dpapi.rs` + `core/store.rs` |
 | Electron safeStorage（OSCrypt v10）加解密 | ✅ 有单测 + selftest roundtrip | `core/os_crypt.rs` |
 | 账号池（多账号 / 当前账号 / 移除） | ✅ | `core/store.rs`、`core/config.rs` |
@@ -60,7 +60,7 @@
 | 签到流水（按月 JSONL，按 agent 过滤） | ✅ | `core/logging.rs`、`components/LogPanel.tsx` |
 | 积分趋势（快照 + 迷你图 + 悬浮数值） | ✅ | `core/quota_history.rs`、`components/TrendLine.tsx` |
 | 积分预警阈值（低于阈值标红） | ✅ | `config.rs::alert_threshold_of` |
-| 客户端换号（关客户端→捕获→写入→启动） | ✅ **四个平台全支持**（Qoder 走 safeStorage 解密重加密；WorkBuddy 5.6+ 走共享 auth 文件的官方加密信封读写、5.6 前走 state.vscdb secret 键；MiniMax 写前强制保活，2026-11-05 修复「切换后丢账号态」）；Zcode 单账号，无换号入口 | `core/client_switch.rs`、`core/wb_session.rs`、`commands.rs::switch_cred_guard` |
+| 客户端换号（关客户端→捕获→写入→启动） | ✅ **四个平台全支持**（Qoder 走 safeStorage 解密重加密；WorkBuddy 5.6+ 走共享 auth 文件的官方加密信封读写、5.6 前走 state.vscdb secret 键；MiniMax 写前强制保活，2026-11-05 修复「切换后丢账号态」）；ZCode 单账号，无换号入口 | `core/client_switch.rs`、`core/wb_session.rs`、`commands.rs::switch_cred_guard` |
 | 换号会话保留（WorkBuddy 迁移开关；Qoder 本机会话与工作区目录默认共享、切号不搬库） | ✅ 有 WorkBuddy 合并与备份测试 | `core/chat_sync.rs` |
 | 历史备份管理（设置页 tab：按平台列出每次换号备份，逐条/按天批量删除） | ✅ 有前端测试（只列 `_backups`，账号归档不可删） | `components/BackupPanel.tsx` |
 | 换号前检测客户端是否在运行（运行则拦截） | ✅ 已实测（Toolhelp32 快照） | `core/launcher.rs::client_process_state`（三态）、`is_running`（布尔兼容层） |
@@ -69,7 +69,7 @@
 | MiniMax 换号备份改成**多代成组**（`auth.json` + `auth-state.json` 同代，可列出/回滚/删除/裁剪） | ✅ 有单测 | `core/client_backup.rs`、`commands.rs` |
 | MiniMax 设备授权导入记录客户端登录态路径（`auth_file`，只记路径不取凭据） | ✅ | `providers/minimax.rs::local_auth_path` |
 | 客户端 exe 动态定位（App Paths 注册表 + 目录扫描 + 兜底） | ✅ 已实测 | `core/launcher.rs` |
-| 客户端当前登录账号检测（只读） | ✅ 四个平台（Qoder 优先解密 auth.v1.dat；WorkBuddy 读 state.vscdb；Zcode 单账号，返回 None） | `core/client_switch.rs::detect` |
+| 客户端当前登录账号检测（只读） | ✅ 四个平台（Qoder 优先解密 auth.v1.dat；WorkBuddy 读 state.vscdb；ZCode 单账号，返回 None） | `core/client_switch.rs::detect` |
 | 设置页（卡片默认收起，点标题展开；同步 / 调度 / 关闭行为 / 数据 / 说明） | ✅ 有前端测试 + 真机验证 | `SettingsPanel.tsx` |
 | 动效规范（统一缓动、<300ms、prefers-reduced-motion、@starting-style 入场） | ✅ 真机验证（computed style + 媒体模拟） | `styles.css` |
 | 签到记录（默认收起，点标题展开；标题旁显示条数） | ✅ 有前端测试 | `LogPanel.tsx` |
@@ -82,7 +82,7 @@
 | 关闭窗口行为（每次询问 / 最小化到托盘 / 直接退出，可记住选择） | ✅ 真机验证 | `lib.rs` + `CloseConfirmDialog.tsx`、`SettingsPanel.tsx` |
 | 前端事件通道（签到进度 toast / 自动同步刷新 / 关闭确认） | ✅ 真机验证（此前缺少 capabilities，事件被 ACL 静默拒绝） | `src-tauri/capabilities/default.json` |
 | 首页总览（全局指标卡 + 各 agent 积分卡，默认落地页） | ✅ | `DashboardPanel.tsx` |
-| 福利画像（各 agent 卡片：**单账号**每天多少 / 自动还是需手动 / 节奏与时间窗） | ✅ 前端单测；数量为实时（**单账号**今日积分，各账号不同时给区间；多账号合计放悬浮说明；Zcode 取单账号每日 Token 额度），节奏为平台规则（`lib/welfare.ts`）；Zcode 标注「19:00 开放领取 · 23:00-次日9:00 生效」 | `lib/welfare.ts`、`DashboardPanel.tsx`；qoder 已领取时也上报当天积分（`Cycle::Claimed(points)`） |
+| 福利画像（各 agent 卡片：**单账号**每天多少 / 自动还是需手动 / 节奏与时间窗） | ✅ 前端单测；数量为实时（**单账号**今日积分，各账号不同时给区间；多账号合计放悬浮说明；ZCode 取单账号每日 Token 额度），节奏为平台规则（`lib/welfare.ts`）；ZCode 标注「19:00 开放领取 · 23:00-次日9:00 生效」 | `lib/welfare.ts`、`DashboardPanel.tsx`；qoder 已领取时也上报当天积分（`Cycle::Claimed(points)`） |
 | 侧栏 agent 拖拽调序（pointer 自实现；顺序落盘 config.agentOrder） | ✅ 有单测 | `config.rs::sort_provider_ids`、`Sidebar.tsx` |
 | 浮动卡跟手 DOM 直改（绕过 setState 帧延迟，漂移实测 ±1px） | ✅ | `Sidebar.tsx` |
 | 账号小卡片（收起关键信息 + 点击展开详情） | ✅ 有前端测试 | `AccountCard.tsx` |
@@ -90,7 +90,7 @@
 | 命令行入口（`--selftest` / `--import-local` / `--device-auth` / `--switch-client`） | ✅ | `main.rs` |
 | 独立 exe / NSIS / MSI 打包 | ✅ | 见 README「快速开始」 |
 | 单元测试 | ✅ Rust **112 passed / 0 failed / 15 ignored**（诊断测试默认跳过）；前端 **144 passed** | `cargo test --lib`、`npx vitest run` |
-| 前端自动化测试 | ✅ 103 个（分组聚合 + 账号卡/签到记录渲染/折叠 + 聊天同步开关 + 设置页 tab/折叠/关闭行为/通知开关 + 关闭确认框 + 备份管理 + 到期计算/到期文案/总览到期列表 + Qoder 本地批次 + Zcode 不代领分支） | `npm test` |
+| 前端自动化测试 | ✅ 103 个（分组聚合 + 账号卡/签到记录渲染/折叠 + 聊天同步开关 + 设置页 tab/折叠/关闭行为/通知开关 + 关闭确认框 + 备份管理 + 到期计算/到期文案/总览到期列表 + Qoder 本地批次 + ZCode 不代领分支） | `npm test` |
 | CI | ❌ 无 | — |
 
 ---

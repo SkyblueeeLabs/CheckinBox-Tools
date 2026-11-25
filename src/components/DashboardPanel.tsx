@@ -36,11 +36,11 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
     homeVisible(x.view.account.provider)
   );
   const totalExpiring = expiring.reduce((s, x) => s + x.credits.remaining, 0);
-  // 到期汇总的计量单位：全部同一单位就说它，混合（Zcode Token + 其它积分）就标出来
+  // 到期汇总的计量单位：全部同一单位就说它，混合（ZCode Token + 其它积分）就标出来
   const expiringUnits = [...new Set(expiring.map((x) => quotaUnit(x.view.account.provider)))];
   const expiringUnitText = expiringUnits.length === 1 ? expiringUnits[0] : expiringUnits.join("+");
 
-  // 全局汇总混着积分和 Token（Zcode 一个平台就是 3 亿级），紧凑展示 + 悬停看精确值
+  // 全局汇总混着积分和 Token（ZCode 一个平台就是 3 亿级），紧凑展示 + 悬停看精确值
   const stats = [
     { label: "剩余总积分", value: fmtCompact(totalRemaining), full: fmtPoints(totalRemaining) },
     { label: "累计发放总积分", value: fmtCompact(totalGranted), full: fmtPoints(totalGranted) },
@@ -130,7 +130,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
         {visibleGroups.map((g) => {
           const icon = agentIcon(g.provider.id);
           const allClaimed = g.accounts.length > 0 && g.claimedToday === g.accounts.length;
-          // 不代领的平台（Zcode）说「领取」，其它说「签」
+          // 不代领的平台（ZCode）说「领取」，其它说「签」
           const verb = g.provider.supportsClaim ? "签" : "领取";
           const stateText = (() => {
             if (g.accounts.length === 0) return "暂无账号";

@@ -10,7 +10,7 @@ export interface QuotaCardProps {
   error?: string | null;
   loading?: boolean;
   onRefresh?: () => void;
-  /** 平台 id：决定额度单位（Zcode 是 Token，其它平台是积分）与数字格式 */
+  /** 平台 id：决定额度单位（ZCode 是 Token，其它平台是积分）与数字格式 */
   providerId?: string;
   /** 积分预警阈值 */
   alertThreshold?: number;
@@ -39,7 +39,7 @@ export default function QuotaCard({
   onGroup,
 }: QuotaCardProps) {
   const labels = quotaLabels(providerId);
-  // Token 平台（Zcode）数值是 3 亿级，缩写展示；精确值放悬停提示
+  // Token 平台（ZCode）数值是 3 亿级，缩写展示；精确值放悬停提示
   const fmt = (n: number) => fmtQuotaAmount(n, providerId);
   // 悬停提示里的精确值：WorkBuddy 有小数，不能取整（否则和主数字对不上）
   const exact = (n: number) => (providerId === "workbuddy" ? fmt(n) : fmtPoints(n));

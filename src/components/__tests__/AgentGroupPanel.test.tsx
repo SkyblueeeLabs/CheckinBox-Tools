@@ -145,11 +145,11 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
   });
 });
 
-describe("不代领的平台（Zcode）", () => {
+describe("不代领的平台（ZCode）", () => {
   it("不显示「自动签到」开关，改成一句说明", () => {
     renderSettings(
       group({
-        provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }),
+        provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }),
       })
     );
     expect(screen.queryByText("自动签到")).not.toBeInTheDocument();
@@ -159,7 +159,7 @@ describe("不代领的平台（Zcode）", () => {
   it("面板副标题说「今日已领取」而不是「今日已签」", () => {
     renderPanel(
       group({
-        provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }),
+        provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }),
         schedule: { ...group().schedule, todayClaimed: 1 },
       })
     );
@@ -184,11 +184,11 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     expect(within(brief).getByText(/核对 2026-11/)).toBeInTheDocument();
   });
 
-  it("Zcode：每日限时 Token + 开放状态 chip + 暂无免费模型", () => {
+  it("ZCode：每日限时 Token + 开放状态 chip + 暂无免费模型", () => {
     renderPanel(
-      group({ provider: provider({ id: "zcode", name: "Zcode", supportsClaim: false }) })
+      group({ provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }) })
     );
-    const brief = screen.getByRole("note", { name: "Zcode 福利" });
+    const brief = screen.getByRole("note", { name: "ZCode 福利" });
     expect(within(brief).getByText("每日")).toBeInTheDocument();
     expect(within(brief).getByText("手动领取")).toBeInTheDocument();
     expect(within(brief).getByText(/19:00 开放领取/)).toBeInTheDocument();
@@ -288,5 +288,44 @@ describe("AgentGroupPanel（福利统一口径：先积分/额度，后免费模
     const brief = screen.getByRole("note", { name: "WorkBuddy 福利" });
     expect(within(brief).getByText(/实时核对不可用/)).toBeInTheDocument();
     expect(within(brief).getByText(/有免费模型/)).toBeInTheDocument();
+  });
+
+  it("Qoder：官方活动文档核对出的免费模型按 live chip 展示", () => {
+    const onRefreshFree = vi.fn();
+    renderPanel(
+      group({ provider: provider({ id: "qoder", name: "Qoder CN" }) }),
+      noop,
+      {
+        liveFree: {
+          models: [
+            { id: "hungerg-free", name: "HungerG", credits: "0.0×", free: true },
+            { id: "qwen4max", name: "Qwen4-Max", credits: "0.4×", free: false },
+          ],
+          fetchedAt: Date.now(),
+          loading: false,
+          error: null,
+        },
+        onRefreshFree,
+      }
+    );
+    const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
+    expect(within(brief).getByText("HungerG")).toBeInTheDocument();
+    expect(within(brief).queryByText("Qwen4-Max")).not.toBeInTheDocument();
+    expect(within(brief).getByText(/实时/)).toBeInTheDocument();
+    fireEvent.click(within(brief).getByRole("button", { name: "核对最新免费模型" }));
+    expect(onRefreshFree).toHaveBeenCalledOnce();
+  });
+
+  it("Qoder：活动结束后核对结果为空，显示本期暂无免费模型", () => {
+    renderPanel(
+      group({ provider: provider({ id: "qoder", name: "Qoder CN" }) }),
+      noop,
+      {
+        liveFree: { models: [], fetchedAt: Date.now(), loading: false, error: null },
+        onRefreshFree: noop,
+      }
+    );
+    const brief = screen.getByRole("note", { name: "Qoder CN 福利" });
+    expect(within(brief).getByText("本期暂无免费模型")).toBeInTheDocument();
   });
 });

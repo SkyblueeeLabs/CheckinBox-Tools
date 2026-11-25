@@ -94,7 +94,7 @@ export default function AgentGroupPanel({
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
   const panelIcon = agentIcon(provider.id);
-  // Zcode 的额度是 Token（3 亿级），其它平台是积分 —— 标签与格式跟着单位走
+  // ZCode 的额度是 Token（3 亿级），其它平台是积分 —— 标签与格式跟着单位走
   const labels = quotaLabels(provider.id);
 
   // 客户端实际登录的账号，和工具里选中的当前账号对不对得上
@@ -104,6 +104,8 @@ export default function AgentGroupPanel({
     !!clientAccount && !!activeId && clientAccount.accountId !== activeId;
   const formatMinute = (minute: number) => `${String(Math.floor(minute / 60)).padStart(2, "0")}:${String(minute % 60).padStart(2, "0")}`;
   const free = FREE_MODELS[provider.id];
+  // 能实时核对免费模型的平台：WorkBuddy（模型目录）/ Qoder（官方活动文档）
+  const hasLiveFree = provider.id === "workbuddy" || provider.id === "qoder";
   const openState = welfareOpenState(provider.id);
   const welfare = welfareOf(group);
   const meta = WELFARE_META[provider.id];
@@ -174,6 +176,29 @@ export default function AgentGroupPanel({
                   : "添加账号"}
             </button>
           )}
+          <button
+            type="button"
+            className="btn small agent-options-btn"
+            aria-label={`${provider.name} 设置`}
+            aria-haspopup="dialog"
+            aria-expanded={settings.open}
+            title={
+              provider.supportsClaim
+                ? schedule.enabled
+                  ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)} 自动签到`
+                  : "自动签到已关闭"
+                : "官方客户端领取"
+            }
+            onClick={settings.onOpen}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9" /><circle cx="13" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
+            <span>设置</span>
+            {provider.supportsClaim && (
+              <span className="agent-options-badge">
+                {schedule.enabled ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)}` : "已关"}
+              </span>
+            )}
+          </button>
         </div>
       </header>
 
@@ -209,7 +234,7 @@ export default function AgentGroupPanel({
           {free && (
           <div className="wb-row">
             <span className="wb-label">免费模型</span>
-            {provider.id === "workbuddy" ? (
+            {hasLiveFree ? (
               <>
                 {liveFree?.models
                   .filter((m) => m.free)
@@ -221,9 +246,10 @@ export default function AgentGroupPanel({
                 {liveFree &&
                   !liveFree.loading &&
                   !liveFree.error &&
-                  liveFree.models.length > 0 &&
                   !liveFree.models.some((m) => m.free) && (
-                    <span className="wb-none">本期目录暂无免费模型</span>
+                    <span className="wb-none">
+                      {provider.id === "qoder" ? "本期暂无免费模型" : "本期目录暂无免费模型"}
+                    </span>
                   )}
                 {!liveFree && <span className="wb-none">有免费模型 · 待实时核对</span>}
                 {liveFree?.loading && <span className="wb-none">核对中…</span>}
@@ -245,7 +271,11 @@ export default function AgentGroupPanel({
                     onClick={onRefreshFree}
                     disabled={liveFree?.loading}
                     aria-label="核对最新免费模型"
-                    title="从 WorkBuddy 模型目录实时核对当前免费模型"
+                    title={
+                      provider.id === "qoder"
+                        ? "从官方活动文档核对当前免费模型"
+                        : "从 WorkBuddy 模型目录实时核对当前免费模型"
+                    }
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                       <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
@@ -267,22 +297,6 @@ export default function AgentGroupPanel({
         </div>
       )}
 
-      <button
-        type="button"
-        className="agent-options"
-        aria-label={`${provider.name} 设置`}
-        aria-haspopup="dialog"
-        aria-expanded={settings.open}
-        onClick={settings.onOpen}
-      >
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h3m4 0h9" /><circle cx="13" cy="7" r="2" /><circle cx="9" cy="17" r="2" /></svg>
-        <span>设置</span>
-        <span className="agent-options-summary">
-          {provider.supportsClaim ? (schedule.enabled ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)} 自动签到` : "自动签到已关闭") : "官方客户端领取"}
-          {schedule.chatSyncSupported && ` · 聊天同步${schedule.chatSyncEnabled ? "已开启" : "已关闭"}`}
-        </span>
-        <span className="agent-options-caret" aria-hidden="true">›</span>
-      </button>
       {settings.open && (
         <AgentSettingsDialog
           provider={provider}

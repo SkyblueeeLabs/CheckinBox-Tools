@@ -4,6 +4,12 @@ import { fmtPoints, fmtQuotaAmount, quotaUnit } from "../lib/api";
 import { agentIcon, iconNeedsPad } from "../lib/agentIcons";
 import VisibilityMenu from "./VisibilityMenu";
 
+interface SidebarUpdateNotice {
+  version: string;
+  ready: boolean;
+  onOpen: () => void;
+}
+
 interface Props {
   groups: AgentGroup[];
   selected: string;
@@ -17,6 +23,10 @@ interface Props {
   providers: ProviderView[];
   visibility: Record<string, AgentVisibility>;
   onVisibilityChange: (providerId: string, patch: Partial<AgentVisibility>) => void;
+  /** 当前应用版本号 */
+  version?: string;
+  /** 可用更新提示（展示在侧栏底部、设置上方，避免挤占顶栏） */
+  updateNotice?: SidebarUpdateNotice | null;
 }
 
 /** 设置页的虚拟 id（不是真实 provider）。 */
@@ -98,7 +108,7 @@ function AgentItemContent({ group }: { group: AgentGroup }) {
  *   - 松手浮动卡消失，条目在落位处淡入（scale 1.06 → 1）。
  * 顺序由后端落盘，重启后保持。
  */
-export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onOpenWebsite, onReorder, providers, visibility, onVisibilityChange }: Props) {
+export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpenSettings, onOpenWebsite, onReorder, providers, visibility, onVisibilityChange, version, updateNotice }: Props) {
   const drag = useRef<DragState | null>(null);
   const lastDragEndAt = useRef(0);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -315,6 +325,29 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
         </div>
       )}
 
+      {updateNotice && (
+        <div className="sidebar-update-slot">
+          <button
+            type="button"
+            className={`sidebar-update-card ${updateNotice.ready ? "ready" : ""}`}
+            onClick={updateNotice.onOpen}
+          >
+            <span className="sidebar-update-body">
+              <span className="sidebar-update-title">
+                <span className="sidebar-update-dot" aria-hidden="true" />
+                <span>{updateNotice.ready ? `v${updateNotice.version} 已就绪` : `发现新版本 v${updateNotice.version}`}</span>
+              </span>
+              <span className="sidebar-update-sub">
+                {updateNotice.ready ? "点击立即重启安装" : "点击查看更新内容"}
+              </span>
+            </span>
+            <span className="sidebar-update-action" aria-hidden="true">
+              {updateNotice.ready ? "重启 ›" : "更新 ›"}
+            </span>
+          </button>
+        </div>
+      )}
+
       <div className="sidebar-foot">
         <button
           className={`side-item side-settings ${selected === SETTINGS_ID ? "active" : ""}`}
@@ -332,21 +365,26 @@ export default function Sidebar({ groups, selected, onSelect, onOpenHome, onOpen
             <span className="side-sub">同步 / 调度 / 数据</span>
           </span>
         </button>
-        <div className="sidebar-websites" role="group" aria-label="CheckinBox 网站">
-          {CHECKINBOX_WEBSITES.map(({ label, url }) => (
-            <a
-              key={url}
-              className="link"
-              href={url}
-              title={url}
-              onClick={(event) => {
-                event.preventDefault();
-                onOpenWebsite(url);
-              }}
-            >
-              {label} <span aria-hidden="true">↗</span>
-            </a>
-          ))}
+        <div className="sidebar-meta">
+          <span className="sidebar-version num" title={version ? `当前版本 v${version}` : undefined}>
+            {version ? `v${version}` : ""}
+          </span>
+          <div className="sidebar-websites" role="group" aria-label="CheckinBox 网站">
+            {CHECKINBOX_WEBSITES.map(({ label, url }) => (
+              <a
+                key={url}
+                className="link"
+                href={url}
+                title={url}
+                onClick={(event) => {
+                  event.preventDefault();
+                  onOpenWebsite(url);
+                }}
+              >
+                {label} <span aria-hidden="true">↗</span>
+              </a>
+            ))}
+          </div>
         </div>
       </div>
     </aside>

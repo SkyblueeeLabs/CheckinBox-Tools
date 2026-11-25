@@ -150,10 +150,10 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(dialog.getByRole("button", { name: "重试刷新" })).toBeEnabled();
   });
 
-  it("Zcode 的额度按 Token 展示：3 亿级缩写为亿，单位标签不再是积分", () => {
+  it("ZCode 的额度按 Token 展示：3 亿级缩写为亿，单位标签不再是积分", () => {
     renderCard({
-      account: { id: "z1", provider: "zcode", label: "Zcode 账号", createdAt: 0, origin: "本机 Zcode 登录态" },
-      providerName: "Zcode",
+      account: { id: "z1", provider: "zcode", label: "ZCode 账号", createdAt: 0, origin: "本机 ZCode 登录态" },
+      providerName: "ZCode",
       status: { state: "claimable", points: 0, streakDays: 0, message: "可领取", bonusPoints: 0 },
       supportsClaim: false,
       quota: {
@@ -204,9 +204,9 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(refresh.classList.contains("is-loading")).toBe(true);
   });
 
-  it("Zcode 卡片的刷新按钮叫「刷新额度」", () => {
+  it("ZCode 卡片的刷新按钮叫「刷新额度」", () => {
     renderCard({
-      account: { id: "z1", provider: "zcode", label: "Zcode 账号", createdAt: 0, origin: "本机" },
+      account: { id: "z1", provider: "zcode", label: "ZCode 账号", createdAt: 0, origin: "本机" },
       supportsClaim: false,
     }, false);
     expect(screen.getByRole("button", { name: "刷新额度" })).toBeEnabled();
@@ -316,27 +316,27 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(screen.getByText(quotaErr)).toBeInTheDocument();
   });
 
-  it("不代领的平台（Zcode）显示「待领取」和「打开Zcode领取」按钮", () => {
+  it("不代领的平台（ZCode）显示「待领取」和「打开ZCode领取」按钮", () => {
     renderCard({
-      providerName: "Zcode",
+      providerName: "ZCode",
       supportsClaim: false,
       status: {
         state: "claimable",
         points: 0,
         streakDays: 0,
-        message: "当前无生效中的套餐，点「打开 Zcode 领取」去官方客户端领取",
+        message: "当前无生效中的套餐，点「打开 ZCode 领取」去官方客户端领取",
         bonusPoints: 0,
       },
     }, false);
     expect(screen.getAllByText("待领取").length).toBeGreaterThan(0);
-    expect(screen.getByRole("button", { name: "打开Zcode领取" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "打开ZCode领取" })).toBeEnabled();
     // 不代领的平台不该出现「签到」按钮
     expect(screen.queryByRole("button", { name: "签到" })).not.toBeInTheDocument();
   });
 
-  it("Zcode 已领取时直接打开客户端", () => {
+  it("ZCode 已领取时直接打开客户端", () => {
     renderCard({
-      providerName: "Zcode",
+      providerName: "ZCode",
       supportsClaim: false,
       status: {
         state: "claimed",
@@ -347,7 +347,7 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
       },
     }, false);
     expect(screen.getAllByText("已领取").length).toBeGreaterThan(0);
-    expect(screen.queryByRole("button", { name: "打开Zcode领取" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "打开ZCode领取" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "打开客户端" })).toBeEnabled();
   });
 });

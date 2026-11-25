@@ -196,7 +196,7 @@ describe("桌面窗口", () => {
     expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "switch_client_account")).toHaveLength(2);
   });
 
-  it("Qoder / Zcode 默认只在首页；从菜单打开侧栏、隐藏首页都会落盘", async () => {
+  it("Qoder / ZCode 默认只在首页；从菜单打开侧栏、隐藏首页都会落盘", async () => {
     const ov: Overview = {
       ...overview,
       providers: [
@@ -206,7 +206,7 @@ describe("桌面窗口", () => {
           hasClient: true, supportsClaim: true,
         },
         {
-          id: "zcode", name: "Zcode", accent: "#111111", docsUrl: "",
+          id: "zcode", name: "ZCode", accent: "#111111", docsUrl: "",
           supportsDiscovery: false, supportsOAuth: false, configured: true,
           hasClient: true, supportsClaim: false,
         },
@@ -248,7 +248,7 @@ describe("桌面窗口", () => {
     // 默认只上首页：首页两张卡，侧栏没有这两个平台
     expect(document.querySelectorAll(".dash-agent")).toHaveLength(2);
     expect(document.querySelector(".sidebar-list")?.textContent).not.toContain("Qoder CN");
-    expect(document.querySelector(".sidebar-list")?.textContent).not.toContain("Zcode");
+    expect(document.querySelector(".sidebar-list")?.textContent).not.toContain("ZCode");
 
     fireEvent.click(screen.getByRole("button", { name: "管理平台显示" }));
     const menu = screen.getByRole("dialog", { name: "平台显示管理" });
@@ -259,7 +259,7 @@ describe("桌面窗口", () => {
     // 打开侧栏时首页卡片不受影响
     expect(document.querySelectorAll(".dash-agent")).toHaveLength(2);
 
-    fireEvent.click(within(menu).getByRole("checkbox", { name: "Zcode 在首页显示" }));
+    fireEvent.click(within(menu).getByRole("checkbox", { name: "ZCode 在首页显示" }));
     await waitFor(() => expect(document.querySelectorAll(".dash-agent")).toHaveLength(1));
     expect(invoke).toHaveBeenCalledWith("set_agent_visibility", {
       providerId: "qoder", sidebar: true, home: null, launch: null,
