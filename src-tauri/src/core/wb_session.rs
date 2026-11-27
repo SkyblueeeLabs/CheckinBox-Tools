@@ -21,6 +21,13 @@
 //! **字段范围**：只动上面列出的已知字段；解密后若还有未知加密字段，**拒绝写回**
 //! （宁可不切，也不把密文当明文落盘弄坏客户端登录态）。
 //!
+//! **5.11+ 的变化（2026-11-27 实测本机 5.11.3）**：客户端在文件**根级**也存了一份
+//! 明文 `accessToken` / `refreshToken` / `sessionState`，并新增
+//! `workbuddy-desktop.info.<hash>.observation.json` 旁车记录当前活跃身份。
+//! 切号时必须同时改写：根级 token、根级 + `auth` 的 `sessionState`（要等于 token
+//! JWT 里的 `sid`）、以及旁车的 `identity.userId`；只改 `auth` 会让客户端看到
+//! 新旧两套身份，表现为「切换后不登录」。
+//!
 //! 协议与做法参考 jlcodes99/cockpit-tools 的 workbuddy 实现（含 Issue #2567 的
 //! 教训），在本机客户端上独立实现并验证。
 
@@ -28,6 +35,7 @@ use aes_gcm::aead::{Aead, Payload};
 use aes_gcm::{Aes256Gcm, KeyInit, Nonce};
 use anyhow::{anyhow, Result};
 use base64::engine::general_purpose::STANDARD as B64;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine;
 use serde_json::{json, Value};
 use sha2::{Digest, Sha256};
@@ -448,6 +456,22 @@ fn seconds_until_ms(timestamp_ms: i64, now_ms: i64) -> i64 {
     }
 }
 
+/// 从 JWT 里取会话 id（`sid`，兼容 `session_state`）。
+///
+/// 5.11 客户端会用 `sessionState` 与 token 里的 sid 对齐校验：
+/// 只换 token 不换 sessionState，客户端会判定登录态不一致并退回登录页。
+fn jwt_sid(token: &str) -> Option<String> {
+    let payload = token.split('.').nth(1)?;
+    let bytes = B64URL.decode(payload).ok()?;
+    let claims: Value = serde_json::from_slice(&bytes).ok()?;
+    ["sid", "session_state"]
+        .iter()
+        .find_map(|key| claims.get(*key).and_then(Value::as_str))
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+}
+
 /// accounts / allAccounts 列表合并：目标账号 upsert 进去（lastLogin=true），
 /// 其它账号标记 lastLogin=false。没有列表字段时建一个只含目标账号的列表。
 fn merge_account_list(items: Option<Vec<Value>>, account_value: &Value) -> Vec<Value> {
@@ -555,7 +579,41 @@ pub fn build_session(cred: &Value, label: &str, base: Option<&Value>) -> Result<
         );
     }
 
+    // 5.11+：sessionState 必须与 token 里的 sid 一致（只换 token 不换它会被判无效）
+    let sid = jwt_sid(cred["access_token"].as_str().unwrap_or(""))
+        .or_else(|| jwt_sid(cred["refresh_token"].as_str().unwrap_or("")));
+    if let Some(sid) = &sid {
+        auth.insert("sessionState".to_string(), json!(sid));
+    }
+
     let mut session = base_obj.cloned().unwrap_or_default();
+    // 5.11+ 在根级也存了一份 token / sessionState（实测本机 5.11.3）。
+    // 根级与 auth 必须同时换掉：只改 auth 会让客户端看到新旧两套身份而退回登录页。
+    if base_obj.is_some_and(|obj| obj.contains_key("accessToken")) {
+        session.insert(
+            "accessToken".to_string(),
+            json!(cred["access_token"].as_str().unwrap_or("")),
+        );
+        session.insert(
+            "refreshToken".to_string(),
+            json!(cred["refresh_token"].as_str().unwrap_or("")),
+        );
+        session.insert("tokenType".to_string(), json!("Bearer"));
+        session.insert(
+            "domain".to_string(),
+            json!(cred["domain"].as_str().unwrap_or("")),
+        );
+        if let Some(sid) = &sid {
+            session.insert("sessionState".to_string(), json!(sid));
+        }
+        if expires_at > 0 {
+            session.insert("expiresIn".to_string(), json!(seconds_until_ms(expires_at, now_ms)));
+            session.insert(
+                "refreshExpiresIn".to_string(),
+                json!(seconds_until_ms(expires_at, now_ms)),
+            );
+        }
+    }
     session.insert("account".to_string(), account_value.clone());
     session.insert("auth".to_string(), Value::Object(auth));
     session.insert(
@@ -643,7 +701,45 @@ pub fn write_switch(cred: &Value, label: &str) -> Result<(PathBuf, Option<PathBu
     };
 
     crate::core::paths::atomic_write(&path, bytes)?;
+    // 客户端登出时会留 `.logged-out`，切换成功后必须清掉，否则新会话仍被当成未登录
+    let _ = std::fs::remove_file(logout_marker(&path));
+    if let Some(uid) = cred["uid"].as_str().filter(|s| !s.trim().is_empty()) {
+        sync_observation_identity(&path, uid, cred);
+    }
     Ok((path, backup))
+}
+
+/// 同步 `workbuddy-desktop.info.*.observation.json` 旁车里的身份（5.11+ 新增）。
+///
+/// 旁车记录「当前活跃身份」，客户端启动时会对照；只换 auth 不改它，
+/// 可能仍按旧账号处理。失败不致命（客户端会自己重写）。
+fn sync_observation_identity(auth: &Path, uid: &str, cred: &Value) {
+    let Some(dir) = auth.parent() else { return };
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let account_type = cred["account_profile"]["type"]
+        .as_str()
+        .filter(|s| !s.is_empty())
+        .unwrap_or("personal");
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if !name.starts_with("workbuddy-desktop.info.") || !name.ends_with(".observation.json") {
+            continue;
+        }
+        let path = entry.path();
+        let Ok(raw) = std::fs::read_to_string(&path) else { continue };
+        let Ok(mut value) = serde_json::from_str::<Value>(&raw) else { continue };
+        let Some(obj) = value.as_object_mut() else { continue };
+        obj.insert(
+            "identity".to_string(),
+            json!({ "userId": uid, "accountType": account_type }),
+        );
+        obj.insert("active".to_string(), json!(true));
+        obj.insert(
+            "updatedAt".to_string(),
+            json!(chrono::Utc::now().timestamp_millis()),
+        );
+        let _ = crate::core::paths::atomic_write(&path, &serde_json::to_vec(&value).unwrap_or_default());
+    }
 }
 
 fn backup_path(path: &std::path::Path) -> PathBuf {
@@ -677,6 +773,46 @@ mod tests {
     /// 测试密钥 [7;32] 的 keyId（Cockpit 的公开测试向量同源，帧一致）。
     fn test_key() -> WbKey {
         WbKey::new([7; 32])
+    }
+
+    #[test]
+    fn 解析jwt里的会话id() {
+        let payload = B64URL.encode(br#"{"sid":"abc-123","sub":"u1"}"#);
+        let token = format!("head.{payload}.sig");
+        assert_eq!(jwt_sid(&token).as_deref(), Some("abc-123"));
+        // session_state 作为兜底字段
+        let payload2 = B64URL.encode(br#"{"session_state":"ss-9"}"#);
+        assert_eq!(jwt_sid(&format!("h.{payload2}.s")).as_deref(), Some("ss-9"));
+        assert!(jwt_sid("opaque-token").is_none());
+    }
+
+    #[test]
+    fn 写入时同步根级token与sessionstate() {
+        let payload = B64URL.encode(br#"{"sid":"new-sid","sub":"new"}"#);
+        let access = format!("h.{payload}.s");
+        let base = json!({
+            "accessToken": "old-access",
+            "refreshToken": "old-refresh",
+            "sessionState": "old-sid",
+            "auth": { "accessToken": "old-access", "refreshToken": "old-refresh", "sessionState": "old-sid" },
+            "account": { "uid": "old" },
+            "accounts": [{ "uid": "old", "lastLogin": true }],
+            "allAccounts": [{ "uid": "old", "lastLogin": true }]
+        });
+        let cred = json!({
+            "uid": "new",
+            "access_token": access,
+            "refresh_token": "opaque-refresh",
+            "expires_at": 4_000_000_000_000i64,
+            "account_profile": { "type": "personal" }
+        });
+        let session = build_session(&cred, "新账号", Some(&base)).unwrap();
+        // 根级与 auth 必须同时换成新账号，sessionState 跟 token 的 sid 对齐
+        assert_eq!(session["accessToken"], session["auth"]["accessToken"]);
+        assert_eq!(session["refreshToken"], session["auth"]["refreshToken"]);
+        assert_eq!(session["sessionState"], "new-sid");
+        assert_eq!(session["auth"]["sessionState"], "new-sid");
+        assert_eq!(session["account"]["uid"], "new");
     }
 
     /// 独立构造的信封（key [7;32]、nonce [3;12]、明文 "fixture-token-测试"），
