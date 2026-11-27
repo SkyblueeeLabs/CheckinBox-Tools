@@ -116,3 +116,14 @@ jobs:
             --output "latest.json"
           sha256sum latest.json >> SHA256SUMS.txt
           gh release upload "$TAG" latest.json SHA256SUMS.txt --clobber
+
+      # 资产（安装包 / 便携版 / 校验和 / latest.json）全部上传完再发布，
+      # 避免「release 已公开但 latest.json 还没传」的窗口期。
+      - name: Publish release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+          gh release edit "$TAG" --draft=false --latest
