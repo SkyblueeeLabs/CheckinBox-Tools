@@ -12,7 +12,7 @@
     <meta property="og:title" content="CheckinBox — 今日的赛博鸡蛋，领了嘛？" />
     <meta
       property="og:description"
-      content="启动页每个平台一枚蛋，点一下就能领；自动签到、账号续期、换号保留聊天记录。支持 MiniMax Code / Qoder CN / WorkBuddy / 妙手 / ZCode / Trae CN。"
+      content="启动页每个平台一枚蛋，点一下就能领；自动签到、账号续期、换号保留聊天记录。支持 MiniMax Code / Qoder CN / WorkBuddy / 豆包 / 妙手 / ZCode / Trae CN。"
     />
     <meta property="og:image" content="https://skyblueeelabs.github.io/CheckinBox-Tools/assets/launch.png" />
     <meta name="theme-color" content="#f7f4ee" />
@@ -94,9 +94,9 @@
     <main id="main">
       <aside class="release-banner" aria-label="版本公告">
         <div class="wrap release-banner-inner">
-          <strong>v0.2.2 已发布</strong>
-          <p>Qoder CN 免费模型实时核对；平台设置入口上移，更新提示移到侧栏。</p>
-          <a href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/tag/v0.2.2">
+          <strong>v0.2.3 已发布</strong>
+          <p>平台按每日福利分三区并可手动调整；豆包改为手动签到，ZCode 不再常驻待领取；修复 WorkBuddy 5.11 切号。</p>
+          <a href="https://github.com/SkyblueeeLabs/CheckinBox-Tools/releases/tag/v0.2.3">
             查看更新说明 <svg class="icon" aria-hidden="true"><use href="#i-arrow" /></svg>
           </a>
         </div>
@@ -131,7 +131,7 @@
 
           <figure class="hero-shot">
             <div class="shot-frame">
-              <img src="assets/launch.png" alt="CheckinBox 启动页：六个平台的赛博鸡蛋，显示待领与已领状态" width="2560" height="1600" fetchpriority="high" />
+              <img src="assets/launch.png" alt="CheckinBox 启动页：各平台的赛博鸡蛋，显示待领与已领状态" width="2560" height="1600" fetchpriority="high" />
             </div>
             <span class="float-chip chip-claim"><svg class="icon" aria-hidden="true"><use href="#i-bolt" /></svg>一键领蛋</span>
             <span class="float-chip chip-auto"><svg class="icon" aria-hidden="true"><use href="#i-check" /></svg>自动签到</span>
@@ -200,7 +200,7 @@
             <article class="platform">
               <img src="assets/qoder.png" alt="" width="48" height="48" />
               <h3>Qoder CN</h3>
-              <p>每天 10:00 领取；<a href="https://docs.qoder.cn/events/100credits" target="_blank" rel="noreferrer">体验版免费用户已停发</a></p>
+              <p>每天 10:00 领取；新注册用户限时、付费用户每日可领</p>
             </article>
             <article class="platform">
               <img src="assets/workbuddy.png" alt="" width="48" height="48" />
@@ -208,14 +208,19 @@
               <p>每日 100 签到，注册/月度自动到账</p>
             </article>
             <article class="platform">
+              <img src="assets/doubao.png" alt="" width="48" height="48" />
+              <h3>豆包</h3>
+              <p>看额度与签到状态；受官方风控限制需手动签到</p>
+            </article>
+            <article class="platform">
               <img src="assets/miaoshou.png" alt="" width="48" height="48" />
               <h3>妙手</h3>
-              <p>积分和套餐</p>
+              <p>注册送 1,000 + 每月 200，无需每日签到</p>
             </article>
             <article class="platform">
               <img src="assets/zcode.png" alt="" width="48" height="48" />
               <h3>ZCode</h3>
-              <p>看余额，提醒领取</p>
+              <p>Tokens 活动暂时下线，只看余额</p>
             </article>
             <article class="platform">
               <img src="assets/trae.png" alt="" width="48" height="48" />
@@ -356,7 +361,7 @@
           </details>
           <details>
             <summary>支持哪些平台和系统？</summary>
-            <p>Windows 10/11，支持 MiniMax Code、Qoder CN、WorkBuddy、妙手、ZCode、Trae CN。这些接口不是公开的，客户端一改版就可能变。</p>
+            <p>Windows 10/11，支持 MiniMax Code、Qoder CN、WorkBuddy、豆包、妙手、ZCode、Trae CN。这些接口不是公开的，客户端一改版就可能变。</p>
           </details>
         </div>
       </section>
