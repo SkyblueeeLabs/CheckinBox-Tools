@@ -406,7 +406,7 @@ refreshTokenExpiresAt, user:{id,name,email,phone,avatarUrl}, authenticationConte
 5. **上游接口随时可能变更或下线**，且没有版本协商。出问题时第一件事是
    用 `--selftest` 看是哪一个平台挂了，再去抓对应客户端的真实请求对比。
    Qoder 若改了加密方案，selftest 的 OSCrypt roundtrip 也会立刻报出来。
-6. **窗口尺寸**固定初值 1080×720（可缩放，最小 900×620）。
+6. **窗口尺寸**固定初值 1240×760（可缩放，最小 1024×640）。
 7. **数据目录迁移只做一次**：仅当 `%APPDATA%\CheckinBox\` 不存在且旧目录存在时复制；
    迁移后又运行旧版本往旧目录写，新目录不会二次同步（数据不丢，手动复制即可）。
    确认新目录数据正常后，旧目录 `AgentCheckinTools` 可手动删除。

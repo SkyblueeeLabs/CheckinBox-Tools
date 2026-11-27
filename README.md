@@ -70,8 +70,18 @@
 | **Qoder CN** | Electron safeStorage（`auth.v1.dat`） | ✅ 活动领取制，每天 10:00 刷新（体验版免费用户已停发） | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **WorkBuddy**（腾讯 CodeBuddy） | `state.vscdb`（safeStorage） | ✅ 每日 100（注册送 2,000，每月 500 自动到账） | ✅ | ✅ | 本机导入 / 浏览器授权 |
 | **Trae CN**（字节 TRAE 国内版） | `%APPDATA%\Trae CN\User\globalStorage\storage.json`（tc 加密） | ✅ 每日 100（会员 200；注册 1,500、每月 500 自动到账） | ✅ | ✅ A↔B 实测 | 本机导入 / 浏览器授权 |
-| **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（注册送 1,000，每月自动发 200） | ✅ | ✅ | 本机导入 |
-| **ZCode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 只展示 + 提醒，不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
+| **豆包**（Doubao） | `%LOCALAPPDATA%\Doubao\User Data\Local State`（多账号 sessionid） | ⚠️ 只展示 + 提醒，不代签（官方活动页风控） | ✅ 额度 / 签到状态 | ❌ | 本机导入 / 内置登录窗 |
+| **妙手**（美团 CatPaw） | `~/.meituan-catpaw/auth.json`（明文） | ❌ 无每日签到（注册送 1,000，每月自动发 200 额度） | ✅ | ✅ | 本机导入 |
+| **ZCode**（智谱 Z.ai） | `~/.zcode/v2/credentials.json`（AES-256-GCM） | ⚠️ 「午夜爽瞪 Tokens」活动暂时下线，恢复后只提醒不代领 | ✅ 余额 / 已用 / 到期 | ❌ | 本机导入 |
+
+> **为什么分「自动签到 / 需手动领取 / 仅查看额度」三区**（侧栏可手动调整，首页同样按三区展示）：
+>
+> - **自动签到**：WorkBuddy、MiniMax Code、Trae 的免费用户每天都有积分可领；
+>   Qoder CN 只有新注册用户限时领取，或付费用户每日领取。
+> - **需手动领取**：豆包的活动页要求官方前端 SDK 生成 `a_bogus` / `msToken` 等风控字段，
+>   纯接口提交固定被 `710010702` 拦截，所以只能去官方页面手动签到；
+>   ZCode 的「午夜爽瞪 Tokens」活动暂时下线，当前没有每日可领。
+> - **仅查看额度**：妙手是注册一次性 1,000 积分 + 每月自动发 200 额度，本来就不需要签到。
 
 > **Qoder CN 每日 100 Credits 的适用范围变了**：自 2026-11-19 10:00 起，体验版（免费）用户不再开放领取；
 > 仅试用期、个人付费订阅及会员卡用户可领。详见[官方说明](https://docs.qoder.cn/events/100credits)。
