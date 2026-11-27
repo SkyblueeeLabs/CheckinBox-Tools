@@ -2,6 +2,19 @@
 //!
 //! 产品标识：`doubao`，客户端 `Doubao.exe`，数据目录 `%LOCALAPPDATA%\Doubao\User Data`。
 //!
+//! **能力边界（2026-11-27 真机实测后定稿）**：只做「账号导入 + 签到状态 + 额度」，
+//! `supports_claim()` 返回 `false` —— 每日签到必须在豆包官方页面完成，本工具不代签。
+//!   * 领取接口 `/alice/ug/campaign/landing/checkin` 强校验官方前端 SDK 生成的
+//!     `a_bogus` / `msToken` / `AgwCommonParam`。纯 HTTP 提交实测返回 HTTP 200 +
+//!     `code=710010702`，账号状态不变；开源方案 `L0NE-6/DoubaoWork-Daily` 也明确
+//!     不伪造这两个字段。
+//!   * 尝试过「隐藏 WebView2 打开官方活动页代点」，实测失败（09:36 那次）：
+//!     `set_cookie` 注入的 `sessionid` 没有落进账号独立 profile（profile 的 Cookies
+//!     库里只有站点自生成的 `ttwid`/`s_v_web_id`），页面按未登录态在
+//!     `/pc/agent-explore` 与 `/chat/?ghh=1&loginSuccessBackUrl=…` 之间反复跳转，
+//!     注入脚本每个文档都活不过自己的 24s 兜底计时，最终 32s 超时。已移除该实现。
+//!   * 现在只保留「可领取」提醒（`notify_claim_reminder`），由用户去官方页面点。
+//!
 //! 协议说明（综合开源方案 `L0NE-6/DoubaoWork-Daily`、`smart-open/TraeWorkAssistant` 与本机实测）：
 //!   * **本机导入**：豆包桌面端（Chromium 147）对 `Cookies` SQLite 做了客户端级二次加密，
 //!     但把当前所有已登录账号的明文 `uid:sessionid` 与昵称缓存在
@@ -27,17 +40,14 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
-use crate::core::paths;
 use crate::core::provider::{
-    Account, AccountProfile, CheckinStatus, ClaimOutcome, ClaimState, CreditGroup, CreditItem,
-    Provider, Quota,
+    Account, AccountProfile, CheckinStatus, ClaimMode, ClaimOutcome, ClaimState, CreditGroup,
+    CreditItem, Provider, Quota,
 };
 
 const BASE_URL: &str = "https://www.doubao.com";
-const CHECKIN_PAGE_URL: &str = "https://www.doubao.com/pc/agent-explore";
 const DEFAULT_SCENE: &str = "pc_incentive_task_mvp_v3";
 const UA: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36 SamanthaDoubao/2.33.5";
 const REFERER: &str = "https://www.doubao.com/pc/agent-explore";
@@ -53,202 +63,9 @@ const CODE_SDK_REQUIRED: i64 = 710010702;
 
 pub const LOGIN_WINDOW_URL: &str = "https://www.doubao.com/chat/";
 
-const TITLE_RESULT_PREFIX: &str = "__CB_DOUBAO_RES__:";
-
-static APP_HANDLE: OnceLock<tauri::AppHandle> = OnceLock::new();
-static WEBVIEW_GATE: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-/// 启动阶段登记 `AppHandle`，供豆包签到时拉起隐藏 WebView2 执行官方活动页 SDK 签到。
-pub fn set_app_handle(app: tauri::AppHandle) {
-    let _ = APP_HANDLE.set(app);
-}
-
-/// 注入到 `https://www.doubao.com/pc/agent-explore` 的自动化脚本：
-/// 1. 提前包一层 fetch / XHR 拦截 `/alice/ug/campaign/landing/checkin` 真实回执；
-/// 2. 定位 `[data-reward-code="daily_signin"]` 卡片，已签直接回报，未签点击「立即签到」
-///    由官方前端 SDK 自动携带 `a_bogus`/`msToken`/`AgwCommonParam`/`ttwid` 完成提交；
-/// 3. 结果通过 `document.title` 回传给 Rust，不依赖额外 IPC 权限。
-const WEBVIEW_CHECKIN_SCRIPT: &str = r#"
-(() => {
-  if (window !== window.top) return;
-  if (!String(location.pathname || '').includes('/pc/agent-explore')) return;
-  if (window.__cbDoubaoInstalled) return;
-  window.__cbDoubaoInstalled = true;
-
-  const PREFIX = '__CB_DOUBAO_RES__:';
-  let reported = false;
-  let clicked = false;
-  let apiOutcome = null;
-  let detailPoints = 0;
-
-  function report(payload) {
-    if (reported) return;
-    reported = true;
-    try {
-      document.title = PREFIX + JSON.stringify(payload);
-    } catch (_) {}
-  }
-
-  function num(v) {
-    const n = Number(v);
-    return Number.isFinite(n) ? Math.round(n) : 0;
-  }
-
-  function inspectApiJson(url, status, rawText) {
-    let json = null;
-    try { json = JSON.parse(rawText); } catch (_) { return; }
-    if (!json || typeof json !== 'object') return;
-
-    if (url.includes('/alice/ug/campaign/v3/detail') || url.includes('/alice/ug/campaign/list')) {
-      const tasks = json?.data?.tasks;
-      if (Array.isArray(tasks)) {
-        const daily = tasks.find((t) => t?.task_kind === 'daily_signin' || t?.daily_checkin);
-        if (daily) {
-          const pts = num(daily?.daily_checkin?.reward?.reward_amount ?? daily?.reward_summaries?.[0]?.reward_amount);
-          if (pts > 0) detailPoints = pts;
-        }
-      }
-      return;
-    }
-
-    if (url.includes('/alice/ug/campaign/landing/checkin') || url.includes('/alice/ug/campaign/item/reward/claim')) {
-      const code = json.code ?? json.status_code ?? 0;
-      const msg = String(json.message || json.msg || json.status_msg || '');
-      const data = json.data || {};
-      if (status === 401 || Number(code) === 710012001) {
-        apiOutcome = { status: 'auth_expired', message: '豆包登录态已失效，请重新导入或登录' };
-        return;
-      }
-      if (Number(code) !== 0 && Number(code) !== 200) {
-        apiOutcome = { status: 'failed', code: Number(code), message: msg || ('code=' + code) };
-        return;
-      }
-      if (data.biz_error && Number(data.biz_error.code) !== 0) {
-        apiOutcome = {
-          status: 'failed',
-          code: Number(data.biz_error.code),
-          message: String(data.biz_error.message || data.biz_error.msg || '领取确认中，请稍后刷新查看'),
-        };
-        return;
-      }
-      const reward = num(data.reward_amount) || detailPoints;
-      if (data.checked_in === true) {
-        apiOutcome = { status: 'claimed', points: reward, message: reward > 0 ? ('签到成功 +' + reward) : '签到成功' };
-      } else if (data.idempotent === true) {
-        apiOutcome = { status: 'already', points: reward, message: '今日已签到' };
-      }
-    }
-  }
-
-  // 1) 拦截 fetch
-  const origFetch = window.fetch;
-  if (typeof origFetch === 'function') {
-    window.fetch = function(...args) {
-      const url = typeof args[0] === 'string' ? args[0] : (args[0]?.url || '');
-      const p = origFetch.apply(this, args);
-      if (url.includes('/alice/ug/campaign/')) {
-        p.then((res) => {
-          try {
-            res.clone().text().then((txt) => inspectApiJson(url, res.status, txt)).catch(() => {});
-          } catch (_) {}
-        }).catch(() => {});
-      }
-      return p;
-    };
-  }
-
-  // 2) 拦截 XHR
-  const origOpen = XMLHttpRequest.prototype.open;
-  const origSend = XMLHttpRequest.prototype.send;
-  XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-    this.__cbUrl = String(url || '');
-    return origOpen.call(this, method, url, ...rest);
-  };
-  XMLHttpRequest.prototype.send = function(...args) {
-    if (this.__cbUrl && this.__cbUrl.includes('/alice/ug/campaign/')) {
-      this.addEventListener('load', () => {
-        try { inspectApiJson(this.__cbUrl, this.status, this.responseText || ''); } catch (_) {}
-      });
-    }
-    return origSend.apply(this, args);
-  };
-
-  function findSigninCard() {
-    const byAttr = document.querySelector('[data-reward-code="daily_signin"]');
-    if (byAttr) return byAttr;
-    const btns = [...document.querySelectorAll('button')];
-    for (const b of btns) {
-      const txt = (b.textContent || '').trim();
-      if (txt === '立即签到' || txt === '去签到') {
-        return b.closest('[class*="card"], [class*="item"], [class*="task"], div') || b.parentElement;
-      }
-    }
-    return null;
-  }
-
-  const startedAt = Date.now();
-  const timer = setInterval(() => {
-    if (reported) { clearInterval(timer); return; }
-    const elapsed = Date.now() - startedAt;
-
-    if (apiOutcome) {
-      clearInterval(timer);
-      setTimeout(() => report(apiOutcome), 350);
-      return;
-    }
-
-    const card = findSigninCard();
-    if (card) {
-      const btn = card.querySelector('button');
-      const btnText = btn ? (btn.textContent || '').trim() : '';
-      const rewarded = !!card.querySelector('[class*="rewarded-"]') ||
-        (!btn && /已签到|今日已签|明日再来/.test(card.innerText || '')) ||
-        (btn && /已签到|已领取/.test(btnText));
-
-      if (rewarded) {
-        clearInterval(timer);
-        if (clicked) {
-          report({
-            status: 'claimed',
-            points: detailPoints,
-            message: detailPoints > 0 ? ('签到成功 +' + detailPoints) : '签到成功',
-          });
-        } else {
-          report({ status: 'already', points: detailPoints, message: '今日已签到' });
-        }
-        return;
-      }
-
-      if (btn && !btn.disabled && /立即签到|去签到|签到/.test(btnText) && !clicked) {
-        clicked = true;
-        try { btn.scrollIntoView({ block: 'center', inline: 'center' }); } catch (_) {}
-        btn.click();
-        return;
-      }
-    } else if (elapsed > 6000) {
-      const bodyText = (document.body && document.body.innerText) || '';
-      if (/扫码登录|手机号登录|请登录|登录豆包/.test(bodyText)) {
-        clearInterval(timer);
-        report({ status: 'auth_expired', message: '豆包登录态已失效，请重新导入或登录' });
-        return;
-      }
-    }
-
-    if (elapsed > 24000) {
-      clearInterval(timer);
-      const hasCard = !!findSigninCard();
-      report({
-        status: 'timeout',
-        clicked,
-        hasCard,
-        message: clicked
-          ? '豆包页面已点击签到但未收到确认结果，请稍后刷新余额查看'
-          : (hasCard ? '豆包签到按钮当前不可点击，请在豆包客户端查看' : '未加载出豆包每日签到卡片，可能当前账号未开放活动或网络较慢'),
-      });
-    }
-  }, 400);
-})();
-"#;
+/// 为什么不能在工具里代签：领取接口要求官方活动页 SDK 生成的风控字段。
+const CLAIM_BLOCKED_REASON: &str =
+    "豆包签到要在官方页面完成：领取接口要求官方活动页 SDK 生成 a_bogus / msToken 等风控字段，纯接口提交会被 710010702 拦截，请到豆包客户端或官网活动页手动签到";
 
 // ---------------------------------------------------------------------------
 // 数值解析（兼容 agw-js-conv: str 的字符串数值与常规 JSON 数字）
@@ -463,174 +280,6 @@ fn cookie_header_from_cred(cred: &Value) -> Result<String> {
     Err(anyhow!("豆包凭据缺少 sessionid，请重新导入或登录"))
 }
 
-fn parse_cookie_pairs(cookie: &str) -> Vec<(String, String)> {
-    cookie
-        .split(';')
-        .filter_map(|part| {
-            let (k, v) = part.trim().split_once('=')?;
-            let k = k.trim();
-            let v = v.trim();
-            (!k.is_empty() && !v.is_empty()).then(|| (k.to_string(), v.to_string()))
-        })
-        .collect()
-}
-
-fn webview_profile_dir(account_id: &str) -> PathBuf {
-    let safe: String = account_id
-        .chars()
-        .map(|c| if c.is_ascii_alphanumeric() || c == '-' || c == '_' { c } else { '_' })
-        .collect();
-    let folder = if safe.is_empty() { "default".to_string() } else { safe };
-    paths::data_dir().join("doubao_webviews").join(folder)
-}
-
-/// 在内置隐藏 WebView2 窗口中打开官方活动页 `https://www.doubao.com/pc/agent-explore`，
-/// 注入本账号的 `sessionid` 等 Cookie，由豆包官方前端 SDK 自动携带 `a_bogus` / `msToken` /
-/// `AgwCommonParam` / `ttwid` 完成签到（绕过纯 HTTP 必遇的 `710010702` 风控校验）。
-async fn webview_checkin(
-    app: &tauri::AppHandle,
-    account: &Account,
-    cred: &Value,
-) -> Result<ClaimOutcome> {
-    let gate = WEBVIEW_GATE.get_or_init(|| tokio::sync::Mutex::new(()));
-    let _guard = gate.lock().await;
-
-    let cookie_str = cookie_header_from_cred(cred)?;
-    let pairs = parse_cookie_pairs(&cookie_str);
-    if pairs.is_empty() {
-        return Err(anyhow!("豆包凭据缺少有效 Cookie"));
-    }
-
-    let (tx, rx) = tokio::sync::oneshot::channel::<Value>();
-    let tx_holder = Arc::new(Mutex::new(Some(tx)));
-    let tx_cb = tx_holder.clone();
-
-    let win_label = format!(
-        "doubao-checkin-{}",
-        &uuid::Uuid::new_v4().to_string()[..8]
-    );
-    let blank_url = tauri::Url::parse("about:blank")
-        .map_err(|e| anyhow!("构造空白地址失败：{e}"))?;
-    let target_url = tauri::Url::parse(CHECKIN_PAGE_URL)
-        .map_err(|e| anyhow!("构造豆包签到页地址失败：{e}"))?;
-
-    let mut builder = tauri::WebviewWindowBuilder::new(
-        app,
-        &win_label,
-        tauri::WebviewUrl::External(blank_url),
-    )
-    .title("CheckinBox 豆包签到")
-    .inner_size(1100.0, 760.0)
-    .visible(false)
-    .skip_taskbar(true)
-    .user_agent(UA)
-    .initialization_script(WEBVIEW_CHECKIN_SCRIPT)
-    .on_document_title_changed(move |_win, title| {
-        if let Some(payload) = title.strip_prefix(TITLE_RESULT_PREFIX) {
-            if let Ok(val) = serde_json::from_str::<Value>(payload) {
-                if let Some(sender) = tx_cb.lock().unwrap().take() {
-                    let _ = sender.send(val);
-                }
-            }
-        }
-    });
-
-    #[cfg(windows)]
-    {
-        let profile_dir = webview_profile_dir(&account.id);
-        let _ = std::fs::create_dir_all(&profile_dir);
-        builder = builder.data_directory(profile_dir);
-    }
-
-    let window = builder
-        .build()
-        .map_err(|e| anyhow!("创建豆包内置签到窗口失败：{e}"))?;
-
-    // 注入本账号的登录态 Cookie（覆盖该账号独立 WebView2 profile 中的旧会话）
-    for (k, v) in &pairs {
-        let is_session = k == "sessionid" || k == "sessionid_ss";
-        for domain in [".doubao.com", "www.doubao.com"] {
-            let ck = tauri::webview::cookie::Cookie::build((k.clone(), v.clone()))
-                .domain(domain)
-                .path("/")
-                .secure(true)
-                .http_only(is_session)
-                .build();
-            let _ = window.set_cookie(ck);
-        }
-    }
-
-    let nav_res = window.navigate(target_url);
-    if let Err(e) = nav_res {
-        let _ = window.close();
-        return Err(anyhow!("打开豆包签到页失败：{e}"));
-    }
-
-    let waited = tokio::time::timeout(Duration::from_secs(32), rx).await;
-    let _ = window.close();
-
-    let payload = match waited {
-        Ok(Ok(val)) => val,
-        Ok(Err(_)) => return Err(anyhow!("豆包内置签到窗口提前关闭，未完成签到")),
-        Err(_) => {
-            return Err(anyhow!(
-                "豆包内置签到页加载超时（32s），请检查网络连接或稍后重试"
-            ));
-        }
-    };
-
-    parse_webview_checkin_result(&payload)
-}
-
-fn parse_webview_checkin_result(payload: &Value) -> Result<ClaimOutcome> {
-    let status = payload
-        .get("status")
-        .and_then(Value::as_str)
-        .unwrap_or("failed");
-    let points = payload.get("points").and_then(json_i64).unwrap_or(0);
-    let message = payload
-        .get("message")
-        .and_then(Value::as_str)
-        .unwrap_or("")
-        .trim();
-
-    match status {
-        "claimed" => {
-            let msg = if !message.is_empty() {
-                message.to_string()
-            } else if points > 0 {
-                format!("签到成功 +{points}")
-            } else {
-                "签到成功".to_string()
-            };
-            Ok(ClaimOutcome::claimed(points, msg))
-        }
-        "already" => Ok(ClaimOutcome::already(
-            points,
-            if message.is_empty() { "今日已签到" } else { message },
-        )),
-        "auth_expired" => Err(anyhow!(
-            "{}",
-            if message.is_empty() {
-                "豆包登录态已失效，请重新导入或登录"
-            } else {
-                message
-            }
-        )),
-        _ => {
-            let code = payload.get("code").and_then(json_i64);
-            let msg = if !message.is_empty() {
-                message.to_string()
-            } else if let Some(c) = code {
-                format!("豆包签到失败（code={c}）")
-            } else {
-                "豆包签到未完成，请稍后重试".to_string()
-            };
-            Err(anyhow!("{msg}"))
-        }
-    }
-}
-
 /// 由一组 Cookie（如 WebView 登录窗读取结果）构造 `(Account, Value)`。
 pub fn build_account_from_cookies(
     cookies: &[(String, String)],
@@ -703,17 +352,13 @@ pub fn build_account_from_cookies(
 
 #[derive(Debug, Clone)]
 struct DailyTaskInfo {
-    group: String,
-    item_code: String,
-    task_id: String,
-    task_status: i64,
     checked_in_today: bool,
     points: i64,
     streak_days: i32,
     total_amount: Option<i64>,
 }
 
-fn find_daily_task(detail: &Value, default_group: &str) -> Option<DailyTaskInfo> {
+fn find_daily_task(detail: &Value) -> Option<DailyTaskInfo> {
     let data = detail.get("data").filter(|d| d.is_object())?;
     let total_amount = data
         .get("progress")
@@ -748,31 +393,7 @@ fn find_daily_task(detail: &Value, default_group: &str) -> Option<DailyTaskInfo>
                     .and_then(json_i64)
             })
             .unwrap_or(0);
-        let group = t
-            .get("campaign_group_code")
-            .and_then(Value::as_str)
-            .filter(|s| !s.is_empty())
-            .unwrap_or(default_group)
-            .to_string();
-        let item_code = t
-            .get("campaign_code")
-            .or_else(|| t.get("task_code"))
-            .or_else(|| t.get("code"))
-            .and_then(Value::as_str)
-            .unwrap_or("daily_signin")
-            .to_string();
-        let task_id = t
-            .get("task_id")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string();
-        let task_status = t.get("task_status").and_then(json_i64).unwrap_or(0);
-
         return Some(DailyTaskInfo {
-            group,
-            item_code,
-            task_id,
-            task_status,
             checked_in_today: checked,
             points,
             streak_days: streak,
@@ -1204,7 +825,7 @@ impl Provider for DoubaoProvider {
                 // 服务端显式返回空活动组：再试一次默认 v3 组确认；若返回 campaign not found 则为未投放
                 match self.fetch_campaign_detail(&cookie, DEFAULT_SCENE).await {
                     Ok(detail) => {
-                        return Ok(status_from_detail(&detail, DEFAULT_SCENE));
+                        return Ok(status_from_detail(&detail));
                     }
                     Err(_) => {
                         return Ok(CheckinStatus {
@@ -1223,109 +844,23 @@ impl Provider for DoubaoProvider {
         };
 
         let detail = self.fetch_campaign_detail(&cookie, &group).await?;
-        Ok(status_from_detail(&detail, &group))
+        Ok(status_from_detail(&detail))
     }
 
-    async fn claim(&self, account: &Account, cred: &Value) -> Result<ClaimOutcome> {
-        // 桌面应用运行时优先走内置静默 WebView2 官方活动页签到：
-        // 豆包 `/alice/ug/campaign/landing/checkin` 强校验前端 SDK 生成的 `a_bogus`/`msToken`/`AgwCommonParam`，
-        // 纯 HTTP 直调会触发 `710010702`；内置 WebView2 运行官方页面脚本点击「立即签到」，
-        // 不安装代理证书、不打断用户正在运行的豆包客户端，且天然支持多账号隔离。
-        if let Some(app) = APP_HANDLE.get() {
-            return webview_checkin(app, account, cred).await;
-        }
+    /// 豆包每日签到必须在官方页面完成，本工具不代签（`supports_claim() == false`）。
+    ///
+    /// 领取接口强校验官方前端 SDK 生成的风控字段，纯 HTTP 实测固定 `710010702`；
+    /// 隐藏 WebView2 代点的方案也已实测失败（详见文件头注释）。
+    async fn claim(&self, _account: &Account, _cred: &Value) -> Result<ClaimOutcome> {
+        Ok(ClaimOutcome::failed(CLAIM_BLOCKED_REASON))
+    }
 
-        let cookie = cookie_header_from_cred(cred)?;
-        let (launch_group, _) = self.fetch_launch(&cookie).await?;
-        let group = match launch_group.as_deref() {
-            Some("") | None => DEFAULT_SCENE.to_string(),
-            Some(g) => g.to_string(),
-        };
+    fn claim_mode(&self) -> ClaimMode {
+        ClaimMode::Manual
+    }
 
-        let detail = self.fetch_campaign_detail(&cookie, &group).await?;
-        let Some(task) = find_daily_task(&detail, &group) else {
-            return Ok(ClaimOutcome {
-                state: ClaimState::NotAvailable,
-                points: 0,
-                message: "当前没有可领取的豆包每日签到任务".to_string(),
-            });
-        };
-
-        if task.checked_in_today {
-            return Ok(ClaimOutcome::already(task.points, "今日已签到"));
-        }
-
-        // 双口径分派：旧口径 task_status == 2 走 item/reward/claim；v3 新口径走 landing/checkin
-        let resp = if task.task_status == 2 {
-            self.post_json(
-                "/alice/ug/campaign/item/reward/claim/",
-                DESKTOP_QUERY,
-                &cookie,
-                &json!({
-                    "task_id": task.task_id,
-                    "campaign_group_code": task.group,
-                    "campaign_item_code": task.item_code,
-                }),
-            )
-            .await?
-        } else {
-            self.post_json(
-                "/alice/ug/campaign/landing/checkin",
-                DESKTOP_QUERY,
-                &cookie,
-                &json!({ "scene": task.group }),
-            )
-            .await?
-        };
-
-        let data = resp.get("data");
-        if let Some(biz) = data.and_then(|d| d.get("biz_error")).filter(|b| b.is_object()) {
-            let bcode = biz.get("code").and_then(json_i64).unwrap_or(0);
-            if bcode != 0 {
-                let bmsg = biz
-                    .get("message")
-                    .or_else(|| biz.get("msg"))
-                    .and_then(Value::as_str)
-                    .unwrap_or("领取结果确认中，请稍后刷新查看");
-                return Ok(ClaimOutcome::failed(format!("豆包：{bmsg}")));
-            }
-        }
-
-        let checked = data
-            .and_then(|d| d.get("checked_in"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let idempotent = data
-            .and_then(|d| d.get("idempotent"))
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
-        let reward = data
-            .and_then(|d| d.get("reward_amount"))
-            .and_then(json_i64)
-            .unwrap_or(task.points);
-
-        if checked {
-            return Ok(ClaimOutcome::claimed(reward, format!("签到成功 +{reward}")));
-        }
-        if idempotent {
-            return Ok(ClaimOutcome::already(reward, "今日已签到"));
-        }
-
-        // 回查一次官方详情确认是否已落账
-        if let Ok(recheck) = self.fetch_campaign_detail(&cookie, &task.group).await {
-            if let Some(t) = find_daily_task(&recheck, &task.group) {
-                if t.checked_in_today {
-                    return Ok(ClaimOutcome::claimed(
-                        t.points.max(reward),
-                        format!("签到成功 +{}", t.points.max(reward)),
-                    ));
-                }
-            }
-        }
-
-        Ok(ClaimOutcome::failed(
-            "豆包签到结果待确认，请稍后刷新或前往客户端查看",
-        ))
+    fn claim_blocked_reason(&self) -> Option<&'static str> {
+        Some(CLAIM_BLOCKED_REASON)
     }
 
     async fn quota(&self, _account: &Account, cred: &Value) -> Result<Quota> {
@@ -1345,7 +880,7 @@ impl Provider for DoubaoProvider {
                 .fetch_campaign_detail(&cookie, &g)
                 .await
                 .ok()
-                .and_then(|d| find_daily_task(&d, &g))
+                .and_then(|d| find_daily_task(&d))
                 .and_then(|t| t.total_amount),
             _ => None,
         };
@@ -1367,8 +902,8 @@ impl Provider for DoubaoProvider {
     }
 }
 
-fn status_from_detail(detail: &Value, group: &str) -> CheckinStatus {
-    let Some(task) = find_daily_task(detail, group) else {
+fn status_from_detail(detail: &Value) -> CheckinStatus {
+    let Some(task) = find_daily_task(detail) else {
         return CheckinStatus {
             state: ClaimState::NotAvailable,
             points: 0,
@@ -1395,9 +930,9 @@ fn status_from_detail(detail: &Value, group: &str) -> CheckinStatus {
             points: task.points,
             streak_days: task.streak_days,
             message: if task.points > 0 {
-                format!("可签到 +{}", task.points)
+                format!("可领 +{}（需到豆包官方页面签到）", task.points)
             } else {
-                "今日可签到".to_string()
+                "今日可签到（需到豆包官方页面签到）".to_string()
             },
             ..Default::default()
         }
@@ -1427,6 +962,16 @@ mod tests {
     }
 
     #[test]
+    fn 豆包不代签_能力声明() {
+        let provider = DoubaoProvider::new();
+        assert!(!provider.supports_claim());
+        assert!(provider
+            .claim_blocked_reason()
+            .unwrap_or_default()
+            .contains("710010702"));
+    }
+
+    #[test]
     fn 解析签到详情_未签与已签() {
         let raw = json!({
             "code": 0,
@@ -1444,7 +989,7 @@ mod tests {
                 }]
             }
         });
-        let st = status_from_detail(&raw, DEFAULT_SCENE);
+        let st = status_from_detail(&raw);
         assert_eq!(st.state, ClaimState::Claimable);
         assert_eq!(st.points, 200);
         assert_eq!(st.streak_days, 3);
@@ -1514,31 +1059,5 @@ mod tests {
         assert_eq!(uid.as_deref(), Some("59804565116907"));
         assert_eq!(name.as_deref(), Some("Skyblueee"));
         assert_eq!(avatar.as_deref(), Some("https://example.com/a.png"));
-    }
-
-    #[test]
-    fn 解析webview签到回执() {
-        let ok = parse_webview_checkin_result(&json!({
-            "status": "claimed",
-            "points": 200,
-            "message": "签到成功 +200"
-        }))
-        .unwrap();
-        assert_eq!(ok.state, ClaimState::Claimed);
-        assert_eq!(ok.points, 200);
-
-        let already = parse_webview_checkin_result(&json!({
-            "status": "already",
-            "points": 0,
-            "message": "今日已签到"
-        }))
-        .unwrap();
-        assert_eq!(already.state, ClaimState::Claimed);
-
-        let err = parse_webview_checkin_result(&json!({
-            "status": "auth_expired",
-            "message": "豆包登录态已失效"
-        }));
-        assert!(err.is_err());
     }
 }

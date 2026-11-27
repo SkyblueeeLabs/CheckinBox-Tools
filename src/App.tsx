@@ -4,6 +4,7 @@ import { buildGroups } from "./lib/groups";
 import type {
   AgentVisibility,
   AppConfig,
+  ClaimMode,
   CloseAction,
   LiveFreeModels,
   LogEntry,
@@ -631,6 +632,38 @@ export default function App() {
     [pushToast]
   );
 
+  /** 手动调整平台分区（自动签到 / 需手动领取 / 仅查看额度）：落盘后重新拉 overview */
+  const changeClaimMode = useCallback(
+    (providerId: string, mode: ClaimMode) => {
+      void api
+        .setClaimMode(providerId, mode)
+        .then((cfg) => {
+          setConfig(cfg);
+          // 乐观更新：分组与统计立刻跟着变，随后 refresh 拿后端最终结果
+          setOverview((prev) =>
+            prev
+              ? {
+                  ...prev,
+                  providers: prev.providers.map((p) =>
+                    p.id === providerId
+                      ? { ...p, claimMode: mode, supportsClaim: mode === "auto" }
+                      : p
+                  ),
+                  accounts: prev.accounts.map((a) =>
+                    a.account.provider === providerId
+                      ? { ...a, claimMode: mode, supportsClaim: mode === "auto" }
+                      : a
+                  ),
+                }
+              : prev
+          );
+          void refresh();
+        })
+        .catch((e) => pushToast("err", `调整分区失败：${e}`));
+    },
+    [pushToast, refresh]
+  );
+
   const patchRefreshInterval = useCallback(
     (providerId: string, minutes: number) => {
       setOverview((prev) => {
@@ -1137,6 +1170,7 @@ export default function App() {
               void refresh();
             });
         }}
+        onClaimModeChange={changeClaimMode}
       />
 
       <div className="main">
@@ -1300,6 +1334,7 @@ export default function App() {
             onDiscover={(id) => discover(id)}
             onAddAccount={(id: string) => { void startDeviceAuth(id); }}
             onScheduleChange={(id, patch) => patchSchedule(id, patch)}
+            onClaimModeChange={changeClaimMode}
             onAlertChange={patchAlert}
             onChatSyncChange={patchChatSync}
             settings={{

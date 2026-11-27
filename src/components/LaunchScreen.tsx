@@ -19,12 +19,19 @@ interface Props {
   onBack?: () => void;
 }
 
-type EggState = "loading" | "done" | "ready" | "manual" | "wait" | "empty" | "error";
+type EggState = "loading" | "done" | "ready" | "manual" | "wait" | "none" | "empty" | "error";
+
+/** 每日福利获取方式；缺省按 supportsClaim 兜底（老数据 / 测试桩） */
+function claimModeOf(group: AgentGroup) {
+  return group.provider.claimMode ?? (group.provider.supportsClaim ? "auto" : "manual");
+}
 
 function eggStateOf(group: AgentGroup, loading: boolean): EggState {
   if (loading) return "loading";
   if (group.accounts.length === 0) return "empty";
   if (group.accounts.every((a) => !!a.error)) return "error";
+  // 没有每日福利的平台（妙手）：暗蛋，不参与领蛋
+  if (claimModeOf(group) === "none") return "none";
   if (group.claimableCount > 0) return group.provider.supportsClaim ? "ready" : "manual";
   if (group.claimedToday > 0) return "done";
   return "wait";
@@ -40,6 +47,8 @@ function eggStatusText(group: AgentGroup, state: EggState): string {
       return `${group.claimableCount} 枚待领`;
     case "manual":
       return `${group.claimableCount} 枚待领取`;
+    case "none":
+      return "无每日福利";
     case "empty":
       return "空巢";
     case "error":
@@ -226,6 +235,7 @@ export default function LaunchScreen({
               )}
               {state === "done" && <span className="egg-chip egg-chip-ok">已入袋</span>}
               {state === "wait" && <span className="egg-chip egg-chip-dim">明日再来</span>}
+              {state === "none" && <span className="egg-chip egg-chip-dim">仅查看额度</span>}
               {state === "error" && (
                 <button className="egg-claim manual" onClick={onRetry}>重试</button>
               )}

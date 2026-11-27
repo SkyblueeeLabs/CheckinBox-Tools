@@ -112,10 +112,10 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.benefits[0].label).toBe("单账号 +100 Credits/日");
     expect(w.benefits[0].mode).toBe("auto");
     expect(w.note).toBe("10:00 后开放 · 06:00-08:00");
-    expect(w.extraNote).toBe("体验版（免费）用户已停发，仅试用期内 / 付费用户可领");
+    expect(w.extraNote).toBe("新注册用户限时领取，付费用户每日可领；体验版（免费）老用户已停发");
     expect(w.docs?.url).toBe("https://docs.qoder.cn/events/100credits");
     expect(w.title).toContain("合计 200 Credits");
-    expect(w.title).toContain("体验版（免费）用户已停发");
+    expect(w.title).toContain("新注册用户限时领取");
   });
 
   it("单账号时合计不重复显示", () => {
@@ -129,16 +129,11 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(w.benefits[0].label).toBe("单账号 +100 Credits/日");
   });
 
-  it("ZCode：单账号每日 Token 额度 + 需手动（官方客户端领取）+ 领取/生效时段", () => {
+  it("ZCode：Tokens 活动暂时下线，不再显示每日额度", () => {
     const w = welfareOf(group("zcode", false, [account(0, 300_000_000)]));
-    expect(w.benefits[0].label).toBe("单账号 +3亿 Token/日");
-    expect(w.benefits[0].mode).toBe("manual");
-    expect(w.benefits[0].modeText).toBe("手动领取");
-    // 时段说明优先展示
-    expect(w.note).toBe("19:00 开放领取 · 23:00-次日9:00 生效");
-    expect(w.title).toContain("手动领取");
-    expect(w.title).toContain("19:00 开放领取");
-    expect(w.title).toContain("23:00-次日9:00 生效");
+    expect(w.benefits).toEqual([]);
+    expect(w.extraNote).toContain("午夜爽瞪 Tokens");
+    expect(w.extraNote).toContain("暂时下线");
   });
 
   it("妙手：注册送 1,000 + 每月 +200，统一自动到账，无每日签到", () => {
@@ -228,11 +223,11 @@ describe("welfareOf（首页福利画像：单账号每天多少 / 自动还是�
     expect(zc.freeText).toBe("");
   });
 
-  it("开放领取实时状态：仅手动领取平台提示；自动领取/无开放时间为 null", () => {
+  it("开放领取实时状态：没有配置开放时刻的平台一律返回 null", () => {
     const at = (h: number) => new Date(2026, 10, 16, h, 0, 0);
-    expect(welfareOpenState("zcode", at(18))).toEqual({ open: false, label: "19:00 开放" });
-    expect(welfareOpenState("zcode", at(19))).toEqual({ open: true, label: "现在可领" });
-    expect(welfareOpenState("zcode", at(23))).toEqual({ open: true, label: "现在可领" });
+    // ZCode 的 Tokens 活动已下线，不再提示「19:00 开放」
+    expect(welfareOpenState("zcode", at(18))).toBeNull();
+    expect(welfareOpenState("zcode", at(19))).toBeNull();
     // Qoder 由工具自动领取：时间到了不等于还没领，不显示「现在可领」
     expect(welfareOpenState("qoder", at(9))).toBeNull();
     expect(welfareOpenState("qoder", at(10))).toBeNull();

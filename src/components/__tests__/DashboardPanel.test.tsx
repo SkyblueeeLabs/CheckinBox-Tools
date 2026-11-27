@@ -83,6 +83,56 @@ describe("DashboardPanel（7 天内到期）", () => {
     expect(rows[1].textContent).toContain("晚到期");
   });
 
+  it("首页按三区分组，且默认展示所有平台（含仅查看额度）", () => {
+    const withMiaoshou: Overview = {
+      ...overview,
+      providers: [
+        ...overview.providers,
+        {
+          id: "zcode",
+          name: "ZCode",
+          accent: "#111",
+          docsUrl: "",
+          supportsDiscovery: true,
+          supportsOAuth: false,
+          configured: true,
+          hasClient: true,
+          supportsClaim: false,
+          claimMode: "manual",
+        },
+        {
+          id: "miaoshou",
+          name: "妙手",
+          accent: "#f60",
+          docsUrl: "",
+          supportsDiscovery: true,
+          supportsOAuth: false,
+          configured: true,
+          hasClient: true,
+          supportsClaim: false,
+          claimMode: "none",
+        },
+      ],
+      accounts: [
+        ...overview.accounts,
+        { ...account("z1", 5, 10), account: { id: "z1", provider: "zcode", label: "ZCode 账号", createdAt: 0, origin: "" } },
+        { ...account("m1", 5, 10), account: { id: "m1", provider: "miaoshou", label: "妙手账号", createdAt: 0, origin: "" } },
+      ],
+    };
+    render(
+      <DashboardPanel
+        overview={withMiaoshou}
+        groups={buildGroups(withMiaoshou)}
+        visibility={{}}
+        onOpenAgent={vi.fn()}
+      />
+    );
+    const titles = [...document.querySelectorAll(".dash-section-title")].map((n) => n.textContent);
+    expect(titles).toEqual(["自动签到", "需手动领取", "仅查看额度"]);
+    // 无每日福利的平台也上首页，状态如实写「仅查看额度」
+    expect(screen.getAllByText("仅查看额度").length).toBeGreaterThan(0);
+  });
+
   it("agent 卡片展示福利画像：每日数量 / 自动或手动 / 时间窗", () => {
     render(
       <DashboardPanel
@@ -100,8 +150,8 @@ describe("DashboardPanel（7 天内到期）", () => {
     expect(card.querySelector(".welfare-note")?.textContent).toBe(
       "10:00 后开放 · 06:00-08:00"
     );
-    // 免费用户停发规则也放在首页说明里
-    expect(card.textContent).toContain("体验版（免费）用户已停发");
+    // 新注册限时 / 付费用户可领的规则也放在首页说明里
+    expect(card.textContent).toContain("新注册用户限时领取");
     // 悬浮说明里有完整信息
     expect(card.querySelector(".dash-agent-welfare")?.getAttribute("title")).toContain(
       "数量未知"

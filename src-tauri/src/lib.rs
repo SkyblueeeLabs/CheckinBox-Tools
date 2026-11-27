@@ -71,6 +71,7 @@ pub fn run() {
             tray::take_window_request,
             commands::set_agent_order,
             commands::set_agent_visibility,
+            commands::set_claim_mode,
             commands::fetch_workbuddy_free_models,
             commands::fetch_qoder_free_models,
             commands::set_agent_schedule,
@@ -131,7 +132,6 @@ pub fn run() {
             }
         })
         .setup(|app| {
-            providers::doubao::set_app_handle(app.handle().clone());
             app.manage(commands::AppState::new());
             tray::setup(app.handle())?;
             // 必须在托盘初始化之后：发布提醒会刷新托盘未读数

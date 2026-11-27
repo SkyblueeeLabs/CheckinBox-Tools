@@ -30,7 +30,8 @@ use std::cell::OnceCell;
 use std::path::{Path, PathBuf};
 
 use crate::core::provider::{
-    Account, AccountProfile, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+    Account, AccountProfile, CheckinStatus, ClaimMode, ClaimOutcome, ClaimState, CreditItem,
+    Provider, Quota,
 };
 
 const BASE: &str = "https://zcode.z.ai";
@@ -441,11 +442,13 @@ fn parse_status(data: &Value, now: i64) -> CheckinStatus {
             days: Vec::new(),
         }
     } else {
+        // 没有生效套餐 ≠ 今天可领：preview 才是「现在能不能领」的唯一依据。
+        // 这里如实给「暂无可领」，否则 ZCode 会一直挂着「待领取」徽标。
         CheckinStatus {
-            state: ClaimState::Claimable,
+            state: ClaimState::NotAvailable,
             points: 0,
             streak_days: 0,
-            message: "当前无生效中的套餐，点「打开 ZCode 领取」去官方客户端领取".to_string(),
+            message: "当前无生效中的套餐 · 每日额度需在 ZCode 客户端领取".to_string(),
             day_index: None,
             bonus_points: 0,
             days: Vec::new(),
@@ -692,8 +695,8 @@ impl Provider for ZcodeProvider {
     }
 
     /// ZCode 的每日额度只能走官方客户端的阿里云验证码领取，本工具不代领。
-    fn supports_claim(&self) -> bool {
-        false
+    fn claim_mode(&self) -> ClaimMode {
+        ClaimMode::Manual
     }
 
     async fn discover(&self) -> Result<Vec<(Account, Value)>> {
@@ -795,9 +798,9 @@ mod tests {
     }
 
     #[test]
-    fn 套餐过期后判为待领取() {
+    fn 套餐过期且无可领时判为暂无可领() {
         let s = parse_status(&sample_data(), 4102444900i64);
-        assert_eq!(s.state, ClaimState::Claimable);
+        assert_eq!(s.state, ClaimState::NotAvailable);
         assert!(s.message.contains("无生效中的套餐"));
     }
 

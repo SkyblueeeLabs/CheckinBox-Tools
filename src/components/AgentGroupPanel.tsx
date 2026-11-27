@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import type { AgentGroup, LiveFreeModels } from "../lib/types";
+import type { AgentGroup, ClaimMode, LiveFreeModels } from "../lib/types";
 import { api, fmtQuotaAmount, quotaLabels } from "../lib/api";
 import { WELFARE_KIND_TEXT, WELFARE_META, FREE_MODELS, FREE_STATUS_TEXT, welfareOpenState, welfareOf } from "../lib/welfare";
 import TimeInput from "./TimeInput";
@@ -27,6 +27,8 @@ interface Props {
   /** 把客户端切换成这个账号（改写客户端凭据文件） */
   onSwitchClient: (providerId: string, accountId: string) => void;
   onAlertChange: (providerId: string, value: number) => void;
+  /** 手动调整平台分区（自动签到 / 需手动领取 / 仅查看额度） */
+  onClaimModeChange?: (providerId: string, mode: ClaimMode) => void;
   /** 改「换号同步聊天记录」开关（仅 WorkBuddy 显示） */
   onChatSyncChange: (providerId: string, enabled: boolean) => void;
   settings: {
@@ -50,6 +52,13 @@ interface Props {
 const RESET_HINT: Record<string, string> = {
   qoder: "Qoder 的每日活动 10:00（UTC+8）才刷新，时间窗要放在 10:00 之后",
 };
+
+/** 分区可手动调整：自动签到 / 需手动领取 / 仅查看额度 */
+const CLAIM_MODE_OPTIONS: { mode: ClaimMode; label: string }[] = [
+  { mode: "auto", label: "自动签到" },
+  { mode: "manual", label: "需手动领取" },
+  { mode: "none", label: "仅查看额度" },
+];
 
 /**
  * 「换号同步聊天记录」的说明（借鉴 Cockpit 的 share_sessions_on_switch）。
@@ -86,6 +95,7 @@ export default function AgentGroupPanel({
   onAddAccount,
   onSwitchClient,
   onAlertChange,
+  onClaimModeChange,
   onScheduleChange,
   onChatSyncChange,
   settings,
@@ -95,6 +105,8 @@ export default function AgentGroupPanel({
   const { provider, accounts, schedule } = group;
   const accent = provider.accent;
   const panelIcon = agentIcon(provider.id);
+  // 每日福利获取方式：auto 可自动签到 / manual 需手动 / none 无每日福利
+  const claimMode = provider.claimMode ?? (provider.supportsClaim ? "auto" : "manual");
   // ZCode 的额度是 Token（3 亿级），其它平台是积分 —— 标签与格式跟着单位走
   const labels = quotaLabels(provider.id);
 
@@ -148,11 +160,14 @@ export default function AgentGroupPanel({
           <div>
             <h2>{provider.name}</h2>
             <p className="panel-sub">
-              {accounts.length} 个账号 · 今日
-              {provider.supportsClaim ? "已签" : "已领取"} {schedule.todayClaimed} 个
-              {schedule.todayClaimable > 0
-                ? ` · ${schedule.todayClaimable} 个${provider.supportsClaim ? "可签" : "待领取"}`
-                : ""}
+              {accounts.length} 个账号
+              {claimMode === "none"
+                ? " · 仅查看额度"
+                : ` · 今日${provider.supportsClaim ? "已签" : "已领取"} ${schedule.todayClaimed} 个${
+                    schedule.todayClaimable > 0
+                      ? ` · ${schedule.todayClaimable} 个${provider.supportsClaim ? "可签" : "待领取"}`
+                      : ""
+                  }`}
             </p>
             {clientAccount && (
               <p className={`client-line ${mismatch ? "warn" : ""}`}>
@@ -208,7 +223,9 @@ export default function AgentGroupPanel({
                 ? schedule.enabled
                   ? `${formatMinute(schedule.startMinute)}–${formatMinute(schedule.endMinute)} 自动签到`
                   : "自动签到已关闭"
-                : "官方客户端领取"
+                : claimMode === "none"
+                  ? "仅查看额度"
+                  : "官方页面领取"
             }
             onClick={settings.onOpen}
           >
@@ -353,7 +370,23 @@ export default function AgentGroupPanel({
         >
           <section className="agent-settings-section">
             <h3>自动化</h3>
-            {provider.supportsClaim ? (
+            <div className="claim-mode-picker" role="radiogroup" aria-label={`${provider.name} 分区`}>
+              {CLAIM_MODE_OPTIONS.map((opt) => (
+                <button
+                  key={opt.mode}
+                  type="button"
+                  role="radio"
+                  aria-checked={claimMode === opt.mode}
+                  className={`claim-mode-option ${claimMode === opt.mode ? "active" : ""}`}
+                  onClick={() => {
+                    if (claimMode !== opt.mode) onClaimModeChange?.(provider.id, opt.mode);
+                  }}
+                >
+                  {opt.label}
+                </button>
+              ))}
+            </div>
+            {claimMode === "auto" ? (
               <div className="sched">
                 <label className="switch">
                   <input
@@ -398,9 +431,14 @@ export default function AgentGroupPanel({
               </div>
             ) : (
               <p className="agent-settings-note">
-                {provider.name} 每日额度需在官方客户端领取
-                {WELFARE_META[provider.id]?.timing ? `（${WELFARE_META[provider.id].timing}）` : ""}
-                ，本工具只展示余额并提醒
+                {claimMode === "none"
+                  ? `${provider.name} 没有每日福利，这里只展示额度。`
+                  : (provider.claimBlockedReason ??
+                    `${provider.name} 每日额度需在官方客户端领取${
+                      WELFARE_META[provider.id]?.timing
+                        ? `（${WELFARE_META[provider.id].timing}）`
+                        : ""
+                    }，本工具只展示余额并提醒`)}
               </p>
             )}
           </section>
@@ -447,9 +485,11 @@ export default function AgentGroupPanel({
               <span className="q-value lg">{fmtQuotaAmount(group.totalRemaining, provider.id)}</span>
             </div>
             <div className="qstat">
-              <span className="q-label">{provider.supportsClaim ? "今日已签" : "今日已领取"}</span>
+              <span className="q-label">
+                {claimMode === "none" ? "每日福利" : provider.supportsClaim ? "今日已签" : "今日已领取"}
+              </span>
               <span className="q-value lg">
-                {schedule.todayClaimed} / {accounts.length}
+                {claimMode === "none" ? "无" : `${schedule.todayClaimed} / ${accounts.length}`}
               </span>
             </div>
           </div>

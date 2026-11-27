@@ -240,6 +240,18 @@ impl ClaimOutcome {
     }
 }
 
+/// 平台每日福利的获取方式（决定 UI 分区与调度行为）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ClaimMode {
+    /// 本工具可以自动签到（WorkBuddy / MiniMax / Trae / Qoder）
+    Auto,
+    /// 有每日福利，但必须在官方页面 / 客户端手动领取（ZCode / 豆包）
+    Manual,
+    /// 没有每日福利，只看额度（妙手）
+    None,
+}
+
 /// 平台适配器。
 ///
 /// `Credential` 用 `serde_json::Value` 而不是强类型，是为了让每个平台自由
@@ -269,13 +281,31 @@ pub trait Provider: Send + Sync {
     /// 执行领取。
     async fn claim(&self, account: &Account, cred: &Value) -> Result<ClaimOutcome>;
 
+    /// 这个平台每日福利的获取方式。默认按「可自动签到」处理。
+    fn claim_mode(&self) -> ClaimMode {
+        ClaimMode::Auto
+    }
+
     /// 这个平台是否支持「自动领取」。
     ///
     /// `false` = 只展示状态 + 提醒，调度器和「一键全部签到」都不会调用
     /// `claim()`。给「领取必须走官方客户端」的平台用（例如 ZCode ——
     /// 领取要过阿里云验证码，第三方做不了）。
     fn supports_claim(&self) -> bool {
-        true
+        self.claim_mode() == ClaimMode::Auto
+    }
+
+    /// 是否有「每日福利」可言（false = 只看额度，不参与签到分区与统计）。
+    fn has_daily_benefit(&self) -> bool {
+        self.claim_mode() != ClaimMode::None
+    }
+
+    /// 不支持自动领取时，面向用户的「为什么不能代签」。
+    ///
+    /// `Some` = UI 在账号卡上展示一个置灰不可点的签到按钮，并把这段文字
+    /// 作为悬浮说明；`None` = 完全不展示签到入口（例如 ZCode 用「打开客户端领取」）。
+    fn claim_blocked_reason(&self) -> Option<&'static str> {
+        None
     }
 
     /// 查询积分总览（发放 / 已用 / 剩余）。

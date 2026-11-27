@@ -152,7 +152,14 @@ export interface AccountView {
   trackedGrants?: CreditItem[];
   /** 是否支持自动领取（false = 只展示 + 提醒，不调用领取接口） */
   supportsClaim: boolean;
+  /** 每日福利获取方式：auto 可自动签到 / manual 需手动 / none 无每日福利 */
+  claimMode?: ClaimMode;
+  /** 不能代签时给用户看的原因（有值时展示置灰不可点的签到按钮） */
+  claimBlockedReason?: string | null;
 }
+
+/** 每日福利获取方式（与后端 ClaimMode 对应） */
+export type ClaimMode = "auto" | "manual" | "none";
 
 export interface QuotaPoint {
   timestamp: string;
@@ -174,6 +181,10 @@ export interface ProviderView {
   clientExe?: string | null;
   /** 是否支持自动领取（false = 只展示 + 提醒，不调用领取接口） */
   supportsClaim: boolean;
+  /** 每日福利获取方式：auto / manual / none */
+  claimMode?: ClaimMode;
+  /** 不能代签时给用户看的原因（供面板说明使用） */
+  claimBlockedReason?: string | null;
 }
 
 /** 单个 agent 自己的自动签到配置 */

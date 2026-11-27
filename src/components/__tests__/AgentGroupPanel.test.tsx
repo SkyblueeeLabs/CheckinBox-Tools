@@ -146,14 +146,28 @@ describe("AgentGroupPanel（换号同步聊天记录开关）", () => {
 });
 
 describe("不代领的平台（ZCode）", () => {
-  it("不显示「自动签到」开关，改成一句说明", () => {
+  it("不代领的平台（ZCode）默认落在「需手动领取」，不显示时间窗设置", () => {
     renderSettings(
       group({
         provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }),
       })
     );
-    expect(screen.queryByText("自动签到")).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "需手动领取" })).toHaveAttribute("aria-checked", "true");
+    expect(screen.queryByText("时间窗")).not.toBeInTheDocument();
     expect(screen.getByText(/需在官方客户端领取/)).toBeInTheDocument();
+  });
+
+  it("分区可以手动切换：点「自动签到」会回调", () => {
+    const onClaimModeChange = vi.fn();
+    renderPanel(
+      group({
+        provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }),
+      }),
+      noop,
+      { settings: { ...closedSettings, open: true }, onClaimModeChange }
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "自动签到" }));
+    expect(onClaimModeChange).toHaveBeenCalledWith("zcode", "auto");
   });
 
   it("面板副标题说「今日已领取」而不是「今日已签」", () => {
@@ -200,18 +214,16 @@ describe("AgentGroupPanel（福利统一口径：默认单行摘要，展开看�
     expect(within(brief).getByText(/核对 2026-11/)).toBeInTheDocument();
   });
 
-  it("ZCode：每日限时 Token + 开放状态 chip + 暂无免费模型", () => {
+  it("ZCode：Tokens 活动暂时下线，福利条只说明原因", () => {
     renderPanel(
       group({ provider: provider({ id: "zcode", name: "ZCode", supportsClaim: false }) })
     );
     const brief = screen.getByRole("note", { name: "ZCode 福利" });
     expandWelfare(brief);
-    expect(within(brief).getByText("每日")).toBeInTheDocument();
-    expect(within(brief).getByText("手动领取")).toBeInTheDocument();
-    expect(within(brief).getByText(/19:00 开放领取/)).toBeInTheDocument();
-    const h = new Date().getHours();
-    expect(within(brief).getByText(h >= 19 ? "现在可领" : "19:00 开放")).toBeInTheDocument();
-    expect(within(brief).getByText("暂无免费模型")).toBeInTheDocument();
+    expect(within(brief).queryByText("每日")).not.toBeInTheDocument();
+    expect(within(brief).queryByText(/19:00 开放领取/)).not.toBeInTheDocument();
+    expect(within(brief).getByText(/午夜爽瞪 Tokens/)).toBeInTheDocument();
+    expect(within(brief).getAllByText("暂无免费模型").length).toBeGreaterThan(0);
   });
 
   it("WorkBuddy 未核对：每日自动 + 注册/每月自动到账 + 免费模型待核对", () => {
@@ -265,7 +277,7 @@ describe("AgentGroupPanel（福利统一口径：默认单行摘要，展开看�
     expect(within(brief).queryByText("现在可领")).not.toBeInTheDocument();
     expect(within(brief).queryByText("10:00 开放")).not.toBeInTheDocument();
     expect(within(brief).getByText(/10:00 后开放/)).toBeInTheDocument();
-    expect(within(brief).getByText(/体验版（免费）用户已停发/)).toBeInTheDocument();
+    expect(within(brief).getByText(/体验版（免费）老用户已停发/)).toBeInTheDocument();
     expect(
       within(brief).getByRole("button", { name: "官方说明 ↗" })
     ).toBeInTheDocument();

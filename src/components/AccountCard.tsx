@@ -106,7 +106,7 @@ export default function AccountCard({
   const canSwitchClient = switchable && !view.isClientLogin;
   const launchLabel = canSwitchClient
     ? "切换并打开客户端"
-    : !view.supportsClaim && state !== "claimed"
+    : !view.supportsClaim && !view.claimBlockedReason && state === "claimable"
       ? `打开${view.providerName}领取`
       : "打开客户端";
   const checkinLabel = hasError && state !== "claimable" ? "重试" : "签到";

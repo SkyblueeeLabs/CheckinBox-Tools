@@ -26,7 +26,40 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
   // 全局指标保持全量口径（与顶栏「今日已签 N/M」一致）；
   // 首页隐藏只影响下面的到期列表和 agent 卡片，不改汇总数字。
   const homeVisible = (id: string) => agentVisibilityOf(visibility, id).home;
+  /** 每日福利获取方式；缺省按 supportsClaim 兜底（老数据 / 测试桩） */
+  const claimModeOf = (g: AgentGroup) =>
+    g.provider.claimMode ?? (g.provider.supportsClaim ? "auto" : "manual");
+  // 首页按三区分组展示，和侧栏一致；默认所有平台都上首页（可在「管理平台显示」里关）
   const visibleGroups = groups.filter((g) => homeVisible(g.provider.id));
+  const autoGroups = visibleGroups.filter((g) => claimModeOf(g) === "auto");
+  const manualGroups = visibleGroups.filter((g) => claimModeOf(g) === "manual");
+  const noneGroups = visibleGroups.filter((g) => claimModeOf(g) === "none");
+  const sections = [
+    {
+      mode: "auto",
+      label: "自动签到",
+      hint: "WorkBuddy / MiniMax Code / Trae 免费用户每天可领；Qoder CN 限新注册或付费用户",
+      items: autoGroups,
+    },
+    {
+      mode: "manual",
+      label: "需手动领取",
+      hint: "豆包受活动页风控限制只能手动签；ZCode 的 Tokens 活动暂时下线",
+      items: manualGroups,
+    },
+    {
+      mode: "none",
+      label: "仅查看额度",
+      hint: "没有每日签到，只展示额度：妙手是注册送 1,000 + 每月自动发 200",
+      items: noneGroups,
+    },
+  ];
+  /** 有每日福利的账号数：今日已签的分母不算「仅查看额度」的平台 */
+  const dailyAccountCount = visibleGroups
+    .filter((g) => claimModeOf(g) !== "none")
+    .reduce((s, g) => s + g.accounts.length, 0);
+  const autoClaimableCount = autoGroups.reduce((s, g) => s + g.claimableCount, 0);
+  const manualClaimableCount = manualGroups.reduce((s, g) => s + g.claimableCount, 0);
   const pointsGroups = groups.filter((g) => quotaUnit(g.provider.id) !== "Token");
   const tokenGroups = groups.filter((g) => quotaUnit(g.provider.id) === "Token");
   const pointsRemaining = pointsGroups.reduce((s, g) => s + g.totalRemaining, 0);
@@ -40,12 +73,6 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
     .join("/") || "Token 平台";
   const accountCount = overview.accounts.length;
   const claimedCount = groups.reduce((s, g) => s + g.claimedToday, 0);
-  const autoClaimableCount = groups
-    .filter((g) => g.provider.supportsClaim)
-    .reduce((s, g) => s + g.claimableCount, 0);
-  const manualClaimableCount = groups
-    .filter((g) => !g.provider.supportsClaim)
-    .reduce((s, g) => s + g.claimableCount, 0);
   const expiring = expiringAccounts(overview.accounts).filter((x) =>
     homeVisible(x.view.account.provider)
   );
@@ -92,7 +119,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
     },
     {
       label: "今日已签",
-      value: `${claimedCount} / ${accountCount}`,
+      value: `${claimedCount} / ${dailyAccountCount}`,
       full: undefined,
       sub: claimSub,
       tone: (autoClaimableCount > 0 || manualClaimableCount > 0 ? "warn" : undefined) as "warn" | undefined,
@@ -173,13 +200,18 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
             所有平台已在首页隐藏。点侧栏 Agents 旁的眼睛图标可恢复显示。
           </p>
         )}
-        {visibleGroups.map((g) => {
+        {sections.map((section) => section.items.length > 0 && (
+          <div className="dash-section" key={section.mode}>
+            <h3 className="dash-section-title" title={section.hint}>{section.label}</h3>
+            <div className="dash-section-grid">
+        {section.items.map((g) => {
           const icon = agentIcon(g.provider.id);
           const allClaimed = g.accounts.length > 0 && g.claimedToday === g.accounts.length;
           // 不代领的平台（ZCode）说「领取」，其它说「签」
           const verb = g.provider.supportsClaim ? "签" : "领取";
           const stateText = (() => {
             if (g.accounts.length === 0) return "暂无账号";
+            if (claimModeOf(g) === "none") return "仅查看额度";
             if (g.claimableCount > 0) return `${g.claimableCount} 个待${verb}`;
             if (allClaimed) return `今日全部已${verb}`;
             if (g.claimedToday > 0) return `已${verb} ${g.claimedToday}/${g.accounts.length}`;
@@ -187,6 +219,7 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
           })();
           const stateTone = (() => {
             if (g.accounts.length === 0) return "dim";
+            if (claimModeOf(g) === "none") return "dim";
             if (g.claimableCount > 0) return "warn";
             if (allClaimed) return "ok";
             return "dim";
@@ -255,6 +288,9 @@ export default function DashboardPanel({ overview, groups, onOpenAgent, announce
             </button>
           );
         })}
+            </div>
+          </div>
+        ))}
       </div>
     </section>
   );

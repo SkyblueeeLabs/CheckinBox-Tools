@@ -293,6 +293,19 @@ button:disabled {
   gap: 2px;
 }
 
+/* 侧栏按「自动签到 / 需手动领取 / 仅查看额度」分区的小标题 */
+.side-section {
+  padding: 8px 12px 3px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-3);
+  letter-spacing: 0.02em;
+  user-select: none;
+}
+.side-section:first-child {
+  padding-top: 2px;
+}
+
 .side-item {
   display: flex;
   align-items: center;
@@ -1025,6 +1038,47 @@ button:disabled {
 .agent-settings-actions.resume { justify-content: flex-end; margin-top: 16px; }
 .agent-settings-note, .agent-settings-error { margin-top: 8px; overflow-wrap: anywhere; }
 .agent-settings-error { color: var(--red); font-size: 12px; }
+/* 设置页「说明」里的分区列表 */
+.set-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--text-2);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.set-list li + li { margin-top: 4px; }
+.set-list code {
+  padding: 0 4px;
+  border-radius: 4px;
+  background: var(--surface-2);
+  font-size: 11px;
+}
+/* 分区选择（自动签到 / 需手动领取 / 仅查看额度） */
+.claim-mode-picker {
+  display: flex;
+  gap: 3px;
+  margin-top: 10px;
+  padding: 3px;
+  background: var(--surface-2);
+  border-radius: 8px;
+}
+.claim-mode-option {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 4px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: var(--text-2);
+  white-space: nowrap;
+  transition: background 0.12s, color 0.12s;
+}
+.claim-mode-option:hover:not(.active) { background: var(--surface-3); }
+.claim-mode-option.active {
+  background: var(--surface);
+  color: var(--text);
+  font-weight: 600;
+  border: 1px solid var(--line);
+}
 .agent-settings-dialog .chat-sync,
 .agent-settings-dialog .sched { margin-top: 10px; padding: 0; background: none; gap: 10px; border-radius: 0; }
 .agent-settings-dialog .chat-sync-hint { flex-basis: 100%; color: var(--text-2); }
@@ -2456,10 +2510,26 @@ button:disabled {
 }
 
 .dash-agents {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin-top: 14px;
+}
+.dash-section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.dash-section-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-3);
+  margin: 0;
+}
+.dash-section-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
   gap: 12px;
-  margin-top: 14px;
 }
 .dash-agent {
   background: var(--surface);
@@ -3369,8 +3439,8 @@ button:disabled {
 .egg-pod.is-done .egg-base { fill: color-mix(in srgb, var(--orange) 18%, transparent); }
 .egg-pod.is-manual { border-color: color-mix(in srgb, var(--blue) 26%, var(--line)); }
 .egg-pod.is-manual .egg-shell { stroke: color-mix(in srgb, var(--blue) 45%, var(--line-2)); stroke-dasharray: 6 5; }
-.egg-pod.is-wait, .egg-pod.is-empty { opacity: .62; }
-.egg-pod.is-wait .egg-svg, .egg-pod.is-empty .egg-svg { filter: saturate(.35); }
+.egg-pod.is-wait, .egg-pod.is-empty, .egg-pod.is-none { opacity: .62; }
+.egg-pod.is-wait .egg-svg, .egg-pod.is-empty .egg-svg, .egg-pod.is-none .egg-svg { filter: saturate(.35); }
 .egg-pod.is-error {
   border-color: color-mix(in srgb, var(--red) 42%, var(--line));
   background: color-mix(in srgb, var(--red) 4%, var(--surface));

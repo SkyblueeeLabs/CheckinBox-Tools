@@ -356,4 +356,26 @@ describe("AccountCard（方块卡片与快捷操作）", () => {
     expect(screen.queryByRole("button", { name: "打开ZCode领取" })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: "打开客户端" })).toBeEnabled();
   });
+
+  it("有风控原因的平台（豆包）走标准「打开客户端」，不出现特殊签到按钮", () => {
+    const reason = "豆包签到要在官方页面完成：领取接口要求官方活动页 SDK 生成 a_bogus / msToken 等风控字段";
+    const onLaunch = vi.fn();
+    renderCard({
+      providerName: "豆包",
+      supportsClaim: false,
+      claimBlockedReason: reason,
+      status: {
+        state: "claimable",
+        points: 200,
+        streakDays: 1,
+        message: "可领 +200（需到豆包官方页面签到）",
+        bonusPoints: 0,
+      },
+    }, false, { onLaunch });
+    fireEvent.click(screen.getByRole("button", { name: "打开客户端" }));
+    expect(onLaunch).toHaveBeenCalledOnce();
+    expect(screen.queryByRole("button", { name: "签到" })).not.toBeInTheDocument();
+    expand();
+    expect(screen.getByText("可领 +200（需到豆包官方页面签到）")).toBeInTheDocument();
+  });
 });

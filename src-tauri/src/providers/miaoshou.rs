@@ -21,7 +21,7 @@ use async_trait::async_trait;
 use serde_json::{json, Value};
 
 use crate::core::provider::{
-    Account, CheckinStatus, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
+    Account, CheckinStatus, ClaimMode, ClaimOutcome, ClaimState, CreditItem, Provider, Quota,
 };
 
 const BASE: &str = "https://catx.nocode.cn";
@@ -93,6 +93,11 @@ impl Provider for MiaoshouProvider {
 
     fn docs_url(&self) -> &'static str {
         "https://catpaw.meituan.com"
+    }
+
+    /// 妙手没有每日福利：只展示余额，不进签到分区、不参与「今日已签」统计。
+    fn claim_mode(&self) -> ClaimMode {
+        ClaimMode::None
     }
 
     async fn discover(&self) -> Result<Vec<(Account, Value)>> {

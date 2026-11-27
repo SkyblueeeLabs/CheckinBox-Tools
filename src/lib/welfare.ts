@@ -45,18 +45,21 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
     dailyMode: "auto",
     dailyNote: "10:00 后开放",
     // 2026-11-19 起体验版（免费）用户不再发放每日签到积分
-    extraNote: "体验版（免费）用户已停发，仅试用期内 / 付费用户可领",
+    extraNote: "新注册用户限时领取，付费用户每日可领；体验版（免费）老用户已停发",
     docs: { label: "官方说明", url: "https://docs.qoder.cn/events/100credits" },
   },
   workbuddy: { unit: "积分", dailyMode: "auto", signup: 2000, monthly: 500 },
   zcode: {
     unit: "Token",
-    dailyMode: "manual",
-    dailyNote: "官方客户端领取",
-    timing: "19:00 开放领取 · 23:00-次日9:00 生效",
-    openHour: 19,
+    // 「午夜爽瞪 Tokens」活动暂时下线：不算每日福利，不要再显示「19:00 开放领取」
+    extraNote: "「午夜爽瞪 Tokens」活动暂时下线，当前没有每日可领；恢复后仍需在官方客户端领取",
   },
-  miaoshou: { unit: "积分", signup: 1000, monthly: 200 },
+  miaoshou: {
+    unit: "积分",
+    signup: 1000,
+    monthly: 200,
+    extraNote: "没有每日签到：注册一次性送 1,000，每月自动发 200 额度",
+  },
   trae: {
     unit: "积分",
     dailyMode: "auto",
@@ -65,9 +68,10 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
   },
   doubao: {
     unit: "积分",
-    dailyMode: "auto",
-    extraNote: "支持本机导入与内置登录窗多账号，每日自动签到领积分",
-    docs: { label: "打开豆包", url: "https://www.doubao.com/chat/" },
+    dailyMode: "manual",
+    dailyNote: "官方页面签到",
+    extraNote: "支持本机导入与内置登录窗多账号；每日签到需在豆包官方活动页完成（风控校验无法代签）",
+    docs: { label: "去豆包签到", url: "https://www.doubao.com/pc/agent-explore" },
   },
 };
 

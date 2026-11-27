@@ -71,6 +71,9 @@ export const api = {
   takeWindowRequest: () => invoke<WindowRequest | null>("take_window_request"),
   setAgentOrder: (order: string[]) =>
     invoke<AppConfig>("set_agent_order", { order }),
+  /** 手动调整平台分区（自动签到 / 需手动领取 / 仅查看额度） */
+  setClaimMode: (providerId: string, mode: "auto" | "manual" | "none") =>
+    invoke<AppConfig>("set_claim_mode", { providerId, mode }),
   setAgentVisibility: (
     providerId: string,
     patch: { sidebar?: boolean; home?: boolean; launch?: boolean }

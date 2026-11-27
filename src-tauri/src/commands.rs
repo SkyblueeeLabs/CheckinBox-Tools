@@ -11,7 +11,9 @@ use tauri::{AppHandle, Emitter, Manager, State};
 use crate::core::config::{AppConfig, CloseAction};
 use crate::core::launcher;
 use crate::core::logging::{self, LogEntry};
-use crate::core::provider::{Account, CheckinStatus, ClaimState, CreditItem, Provider, Quota};
+use crate::core::provider::{
+    Account, CheckinStatus, ClaimMode, ClaimState, CreditItem, Provider, Quota,
+};
 use crate::core::quota_history;
 use crate::core::scheduler::{self, SchedulerState};
 use crate::core::store::AccountStore;
@@ -206,6 +208,10 @@ pub struct ProviderView {
     pub client_exe: Option<String>,
     /// 是否支持自动领取（false = 只展示 + 提醒，不调用领取接口）
     pub supports_claim: bool,
+    /// 每日福利获取方式：auto（可自动签到）/ manual（需官方页面手动）/ none（无每日福利）
+    pub claim_mode: ClaimMode,
+    /// 不能代签时给用户看的原因（有值时前端展示一个置灰不可点的签到按钮）
+    pub claim_blocked_reason: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -241,6 +247,10 @@ pub struct AccountView {
     pub tracked_grants: Vec<CreditItem>,
     /// 是否支持自动领取（false = 只展示 + 提醒，不调用领取接口）
     pub supports_claim: bool,
+    /// 每日福利获取方式：auto / manual / none
+    pub claim_mode: ClaimMode,
+    /// 不能代签时给用户看的原因（有值时前端展示一个置灰不可点的签到按钮）
+    pub claim_blocked_reason: Option<String>,
 }
 
 /// 趋势上的一个点。
@@ -401,6 +411,16 @@ fn qoder_tracked_grants(logs: &[LogEntry], account: &Account, now_ms: i64) -> Ve
     }
     out.sort_by(|a, b| b.granted_at_ms.cmp(&a.granted_at_ms));
     out
+}
+
+/// 平台的实际「每日福利分区」：用户手动覆盖优先（config.claimModes），
+/// 否则用平台自身能力。UI 分区、调度、提醒都以它为准。
+fn effective_claim_mode(state: &AppState, provider_id: &str, capability: ClaimMode) -> ClaimMode {
+    state
+        .config
+        .lock()
+        .unwrap()
+        .claim_mode_of(provider_id, capability)
 }
 
 /// 汇总所有账号的今日状态。
@@ -622,6 +642,8 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             Vec::new()
         };
 
+        let claim_mode = config.claim_mode_of(provider.id(), provider.claim_mode());
+
         accounts.push(AccountView {
             provider_name: provider.display_name().to_string(),
             accent: provider.accent().to_string(),
@@ -640,7 +662,9 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
             alert_threshold: threshold,
             trend,
             tracked_grants,
-            supports_claim: provider.supports_claim(),
+            supports_claim: claim_mode == ClaimMode::Auto,
+            claim_mode,
+            claim_blocked_reason: provider.claim_blocked_reason().map(str::to_string),
         });
     }
 
@@ -664,6 +688,7 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 p.id(),
                 config.client_paths.get(p.id()).map(String::as_str),
             ).ok().map(|(path, _)| path);
+            let claim_mode = config.claim_mode_of(p.id(), p.claim_mode());
             ProviderView {
                 id: p.id().to_string(),
                 name: p.display_name().to_string(),
@@ -678,7 +703,9 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 configured: !store.list_of(p.id()).is_empty(),
                 has_client: exe.is_some(),
                 client_exe: exe.map(|p| p.to_string_lossy().to_string()),
-                supports_claim: p.supports_claim(),
+                supports_claim: claim_mode == ClaimMode::Auto,
+                claim_mode,
+                claim_blocked_reason: p.claim_blocked_reason().map(str::to_string),
             }
         })
         .collect();
@@ -776,8 +803,9 @@ pub async fn checkin_account(
         .credential(&provider_id, &account_id)
         .map_err(|e| e.to_string())?;
     let cred = ensure_fresh_cred(&state, &account, &cred).await;
+    let mode = effective_claim_mode(&state, provider.id(), provider.claim_mode());
 
-    let result = run_checkin(provider.as_ref(), &account, &cred).await;
+    let result = run_checkin(provider.as_ref(), mode, &account, &cred).await;
     record_result(&account, &result);
 
     // 手动执行后清掉「今日已签」标记，交给调度器重新判定状态。
@@ -810,8 +838,9 @@ pub async fn checkin_all_inner(app: &AppHandle, state: &AppState) -> Result<Task
         let Some(provider) = state.provider(&account.provider) else {
             continue;
         };
-        // 只展示 + 提醒的平台（ZCode）不进「一键全部签到」
-        if !provider.supports_claim() {
+        // 只有「自动签到」分区的平台进「一键全部签到」（用户可手动改分区）
+        let mode = effective_claim_mode(state, provider.id(), provider.claim_mode());
+        if mode != ClaimMode::Auto {
             continue;
         }
         let cred = match store.credential(&account.provider, &account.id) {
@@ -831,7 +860,7 @@ pub async fn checkin_all_inner(app: &AppHandle, state: &AppState) -> Result<Task
             }
         };
         let cred = ensure_fresh_cred(state, &account, &cred).await;
-        let result = run_checkin(provider.as_ref(), &account, &cred).await;
+        let result = run_checkin(provider.as_ref(), mode, &account, &cred).await;
         record_result(&account, &result);
         out.push(result);
     }
@@ -1445,6 +1474,41 @@ pub async fn remove_account(
     Ok(state.store.lock().unwrap().list())
 }
 
+/// 手动调整某平台的「每日福利分区」（侧栏三区 / 首页两区）。
+///
+/// 覆盖平台自身能力并落盘；切到「自动签到」时把该平台的「今日已处理」标记清掉，
+/// 这样今天还没签的号仍能被调度器补上。
+#[tauri::command]
+pub async fn set_claim_mode(
+    state: State<'_, AppState>,
+    provider_id: String,
+    mode: ClaimMode,
+) -> Result<AppConfig, String> {
+    if state.provider(&provider_id).is_none() {
+        return Err(format!("未知平台：{provider_id}"));
+    }
+    let cfg = state.update_config(|config| {
+        config.claim_modes.insert(provider_id.clone(), mode);
+        Ok(())
+    })?;
+    if mode == ClaimMode::Auto {
+        let keys: Vec<String> = state
+            .store
+            .lock()
+            .unwrap()
+            .list_of(&provider_id)
+            .iter()
+            .map(|a| AccountStore::key(&a.provider, &a.id))
+            .collect();
+        let mut sched = state.scheduler.lock().unwrap();
+        for key in keys {
+            sched.clear_done(&key);
+        }
+        let _ = sched.save();
+    }
+    Ok(cfg)
+}
+
 /// 保存侧栏 agent 的拖拽顺序（校验：必须是已注册平台的排列）。
 #[tauri::command]
 pub async fn set_agent_order(
@@ -1606,7 +1670,7 @@ fn notify_checkin_failure(
     );
 }
 
-/// 领取提醒：给「不代领」的平台（ZCode）用。
+/// 领取提醒：只给「有每日福利、但必须手动领」的平台（ZCode / 豆包）用。
 ///
 /// 一旦上游出现可领取的套餐就提醒一次（每天每账号最多一条）。
 /// **不写死时间** —— 实测开放时刻并不固定（18:11 / 19:33 / 19:49 / 20:25 都见过），
@@ -1614,10 +1678,11 @@ fn notify_checkin_failure(
 fn notify_claim_reminder(
     app: &AppHandle,
     provider: &dyn Provider,
+    mode: ClaimMode,
     account: &Account,
     status: &CheckinStatus,
 ) {
-    if provider.supports_claim() || status.state != ClaimState::Claimable {
+    if mode != ClaimMode::Manual || status.state != ClaimState::Claimable {
         return;
     }
     if !notifications_enabled(app) {
@@ -3078,6 +3143,7 @@ async fn refresh_lock_for(account: &Account) -> Arc<tokio::sync::Mutex<()>> {
 /// 「上游还没开窗」的重试不落，否则一个时间窗内会刷出几十条没信息量的记录）。
 async fn run_checkin(
     provider: &dyn Provider,
+    mode: ClaimMode,
     account: &Account,
     cred: &serde_json::Value,
 ) -> AccountResult {
@@ -3095,9 +3161,9 @@ async fn run_checkin(
         }
     };
 
-    // 只展示 + 提醒的平台（ZCode）不代领：领取要过官方客户端的阿里云验证码，
-    // 第三方做不了。直接按原状态返回，不碰 claim()。
-    if !provider.supports_claim() {
+    // 不在「自动签到」分区的平台不代领：ZCode 要过官方客户端的阿里云验证码、
+    // 豆包要官方活动页 SDK 的风控字段、妙手没有每日福利。直接按原状态返回，不碰 claim()。
+    if mode != ClaimMode::Auto {
         return AccountResult {
             account_id: account.id.clone(),
             provider: account.provider.clone(),
@@ -3211,8 +3277,9 @@ async fn sync_one(app: &AppHandle, state: &AppState, account: &Account) -> bool 
     // 签到状态（失败不致命，UI 里仍以 overview 的结果为准）
     let status = provider.status(account, &cred).await;
     if let Ok(status) = &status {
-        // 「不代领」的平台（ZCode）：出现可领取的套餐时提醒一次
-        notify_claim_reminder(app, provider.as_ref(), account, status);
+        // 「需手动领取」分区的平台：出现可领取的套餐时提醒一次
+        let mode = effective_claim_mode(state, provider.id(), provider.claim_mode());
+        notify_claim_reminder(app, provider.as_ref(), mode, account, status);
     }
 
     // 积分 + 落一条快照（趋势图用）
@@ -3319,13 +3386,16 @@ pub async fn scheduler_loop(app: AppHandle) {
                 if !agent_cfg.enabled || !agent_cfg.is_valid() {
                     continue;
                 }
-                // 只展示 + 提醒的平台（ZCode）不参与自动领取：
-                // 领取要过官方客户端的阿里云验证码，第三方做不了。
-                if !state
-                    .provider(&account.provider)
-                    .map(|p| p.supports_claim())
-                    .unwrap_or(false)
-                {
+                // 只有「自动签到」分区的平台参与自动领取（用户可手动改分区）
+                let provider = match state.provider(&account.provider) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let mode = {
+                    let cfg = state.config.lock().unwrap();
+                    cfg.claim_mode_of(&account.provider, provider.claim_mode())
+                };
+                if mode != ClaimMode::Auto {
                     continue;
                 }
 
@@ -3392,7 +3462,7 @@ pub async fn scheduler_loop(app: AppHandle) {
                 // 签到前先刷新凭据，否则永远签不上
                 let cred = ensure_fresh_cred(&state, &account, &cred).await;
 
-                let result = run_checkin(provider.as_ref(), &account, &cred).await;
+                let result = run_checkin(provider.as_ref(), mode, &account, &cred).await;
 
                 // 「skipped」= 上游今天还没开窗。既**不能标记成已处理**
                 //（否则一整天都不再重试），也不值得落流水 ——

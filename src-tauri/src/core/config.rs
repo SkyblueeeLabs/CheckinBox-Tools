@@ -13,6 +13,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
 use super::paths::{atomic_write, config_file};
+use super::provider::ClaimMode;
 
 /// 单个 agent 的调度配置。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -310,6 +311,10 @@ pub struct AppConfig {
     /// 每个平台的显示开关（侧栏 / 首页 / 启动页）；没列出的平台按平台默认值。
     #[serde(default)]
     pub agent_visibility: BTreeMap<String, AgentVisibility>,
+    /// 用户手动指定的「每日福利分区」覆盖（侧栏三区 / 首页两区）。
+    /// 没列出的平台按平台自身能力（`Provider::claim_mode`）走。
+    #[serde(default)]
+    pub claim_modes: BTreeMap<String, ClaimMode>,
     /// 已经写入过应用内提醒的版本号（每个版本只发一次更新说明）。
     #[serde(default)]
     pub release_notes_version: Option<String>,
@@ -332,6 +337,7 @@ impl Default for AppConfig {
             notifications_enabled: true,
             ui_refresh_seconds: default_ui_refresh_seconds(),
             agent_visibility: BTreeMap::new(),
+            claim_modes: BTreeMap::new(),
             release_notes_version: None,
         }
     }
@@ -392,6 +398,11 @@ impl AppConfig {
             .get(provider)
             .copied()
             .unwrap_or_else(|| AgentVisibility::default_for(provider))
+    }
+
+    /// 某平台的「每日福利分区」：用户手动指定过就用它，否则用平台自身能力。
+    pub fn claim_mode_of(&self, provider: &str, capability: ClaimMode) -> ClaimMode {
+        self.claim_modes.get(provider).copied().unwrap_or(capability)
     }
 
     /// 按用户自定义顺序排序平台 id（未配置的按原顺序排在后面）。
