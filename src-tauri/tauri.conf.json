@@ -13,10 +13,10 @@
     "windows": [
       {
         "title": "CheckinBox",
-        "width": 1080,
-        "height": 720,
-        "minWidth": 900,
-        "minHeight": 620,
+        "width": 1240,
+        "height": 760,
+        "minWidth": 1024,
+        "minHeight": 640,
         "resizable": true,
         "center": true,
         "visible": false
