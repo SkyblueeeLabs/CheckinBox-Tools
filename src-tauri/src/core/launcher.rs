@@ -71,6 +71,15 @@ fn spec_of(provider: &str) -> Option<ClientSpec> {
             dir_keywords: &["zcode"],
             legacy_paths: &[r"D:\Program Files\ZCode\ZCode.exe"],
         }),
+        "doubao" => Some(ClientSpec {
+            // 字节豆包桌面端（安装目录常为 <盘符>:\Program Files\Doubao\app\Doubao.exe）
+            exe_names: &["Doubao.exe"],
+            dir_keywords: &["doubao"],
+            legacy_paths: &[
+                r"D:\Program Files\Doubao\app\Doubao.exe",
+                r"C:\Program Files\Doubao\app\Doubao.exe",
+            ],
+        }),
         _ => None,
     }
 }

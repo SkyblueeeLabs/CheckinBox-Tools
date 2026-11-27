@@ -40,6 +40,7 @@ pub struct AppState {
     pub minimax: Arc<crate::providers::minimax::MiniMaxProvider>,
     pub workbuddy: Arc<crate::providers::workbuddy::WorkBuddyProvider>,
     pub trae: Arc<crate::providers::trae::TraeProvider>,
+    pub doubao: Arc<crate::providers::doubao::DoubaoProvider>,
 }
 
 /// 账号池的全局句柄。providers 层的 401 抢救路径要读写池子，又不能反向依赖
@@ -52,10 +53,12 @@ impl AppState {
         let qoder = Arc::new(crate::providers::qoder::QoderProvider::new());
         let workbuddy = Arc::new(crate::providers::workbuddy::WorkBuddyProvider::new());
         let trae = Arc::new(crate::providers::trae::TraeProvider::new());
+        let doubao = Arc::new(crate::providers::doubao::DoubaoProvider::new());
         let list: Vec<Arc<dyn Provider>> = vec![
             workbuddy.clone(),
             minimax.clone(),
             trae.clone(),
+            doubao.clone(),
             qoder.clone(),
             Arc::new(crate::providers::miaoshou::MiaoshouProvider::new()),
             Arc::new(crate::providers::zcode::ZcodeProvider::new()),
@@ -86,6 +89,7 @@ impl AppState {
             minimax,
             workbuddy,
             trae,
+            doubao,
         }
     }
 
@@ -667,9 +671,9 @@ pub async fn overview(state: State<'_, AppState>) -> Result<Overview, String> {
                 docs_url: p.docs_url().to_string(),
                 supports_discovery: matches!(
                     p.id(),
-                    "minimax" | "miaoshou" | "workbuddy" | "zcode" | "qoder" | "trae"
+                    "minimax" | "miaoshou" | "workbuddy" | "zcode" | "qoder" | "trae" | "doubao"
                 ),
-                supports_oauth: matches!(p.id(), "qoder" | "minimax" | "workbuddy" | "trae"),
+                supports_oauth: matches!(p.id(), "qoder" | "minimax" | "workbuddy" | "trae" | "doubao"),
                 oauth_ready: true,
                 configured: !store.list_of(p.id()).is_empty(),
                 has_client: exe.is_some(),
@@ -999,7 +1003,7 @@ async fn refresh_imported_account_label(
     if account.label_is_fallback() {
         if let Some(previous) = previous_label
             .map(str::trim)
-            .filter(|label| !label.is_empty() && !label.starts_with("Qoder "))
+            .filter(|label| !label.is_empty() && !label.starts_with("Qoder ") && !label.starts_with("豆包 "))
         {
             account.label = previous.to_string();
         }
@@ -1151,9 +1155,10 @@ pub async fn import_client_accounts(
     Ok(imported)
 }
 
-/// 发起浏览器授权导入（Qoder / MiniMax / WorkBuddy）：返回一个需要在浏览器里确认的地址。
+/// 发起浏览器授权 / 内置登录窗导入（Qoder / MiniMax / WorkBuddy / Trae / 豆包）。
 #[tauri::command]
 pub async fn begin_device_auth(
+    app: AppHandle,
     state: State<'_, AppState>,
     provider_id: String,
 ) -> Result<AuthChallenge, String> {
@@ -1206,6 +1211,45 @@ pub async fn begin_device_auth(
             .begin_authorization()
             .await
             .map_err(|e| e.to_string())?,
+        "doubao" => {
+            let session_id = uuid::Uuid::new_v4().to_string();
+            let short = &session_id[..8];
+            let win_label = format!("doubao-login-{short}");
+            let profile_dir = std::env::temp_dir().join(format!("checkinbox-doubao-login-{short}"));
+            let url = tauri::Url::parse(crate::providers::doubao::LOGIN_WINDOW_URL)
+                .map_err(|e| format!("无效的豆包登录地址：{e}"))?;
+            let mut builder = tauri::WebviewWindowBuilder::new(
+                &app,
+                &win_label,
+                tauri::WebviewUrl::External(url),
+            )
+            .title("登录豆包账号 — CheckinBox")
+            .inner_size(980.0, 720.0)
+            .center();
+            #[cfg(windows)]
+            {
+                let _ = std::fs::create_dir_all(&profile_dir);
+                builder = builder.data_directory(profile_dir.clone());
+            }
+            builder
+                .build()
+                .map_err(|e| format!("打开豆包内置登录窗口失败：{e}"))?;
+            AuthSession {
+                id: session_id,
+                provider: provider_id.clone(),
+                // 空串表示使用内置登录窗口，前端不再调用外部浏览器
+                auth_url: String::new(),
+                verifier: String::new(),
+                nonce: win_label.clone(),
+                machine_id: String::new(),
+                created_at: now,
+                extra: serde_json::json!({
+                    "login_window": win_label,
+                    "profile_dir": profile_dir.to_string_lossy().to_string(),
+                    "expires_in": 600,
+                }),
+            }
+        }
         other => return Err(format!("{other} 不支持浏览器授权导入")),
     };
     let challenge = AuthChallenge {
@@ -1237,9 +1281,10 @@ pub async fn pending_auth(state: State<'_, AppState>) -> Result<Vec<AuthChalleng
         .collect())
 }
 
-/// 轮询浏览器授权结果；`None` 表示用户还没确认。
+/// 轮询浏览器授权 / 内置登录窗结果；`None` 表示用户还没确认。
 #[tauri::command]
 pub async fn poll_device_auth(
+    app: AppHandle,
     state: State<'_, AppState>,
     provider_id: String,
     session_id: String,
@@ -1274,6 +1319,46 @@ pub async fn poll_device_auth(
                 .await
         }
         "trae" => state.trae.poll_authorization(&session).await,
+        "doubao" => {
+            let win_label = session.extra["login_window"]
+                .as_str()
+                .unwrap_or(&session.nonce);
+            let Some(window) = app.get_webview_window(win_label) else {
+                let mut sessions = state.auth_sessions.lock().unwrap();
+                sessions.remove(&session_id);
+                save_pending_auth(&sessions);
+                return Err("豆包登录窗口已关闭，如需添加账号请重新点击「添加账号」".into());
+            };
+            let url = tauri::Url::parse(crate::providers::doubao::LOGIN_WINDOW_URL)
+                .map_err(|e| e.to_string())?;
+            let cookies = window
+                .cookies_for_url(url)
+                .map_err(|e| format!("读取豆包登录态失败：{e}"))?;
+            let pairs: Vec<(String, String)> = cookies
+                .into_iter()
+                .map(|c| (c.name().to_string(), c.value().to_string()))
+                .collect();
+            let has_sid = pairs
+                .iter()
+                .any(|(k, v)| (k == "sessionid" || k == "sessionid_ss") && !v.trim().is_empty());
+            if !has_sid {
+                Ok(None)
+            } else {
+                match state.doubao.verify_cookies(&pairs).await {
+                    Ok(verified) => {
+                        let _ = window.close();
+                        if let Some(dir) = session.extra["profile_dir"].as_str().map(PathBuf::from) {
+                            tauri::async_runtime::spawn(async move {
+                                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                                let _ = std::fs::remove_dir_all(&dir);
+                            });
+                        }
+                        Ok(Some(verified))
+                    }
+                    Err(_) => Ok(None),
+                }
+            }
+        }
         other => return Err(format!("{other} 不支持浏览器授权导入")),
     };
 
@@ -3406,7 +3491,7 @@ pub fn cli_import_local() -> Result<(), String> {
         let providers: Vec<Arc<dyn Provider>> = state
             .providers
             .iter()
-            .filter(|p| matches!(p.id(), "minimax" | "qoder" | "miaoshou" | "workbuddy" | "zcode" | "trae"))
+            .filter(|p| matches!(p.id(), "minimax" | "qoder" | "miaoshou" | "workbuddy" | "zcode" | "trae" | "doubao"))
             .cloned()
             .collect();
 

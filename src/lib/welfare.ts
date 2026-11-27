@@ -63,6 +63,12 @@ export const WELFARE_META: Record<string, WelfareMeta> = {
     signup: 1500,
     monthly: 500,
   },
+  doubao: {
+    unit: "积分",
+    dailyMode: "auto",
+    extraNote: "支持本机导入与内置登录窗多账号，每日自动签到领积分",
+    docs: { label: "打开豆包", url: "https://www.doubao.com/chat/" },
+  },
 };
 
 /** 条目类型的固定文案（面板标签 / 首页不重复出现） */
@@ -106,6 +112,7 @@ export const FREE_MODELS: Record<string, FreeModelInfo> = {
   // 实时清单由 fetch_qoder_free_models 从官方活动文档（events/*-free）核对
   qoder: { status: "current", live: true, asOf: "2026-11-25" },
   trae: { status: "none", asOf: "2026-11-19" },
+  doubao: { status: "current", note: "豆包官方模型免费对话 · 额度按账号套餐/活动发放", asOf: "2026-11-26" },
 };
 
 /** 每日开放领取的实时状态（现在可领 / 未到点）。

@@ -365,8 +365,12 @@ export default function App() {
       setAuthDeadline(
         challenge.expiresInSecs ? Date.now() + challenge.expiresInSecs * 1000 : null,
       );
-      await api.openExternal(challenge.authUrl);
-      pushToast("warn", "请在浏览器里确认授权");
+      if (challenge.authUrl) {
+        await api.openExternal(challenge.authUrl);
+        pushToast("warn", "请在浏览器里确认授权");
+      } else {
+        pushToast("warn", "请在弹出的内置登录窗口中完成登录");
+      }
     } catch (e) {
       pushToast("err", `发起授权失败：${e}`);
     }
@@ -1136,21 +1140,27 @@ export default function App() {
       />
 
       <div className="main">
-        {authSession && authUrl && (
+        {authSession && (
           <div className="auth-banner">
             <div className="auth-text">
-              <strong>等待 {providerNames[authProvider ?? ""] ?? "平台"} 授权</strong>
+              <strong>等待 {providerNames[authProvider ?? ""] ?? "平台"} {authUrl ? "授权" : "登录"}</strong>
               <span>
                 {authExpired ? (
-                  <>授权码已过期，网页会提示「缺少有效的 user_code」。</>
-                ) : (
+                  <>登录或授权已超时，请重新发起。</>
+                ) : authUrl ? (
                   <>已在浏览器打开授权页。</>
+                ) : (
+                  <>已在内置登录窗口打开登录页，登录成功后将自动导入账号。</>
                 )}
                 {authLeft !== null && !authExpired && <>（{authLeft} 秒内有效）</>}
-                <button className="link" onClick={() => api.openExternal(authUrl)}>
-                  重新打开
-                </button>
-                用要登录的账号点「确认授权」。
+                {authUrl && (
+                  <>
+                    <button className="link" onClick={() => api.openExternal(authUrl)}>
+                      重新打开
+                    </button>
+                    用要登录的账号点「确认授权」。
+                  </>
+                )}
               </span>
             </div>
             {authExpired ? (

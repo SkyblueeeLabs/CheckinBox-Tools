@@ -4,6 +4,7 @@
 //! 另外还要在 `commands.rs::AppState::new()` 的 `providers` 列表里挂上
 //! （那才是运行时真正用的列表）。
 
+pub mod doubao;
 pub mod miaoshou;
 pub mod minimax;
 pub mod qoder;
@@ -22,6 +23,7 @@ pub fn all() -> Vec<Arc<dyn Provider>> {
         Arc::new(workbuddy::WorkBuddyProvider::new()),
         Arc::new(minimax::MiniMaxProvider::new()),
         Arc::new(trae::TraeProvider::new()),
+        Arc::new(doubao::DoubaoProvider::new()),
         Arc::new(qoder::QoderProvider::new()),
         Arc::new(miaoshou::MiaoshouProvider::new()),
         Arc::new(zcode::ZcodeProvider::new()),
