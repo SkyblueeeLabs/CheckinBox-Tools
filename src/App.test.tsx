@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App from "./App";
+import bundledAnnouncement from "../site/announcement.json";
 import { defaultAgentVisibility, type AppConfig, type Notice, type Overview } from "./lib/types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -110,7 +111,7 @@ describe("桌面窗口", () => {
 
     const first = await openHome();
     expect(screen.getByRole("region", { name: "公告" })).toHaveTextContent(
-      "ZCode 账号导入已修复 · 各 Agent 可在设置中自定义客户端路径",
+      bundledAnnouncement.text,
     );
     fireEvent.click(screen.getByRole("button", { name: "关闭这条公告" }));
     expect(screen.queryByRole("region", { name: "公告" })).not.toBeInTheDocument();
