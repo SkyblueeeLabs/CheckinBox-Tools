@@ -1,7 +1,7 @@
 {
   "name": "checkinbox",
   "private": true,
-  "version": "0.2.2",
+  "version": "0.2.3",
   "type": "module",
   "description": "聚合 AI 编程工具每日签到",
   "scripts": {
